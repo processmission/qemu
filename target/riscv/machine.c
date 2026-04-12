@@ -265,6 +265,27 @@ static const VMStateDescription vmstate_sdtrig = {
     }
 };
 
+static bool sdext_needed(void *opaque)
+{
+    RISCVCPU *cpu = opaque;
+
+    return cpu->cfg.ext_sdext;
+}
+
+static const VMStateDescription vmstate_sdext = {
+    .name = "cpu/sdext",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = sdext_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BOOL_V(env.debug_mode, RISCVCPU, 3),
+        VMSTATE_UINTTL_V(env.dcsr, RISCVCPU, 3),
+        VMSTATE_UINTTL_V(env.dpc, RISCVCPU, 3),
+        VMSTATE_UINTTL_ARRAY_V(env.dscratch, RISCVCPU, 2, 3),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static int riscv_cpu_post_load(void *opaque, int version_id)
 {
     RISCVCPU *cpu = opaque;
@@ -532,6 +553,7 @@ const VMStateDescription vmstate_riscv_cpu = {
         &vmstate_sstc,
         &vmstate_mseccfg,
         &vmstate_sdtrig,
+        &vmstate_sdext,
         NULL
     }
 };
