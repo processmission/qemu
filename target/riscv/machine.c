@@ -245,8 +245,8 @@ static int sdtrig_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_sdtrig = {
     .name = "cpu/sdtrig",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .needed = sdtrig_needed,
     .post_load = sdtrig_post_load,
     .fields = (const VMStateField[]) {
