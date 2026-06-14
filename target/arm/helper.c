@@ -9637,6 +9637,13 @@ void arm_cpu_do_interrupt(CPUState *cs)
                       env->exception.syndrome);
     }
 
+    if (tcg_enabled() && cs->exception_index == EXCP_SMC &&
+        arm_handle_psci_smc_handler(cpu)) {
+        qemu_log_mask(CPU_LOG_INT, "...handled as board SMC call\n");
+        qemu_plugin_vcpu_hostcall_cb(cs, last_pc);
+        return;
+    }
+
     if (tcg_enabled() && arm_is_psci_call(cpu, cs->exception_index)) {
         arm_handle_psci_call(cpu);
         qemu_log_mask(CPU_LOG_INT, "...handled as PSCI call\n");

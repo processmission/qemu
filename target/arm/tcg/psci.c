@@ -95,6 +95,9 @@ void arm_handle_psci_call(ARMCPU *cpu)
     case QEMU_PSCI_0_2_FN_PSCI_VERSION:
         ret = QEMU_PSCI_VERSION_1_1;
         break;
+    case QEMU_SMCCC_VERSION_FUNC_ID:
+        ret = QEMU_SMCCC_VERSION_1_1;
+        break;
     case QEMU_PSCI_0_2_FN_MIGRATE_INFO_TYPE:
         ret = QEMU_PSCI_0_2_RET_TOS_MIGRATION_NOT_REQUIRED; /* No trusted OS */
         break;
@@ -191,6 +194,7 @@ void arm_handle_psci_call(ARMCPU *cpu)
         case QEMU_PSCI_0_2_FN_CPU_SUSPEND:
         case QEMU_PSCI_0_2_FN64_CPU_SUSPEND:
         case QEMU_PSCI_1_0_FN_PSCI_FEATURES:
+        case QEMU_SMCCC_VERSION_FUNC_ID:
             if (!(param[1] & QEMU_PSCI_0_2_64BIT) || is_a64(env)) {
                 ret = 0;
                 break;

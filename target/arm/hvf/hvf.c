@@ -1580,6 +1580,9 @@ static bool hvf_handle_psci_call(CPUState *cpu, int *excp_ret)
     case QEMU_PSCI_0_2_FN_PSCI_VERSION:
         ret = QEMU_PSCI_VERSION_1_1;
         break;
+    case QEMU_SMCCC_VERSION_FUNC_ID:
+        ret = QEMU_SMCCC_VERSION_1_1;
+        break;
     case QEMU_PSCI_0_2_FN_MIGRATE_INFO_TYPE:
         ret = QEMU_PSCI_0_2_RET_TOS_MIGRATION_NOT_REQUIRED; /* No trusted OS */
         break;
@@ -1662,6 +1665,7 @@ static bool hvf_handle_psci_call(CPUState *cpu, int *excp_ret)
         case QEMU_PSCI_0_2_FN_CPU_SUSPEND:
         case QEMU_PSCI_0_2_FN64_CPU_SUSPEND:
         case QEMU_PSCI_1_0_FN_PSCI_FEATURES:
+        case QEMU_SMCCC_VERSION_FUNC_ID:
             ret = 0;
             break;
         case QEMU_PSCI_0_1_FN_MIGRATE:
@@ -2506,7 +2510,9 @@ static int hvf_handle_exception(CPUState *cpu, hv_vcpu_exit_exception_t *excp)
             /* Secure Monitor Call exception, we need to advance $pc */
             advance_pc = true;
 
-            if (!hvf_handle_psci_call(cpu, &ret)) {
+            if (arm_handle_psci_smc_handler(arm_cpu)) {
+                /* Handled by board firmware; x0 already contains the result. */
+            } else if (!hvf_handle_psci_call(cpu, &ret)) {
                 trace_hvf_unknown_smc(env->xregs[0]);
                 /* SMCCC 1.3 section 5.2 says every unknown SMCCC call returns -1 */
                 env->xregs[0] = -1;
