@@ -714,6 +714,20 @@ bool arm_is_psci_call(ARMCPU *cpu, int excp_type);
 /* Actually handle a PSCI call */
 void arm_handle_psci_call(ARMCPU *cpu);
 
+/*
+ * Optional per-board SMC handler. A board may register a callback via
+ * arm_register_psci_smc_handler(); accelerator SMC exception paths call it
+ * before falling through to generic PSCI handling or architectural SMC
+ * behavior. The callback receives the calling ARMCPU and may inspect/modify
+ * its xregs. Returning true means "the SMC was handled (x0 is already set)".
+ *
+ * Default is NULL (no board hook) - non-registered boards see zero
+ * behavior change.
+ */
+typedef bool (*ArmPsciSmcHandler)(ARMCPU *cpu);
+void arm_register_psci_smc_handler(ArmPsciSmcHandler handler);
+bool arm_handle_psci_smc_handler(ARMCPU *cpu);
+
 /**
  * arm_clear_exclusive: clear the exclusive monitor
  * @env: CPU env
