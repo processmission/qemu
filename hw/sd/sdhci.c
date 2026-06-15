@@ -45,6 +45,8 @@
 DECLARE_INSTANCE_CHECKER(SDBus, SDHCI_BUS,
                          TYPE_SDHCI_BUS)
 
+#define SDHC_VENDOR_AREA 0xe8
+
 #define MASKED_WRITE(reg, mask, val)  (reg = (reg & (mask)) | (val))
 
 static inline unsigned int sdhci_get_fifolen(SDHCIState *s)
@@ -1097,6 +1099,9 @@ static uint64_t sdhci_read(void *opaque, hwaddr offset, unsigned size)
     case SDHC_MAXCURR + 4:
         ret = (uint32_t)(s->maxcurr >> 32);
         break;
+    case SDHC_VENDOR_AREA:
+        ret = s->vendor_area1 | (s->vendor_area2 << 16);
+        break;
     case SDHC_ADMAERR:
         ret =  s->admaerr;
         break;
@@ -1185,7 +1190,14 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
 
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
-        if (!TRANSFERRING_DATA(s->prnsts)) {
+        /*
+         * SDMA pauses at the programmed buffer boundary and raises DMA_END.
+         * Software resumes the transfer by writing the next system address
+         * while the data line is still active.
+         */
+        if (!TRANSFERRING_DATA(s->prnsts) ||
+            ((s->trnmod & SDHC_TRNS_DMA) &&
+             SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA)) {
             s->sdmasysad = (s->sdmasysad & mask) | value;
             MASKED_WRITE(s->sdmasysad, mask, value);
             /* Writing to last byte of sdmasysad might trigger transfer */

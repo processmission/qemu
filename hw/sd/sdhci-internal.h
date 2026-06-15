@@ -309,6 +309,8 @@ extern const VMStateDescription sdhci_vmstate;
 #define DEFINE_SDHCI_COMMON_PROPERTIES(_state) \
     DEFINE_PROP_UINT8("sd-spec-version", _state, sd_spec_version, 2), \
     DEFINE_PROP_UINT8("uhs", _state, uhs_mode, UHS_NOT_SUPPORTED), \
+    DEFINE_PROP_UINT16("vendor-area1", _state, vendor_area1, 0), \
+    DEFINE_PROP_UINT16("vendor-area2", _state, vendor_area2, 0), \
     \
     /* Capabilities registers provide information on supported
      * features of this specific host controller implementation */ \

@@ -2,6 +2,10 @@ config PL181
     bool
     select SD
 
+config DW_MMC
+    bool
+    select SD
+
 config SSI_SD
     bool
     depends on SSI
@@ -13,6 +17,10 @@ config SD
 config SDHCI
     bool
     select SD
+
+config ROCKCHIP_DWCMSHC
+    bool
+    select SDHCI
 
 config SDHCI_PCI
     bool

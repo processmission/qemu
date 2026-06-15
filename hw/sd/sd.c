@@ -2179,9 +2179,16 @@ static sd_rsp_type_t sd_cmd_APP_CMD(SDState *sd, SDRequest req)
     case sd_sleep_state:
         return sd_invalid_state_for_cmd(sd, req);
     case sd_idle_state:
-        if (!sd_is_spi(sd) && sd_req_get_rca(sd, req) != 0x0000) {
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "SD: illegal RCA 0x%04x for APP_CMD\n", req.cmd);
+        if (!sd_is_spi(sd)) {
+            if (sd_req_get_rca(sd, req) != 0x0000) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "SD: illegal RCA 0x%04x for APP_CMD\n",
+                              sd_req_get_rca(sd, req));
+                return sd_r0;
+            }
+            sd->expecting_acmd = true;
+            sd->card_status |= APP_CMD;
+            return sd_r1;
         }
         /* fall-through */
     default:
