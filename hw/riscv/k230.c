@@ -147,6 +147,7 @@ static void k230_soc_init(Object *obj)
                             TYPE_K230_SYSCTL_BOOT);
     object_initialize_child(obj, "k230-sysctl-power", &s->sysctl_power,
                             TYPE_K230_SYSCTL_POWER);
+    object_initialize_child(obj, "k230-pmu", &s->pmu, TYPE_K230_PMU);
     object_initialize_child(obj, "k230-rtc", &s->rtc, TYPE_K230_RTC);
     object_initialize_child(obj, "k230-security", &s->security,
                             TYPE_K230_SECURITY);
@@ -477,6 +478,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_power), 0,
                     memmap[K230_DEV_PWR].base);
 
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pmu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pmu), 0, memmap[K230_DEV_PMU].base);
+
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
         return;
     }
@@ -491,10 +497,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->security), 0,
                     memmap[K230_DEV_SECURITY].base);
 
-    if (!k230_create_regs(s, K230_REGS_PMU, memmap[K230_DEV_PMU].base,
-                          memmap[K230_DEV_PMU].size, errp)) {
-        return;
-    }
     if (!k230_create_regs(s, K230_REGS_CMU, memmap[K230_DEV_CMU].base,
                           memmap[K230_DEV_CMU].size, errp)) {
         return;
