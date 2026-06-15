@@ -221,6 +221,31 @@ config SIFIVE_U_OTP
 config SIFIVE_U_PRCI
     bool
 
+config K230_HI_SYS_CFG
+    bool
+
+config K230_HARDLOCK
+    bool
+
+config K230_TSENSOR
+    bool
+
+config K230_GPIO
+    bool
+
+config K230_ADC
+    bool
+
+config K230_PWM
+    bool
+
+config K230_TIMER
+    bool
+
+config K230_UGZIP
+    bool
+    select K230_GSDMA
+
 config VIRT_CTRL
     bool
 
