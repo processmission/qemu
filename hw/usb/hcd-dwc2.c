@@ -64,17 +64,16 @@
 /* update irq line */
 static inline void dwc2_update_irq(DWC2State *s)
 {
-    static int oldlevel;
     int level = 0;
 
     if ((s->gintsts & s->gintmsk) && (s->gahbcfg & GAHBCFG_GLBL_INTR_EN)) {
         level = 1;
     }
-    if (level != oldlevel) {
-        oldlevel = level;
+    if (level != s->irq_level) {
+        s->irq_level = level;
         trace_usb_dwc2_update_irq(level);
-        qemu_set_irq(s->irq, level);
     }
+    qemu_set_irq(s->irq, level);
 }
 
 /* flag interrupt condition */
@@ -96,15 +95,23 @@ static inline void dwc2_lower_global_irq(DWC2State *s, uint32_t intr)
     }
 }
 
+static inline void dwc2_update_host_irq(DWC2State *s)
+{
+    if (s->haint & s->haintmsk) {
+        dwc2_raise_global_irq(s, GINTSTS_HCHINT);
+    } else {
+        dwc2_lower_global_irq(s, GINTSTS_HCHINT);
+    }
+    dwc2_update_irq(s);
+}
+
 static inline void dwc2_raise_host_irq(DWC2State *s, uint32_t host_intr)
 {
     if (!(s->haint & host_intr)) {
         s->haint |= host_intr;
         s->haint &= 0xffff;
         trace_usb_dwc2_raise_host_irq(host_intr);
-        if (s->haint & s->haintmsk) {
-            dwc2_raise_global_irq(s, GINTSTS_HCHINT);
-        }
+        dwc2_update_host_irq(s);
     }
 }
 
@@ -113,9 +120,7 @@ static inline void dwc2_lower_host_irq(DWC2State *s, uint32_t host_intr)
     if (s->haint & host_intr) {
         s->haint &= ~host_intr;
         trace_usb_dwc2_lower_host_irq(host_intr);
-        if (!(s->haint & s->haintmsk)) {
-            dwc2_lower_global_irq(s, GINTSTS_HCHINT);
-        }
+        dwc2_update_host_irq(s);
     }
 }
 
@@ -879,6 +884,7 @@ static void dwc2_hreg0_write(void *ptr, hwaddr addr, int index, uint64_t val,
     uint32_t tval, told, old;
     int prst = 0;
     int iflg = 0;
+    int hiflg = 0;
 
     if (addr < HCFG || addr > HPRT0) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%"HWADDR_PRIx"\n",
@@ -900,6 +906,7 @@ static void dwc2_hreg0_write(void *ptr, hwaddr addr, int index, uint64_t val,
         return;
     case HAINTMSK:
         val &= 0xffff;
+        hiflg = 1;
         break;
     case HPRT0:
         /* don't allow clearing of read-only bits */
@@ -950,6 +957,10 @@ static void dwc2_hreg0_write(void *ptr, hwaddr addr, int index, uint64_t val,
     }
 
     *mmio = val;
+
+    if (hiflg) {
+        dwc2_update_host_irq(s);
+    }
 
     if (iflg > 0) {
         trace_usb_dwc2_hreg0_action("enable PRTINT");
@@ -1042,9 +1053,19 @@ static void dwc2_hreg1_write(void *ptr, hwaddr addr, int index, uint64_t val,
     *mmio = val;
 
     if (disflg) {
-        /* set ChHltd in HCINT */
-        s->hreg1[(index & ~7) + 2] |= HCINTMSK_CHHLTD;
-        iflg = 1;
+        DWC2Packet *p = &s->packet[index >> 3];
+
+        p->needs_service = false;
+        if (p->async == DWC2_ASYNC_INFLIGHT) {
+            usb_cancel_packet(&p->packet);
+            usb_packet_cleanup(&p->packet);
+            p->async = DWC2_ASYNC_NONE;
+        }
+
+        if (old & HCCHAR_CHENA) {
+            s->hreg1[(index & ~7) + 2] |= HCINTMSK_CHHLTD;
+            iflg = 1;
+        }
     }
 
     if (enflg) {
@@ -1303,6 +1324,7 @@ static void dwc2_reset_enter(Object *obj, ResetType type)
     s->frame_number = 0;
     s->fi = USB_FRMINTVL - 1;
     s->next_chan = 0;
+    s->irq_level = 0;
     s->working = false;
 
     for (i = 0; i < DWC2_NB_CHAN; i++) {
