@@ -233,6 +233,12 @@ config K230_TSENSOR
 config K230_GPIO
     bool
 
+config K230_IOMUX
+    bool
+
+config K230_REGS
+    bool
+
 config K230_ADC
     bool
 
@@ -243,6 +249,9 @@ config K230_TIMER
     bool
 
 config K230_SYSCTL
+    bool
+
+config K230_SECURITY
     bool
 
 config K230_UGZIP
