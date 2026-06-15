@@ -134,6 +134,12 @@ static void k230_soc_init(Object *obj)
                             TYPE_K230_TSENSOR);
     object_initialize_child(obj, "k230-gpio0", &s->gpio[0], TYPE_K230_GPIO);
     object_initialize_child(obj, "k230-gpio1", &s->gpio[1], TYPE_K230_GPIO);
+    object_initialize_child(obj, "k230-iomux", &s->iomux, TYPE_K230_IOMUX);
+    for (int i = 0; i < K230_I2C_COUNT; i++) {
+        g_autofree char *name = g_strdup_printf("k230-i2c%d", i);
+
+        object_initialize_child(obj, name, &s->i2c[i], TYPE_K230_I2C);
+    }
     object_initialize_child(obj, "k230-adc", &s->adc, TYPE_K230_ADC);
     object_initialize_child(obj, "k230-pwm", &s->pwm, TYPE_K230_PWM);
     object_initialize_child(obj, "k230-timer", &s->timer, TYPE_K230_TIMER);
@@ -141,7 +147,19 @@ static void k230_soc_init(Object *obj)
                             TYPE_K230_SYSCTL_BOOT);
     object_initialize_child(obj, "k230-sysctl-power", &s->sysctl_power,
                             TYPE_K230_SYSCTL_POWER);
-    object_initialize_child(obj, "k230-spi", &s->spi, TYPE_K230_SPI);
+    object_initialize_child(obj, "k230-rtc", &s->rtc, TYPE_K230_RTC);
+    object_initialize_child(obj, "k230-security", &s->security,
+                            TYPE_K230_SECURITY);
+    for (int i = 0; i < K230_SPI_COUNT; i++) {
+        g_autofree char *name = g_strdup_printf("k230-spi%d", i);
+
+        object_initialize_child(obj, name, &s->spi[i], TYPE_K230_SPI);
+    }
+    for (int i = 0; i < K230_REGS_COUNT; i++) {
+        g_autofree char *name = g_strdup_printf("k230-regs%d", i);
+
+        object_initialize_child(obj, name, &s->regs[i], TYPE_K230_REGS);
+    }
     object_initialize_child(obj, "k230-usb0", &s->usb[0], TYPE_DWC2_USB);
     object_initialize_child(obj, "k230-usb1", &s->usb[1], TYPE_DWC2_USB);
     object_property_add_const_link(OBJECT(&s->usb[0]), "dma-mr",
@@ -221,6 +239,79 @@ static void k230_create_usb_nic(K230SoCState *s)
 
     qdev_prop_set_string(dev, "port", "1");
     usb_realize_and_unref(USB_DEVICE(dev), &s->usb[1].bus, &error_fatal);
+}
+
+static void k230_create_i2c(K230SoCState *s, int index)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->i2c[index]);
+    int i2c_dev = K230_DEV_I2C0 + index;
+
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, memmap[i2c_dev].base);
+    sysbus_connect_irq(sbd, 0,
+                       qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                        K230_I2C0_IRQ + index));
+}
+
+static bool k230_create_spi(K230SoCState *s, int index,
+                            int spi_dev, int irq_base, Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->spi[index]);
+
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    sysbus_mmio_map(sbd, 0, memmap[spi_dev].base);
+    for (int i = 0; i < K230_SPI_IRQ_COUNT; i++) {
+        sysbus_connect_irq(sbd, i,
+                           qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                            irq_base + i));
+    }
+
+    return true;
+}
+
+static bool k230_create_regs(K230SoCState *s, int index,
+                             hwaddr base, hwaddr size, Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->regs[index]);
+
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "size", size);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    sysbus_mmio_map(sbd, 0, base);
+    return true;
+}
+
+static void k230_create_flash_xip(K230SoCState *s, DeviceState *dev,
+                                  MemoryRegion *sys_mem)
+{
+    hwaddr size = memmap[K230_DEV_FLASH].size;
+    K230SpiState *spi = &s->spi[K230_SPI_SPI0];
+    uint8_t *storage;
+
+    memory_region_init_rom(&s->flash_xip, OBJECT(dev), "k230.flash-xip",
+                           size, &error_fatal);
+    storage = memory_region_get_ram_ptr(&s->flash_xip);
+    memset(storage, 0xff, size);
+
+    if (spi->blk) {
+        int64_t length = blk_getlength(spi->blk);
+
+        if (length > 0) {
+            int64_t read_len = MIN(length, (int64_t)size);
+
+            if (blk_pread(spi->blk, 0, read_len, storage, 0) < 0) {
+                error_report("failed to read K230 SPI flash image");
+            }
+        }
+    }
+
+    memory_region_add_subregion(sys_mem, memmap[K230_DEV_FLASH].base,
+                                &s->flash_xip);
 }
 
 static void k230_soc_realize(DeviceState *dev, Error **errp)
@@ -335,6 +426,24 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                     memmap[K230_DEV_GPIO0].base);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[1]), 0,
                     memmap[K230_DEV_GPIO1].base);
+    for (int bank = 0; bank < 2; bank++) {
+        for (int line = 0; line < K230_GPIO_IRQ_COUNT; line++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[bank]), line,
+                qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                 K230_GPIO0_IRQ +
+                                 bank * K230_GPIO_IRQ_COUNT + line));
+        }
+    }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->iomux), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->iomux), 0,
+                    memmap[K230_DEV_IOMUX].base);
+
+    for (int i = 0; i < K230_I2C_COUNT; i++) {
+        k230_create_i2c(s, i);
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
         return;
@@ -364,15 +473,72 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_power), 0,
                     memmap[K230_DEV_PWR].base);
 
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->spi), errp)) {
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
         return;
     }
-    sysbus_mmio_map(SYS_BUS_DEVICE(&s->spi), 0, memmap[K230_DEV_SPI].base);
-    for (int i = 0; i < K230_SPI_IRQ_COUNT; i++) {
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi), i,
-                           qdev_get_gpio_in(DEVICE(s->c908_plic),
-                                            K230_SPI_IRQ + i));
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->rtc), 0, memmap[K230_DEV_RTC].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->rtc), 0,
+                       qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                        K230_PMU_IRQ));
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->security), errp)) {
+        return;
     }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->security), 0,
+                    memmap[K230_DEV_SECURITY].base);
+
+    if (!k230_create_regs(s, K230_REGS_PMU, memmap[K230_DEV_PMU].base,
+                          memmap[K230_DEV_PMU].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_CMU, memmap[K230_DEV_CMU].base,
+                          memmap[K230_DEV_CMU].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_RMU, memmap[K230_DEV_RMU].base,
+                          memmap[K230_DEV_RMU].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_HDI, memmap[K230_DEV_HDI].base,
+                          memmap[K230_DEV_HDI].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_STC, memmap[K230_DEV_STC].base,
+                          memmap[K230_DEV_STC].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_NOC_QOS, K230_NOC_QOS_BASE,
+                          K230_NOC_QOS_SIZE, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_CODEC, memmap[K230_DEV_CODEC].base,
+                          memmap[K230_DEV_CODEC].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_I2S, memmap[K230_DEV_I2S].base,
+                          memmap[K230_DEV_I2S].size, errp)) {
+        return;
+    }
+    if (!k230_create_regs(s, K230_REGS_DDRC_CFG,
+                          memmap[K230_DEV_DDRC_CFG].base,
+                          memmap[K230_DEV_DDRC_CFG].size, errp)) {
+        return;
+    }
+
+    if (!k230_create_spi(s, K230_SPI_QSPI0, K230_DEV_QSPI0,
+                         K230_QSPI0_IRQ, errp)) {
+        return;
+    }
+    if (!k230_create_spi(s, K230_SPI_QSPI1, K230_DEV_QSPI1,
+                         K230_QSPI1_IRQ, errp)) {
+        return;
+    }
+    if (!k230_create_spi(s, K230_SPI_SPI0, K230_DEV_SPI, K230_SPI_IRQ,
+                         errp)) {
+        return;
+    }
+
+    k230_create_flash_xip(s, dev, sys_mem);
 
     /* unimplemented devices */
     create_unimplemented_device("kpu.l2-cache",
@@ -417,70 +583,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("3d-engine", memmap[K230_DEV_3D_ENGINE].base,
                                 memmap[K230_DEV_3D_ENGINE].size);
 
-    create_unimplemented_device("pmu", memmap[K230_DEV_PMU].base,
-                                memmap[K230_DEV_PMU].size);
-
-    create_unimplemented_device("rtc", memmap[K230_DEV_RTC].base,
-                                memmap[K230_DEV_RTC].size);
-
-    create_unimplemented_device("cmu", memmap[K230_DEV_CMU].base,
-                                memmap[K230_DEV_CMU].size);
-
-    create_unimplemented_device("rmu", memmap[K230_DEV_RMU].base,
-                                memmap[K230_DEV_RMU].size);
-
-    create_unimplemented_device("iomux", memmap[K230_DEV_IOMUX].base,
-                                memmap[K230_DEV_IOMUX].size);
-
-    create_unimplemented_device("hdi", memmap[K230_DEV_HDI].base,
-                                memmap[K230_DEV_HDI].size);
-
-    create_unimplemented_device("stc", memmap[K230_DEV_STC].base,
-                                memmap[K230_DEV_STC].size);
-
-    create_unimplemented_device("security", memmap[K230_DEV_SECURITY].base,
-                                memmap[K230_DEV_SECURITY].size);
-
-    /*
-     * SDK U-Boot programs 0x91302310 before starting the UGZIP DMA path.
-     * The register only tunes NoC bandwidth/QoS, so a dummy MMIO page is
-     * enough for software that just needs the write to complete.
-     */
-    create_unimplemented_device("noc-qos", K230_NOC_QOS_BASE,
-                                K230_NOC_QOS_SIZE);
-
-    create_unimplemented_device("i2c0", memmap[K230_DEV_I2C0].base,
-                                memmap[K230_DEV_I2C0].size);
-
-    create_unimplemented_device("i2c1", memmap[K230_DEV_I2C1].base,
-                                memmap[K230_DEV_I2C1].size);
-
-    create_unimplemented_device("i2c2", memmap[K230_DEV_I2C2].base,
-                                memmap[K230_DEV_I2C2].size);
-
-    create_unimplemented_device("i2c3", memmap[K230_DEV_I2C3].base,
-                                memmap[K230_DEV_I2C3].size);
-
-    create_unimplemented_device("i2c4", memmap[K230_DEV_I2C4].base,
-                                memmap[K230_DEV_I2C4].size);
-
-    create_unimplemented_device("codec", memmap[K230_DEV_CODEC].base,
-                                memmap[K230_DEV_CODEC].size);
-
-    create_unimplemented_device("i2s", memmap[K230_DEV_I2S].base,
-                                memmap[K230_DEV_I2S].size);
-
-    create_unimplemented_device("qspi0", memmap[K230_DEV_QSPI0].base,
-                                memmap[K230_DEV_QSPI0].size);
-
-    create_unimplemented_device("qspi1", memmap[K230_DEV_QSPI1].base,
-                                memmap[K230_DEV_QSPI1].size);
-
-    create_unimplemented_device("ddrc_cfg", memmap[K230_DEV_DDRC_CFG].base,
-                                memmap[K230_DEV_DDRC_CFG].size);
-
-    create_unimplemented_device("flash", memmap[K230_DEV_FLASH].base,
-                                memmap[K230_DEV_FLASH].size);
 }
 
 static void k230_soc_class_init(ObjectClass *oc, const void *data)
@@ -613,6 +715,18 @@ static void k230_attach_sd_drives(K230MachineState *s)
     k230_attach_sd_drive(s, 0, 1);
 }
 
+static void k230_attach_spi_flash(K230MachineState *s)
+{
+    DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
+
+    if (!dinfo) {
+        return;
+    }
+
+    qdev_prop_set_drive_err(DEVICE(&s->soc.spi[K230_SPI_SPI0]), "drive",
+                            blk_by_legacy_dinfo(dinfo), &error_fatal);
+}
+
 static void k230_machine_init(MachineState *machine)
 {
     MachineClass *mc = MACHINE_GET_CLASS(machine);
@@ -629,6 +743,7 @@ static void k230_machine_init(MachineState *machine)
     /* Initialize SoC */
     object_initialize_child(OBJECT(machine), "soc", &s->soc,
                             TYPE_RISCV_K230_SOC);
+    k230_attach_spi_flash(s);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     /* Data Memory */
