@@ -29,6 +29,10 @@ config IMX6UL_LCDIF
     bool
     select FRAMEBUFFER
 
+config K230_DISPLAY
+    bool
+    select FRAMEBUFFER
+
 config SII9022
     bool
     depends on I2C

@@ -151,6 +151,8 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "k230-rtc", &s->rtc, TYPE_K230_RTC);
     object_initialize_child(obj, "k230-security", &s->security,
                             TYPE_K230_SECURITY);
+    object_initialize_child(obj, "k230-vo", &s->vo, TYPE_K230_VO);
+    object_initialize_child(obj, "k230-dsi", &s->dsi, TYPE_K230_DSI);
     for (int i = 0; i < K230_SPI_COUNT; i++) {
         g_autofree char *name = g_strdup_printf("k230-spi%d", i);
 
@@ -497,6 +499,18 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->security), 0,
                     memmap[K230_DEV_SECURITY].base);
 
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->vo), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->vo), 0, memmap[K230_DEV_VO].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->vo), 0,
+                       qdev_get_gpio_in(DEVICE(s->c908_plic), K230_VO_IRQ));
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dsi), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dsi), 0, memmap[K230_DEV_VO_CFG].base);
+
     if (!k230_create_regs(s, K230_REGS_CMU, memmap[K230_DEV_CMU].base,
                           memmap[K230_DEV_CMU].size, errp)) {
         return;
@@ -579,12 +593,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("gpu", memmap[K230_DEV_2P5D].base,
                                 memmap[K230_DEV_2P5D].size);
-
-    create_unimplemented_device("vo", memmap[K230_DEV_VO].base,
-                                memmap[K230_DEV_VO].size);
-
-    create_unimplemented_device("vo_cfg", memmap[K230_DEV_VO_CFG].base,
-                                memmap[K230_DEV_VO_CFG].size);
 
     create_unimplemented_device("3d-engine", memmap[K230_DEV_3D_ENGINE].base,
                                 memmap[K230_DEV_3D_ENGINE].size);
