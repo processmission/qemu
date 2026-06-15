@@ -411,6 +411,10 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->hardlock), 0,
                     memmap[K230_DEV_MAILBOX].base);
+    for (int i = 0; i < K230_IPCM_IRQ_COUNT; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->hardlock), i,
+            qdev_get_gpio_in(DEVICE(s->c908_plic), K230_IPCM_IRQ_BASE + i));
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->tsensor), errp)) {
         return;
