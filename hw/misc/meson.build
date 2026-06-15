@@ -43,6 +43,7 @@ system_ss.add(when: 'CONFIG_K230_GPIO', if_true: files('k230_gpio.c'))
 system_ss.add(when: 'CONFIG_K230_ADC', if_true: files('k230_adc.c'))
 system_ss.add(when: 'CONFIG_K230_PWM', if_true: files('k230_pwm.c'))
 system_ss.add(when: 'CONFIG_K230_TIMER', if_true: files('k230_timer.c'))
+system_ss.add(when: 'CONFIG_K230_SYSCTL', if_true: files('k230_sysctl.c'))
 system_ss.add(when: 'CONFIG_K230_UGZIP', if_true: files('k230_ugzip.c'))
 
 subdir('macio')

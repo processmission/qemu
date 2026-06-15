@@ -242,6 +242,9 @@ config K230_PWM
 config K230_TIMER
     bool
 
+config K230_SYSCTL
+    bool
+
 config K230_UGZIP
     bool
     select K230_GSDMA
