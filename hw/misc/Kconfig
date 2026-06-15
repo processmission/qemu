@@ -242,6 +242,18 @@ config K230_IOMUX
 config K230_REGS
     bool
 
+config K230_NONAI_2D
+    bool
+
+config K230_DEWARP
+    bool
+
+config K230_ISP
+    bool
+
+config K230_RX_CSI
+    bool
+
 config K230_ADC
     bool
 
