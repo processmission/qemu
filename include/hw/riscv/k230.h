@@ -16,18 +16,23 @@
 #define HW_K230_H
 
 #include "hw/core/boards.h"
+#include "hw/core/split-irq.h"
 #include "hw/display/k230_display.h"
 #include "hw/dma/k230_gsdma.h"
 #include "hw/dma/k230_pdma.h"
 #include "hw/i2c/k230_i2c.h"
 #include "hw/misc/k230_adc.h"
+#include "hw/misc/k230_dewarp.h"
 #include "hw/misc/k230_gpio.h"
 #include "hw/misc/k230_hardlock.h"
 #include "hw/misc/k230_hi_sys_cfg.h"
 #include "hw/misc/k230_iomux.h"
+#include "hw/misc/k230_isp.h"
+#include "hw/misc/k230_nonai_2d.h"
 #include "hw/misc/k230_pmu.h"
 #include "hw/misc/k230_pwm.h"
 #include "hw/misc/k230_regs.h"
+#include "hw/misc/k230_rx_csi.h"
 #include "hw/misc/k230_security.h"
 #include "hw/misc/k230_sysctl.h"
 #include "hw/misc/k230_timer.h"
@@ -41,6 +46,11 @@
 #include "hw/watchdog/k230_wdt.h"
 
 #define C908_CPU_HARTID   (0)
+#define C908V_CPU_HARTID  (0)
+#define C908V_CPU_INDEX   (1)
+#define K230_UART_COUNT   5
+#define K230_REGS_COUNT   12
+#define K230_PLIC_NUM_SOURCES 257
 
 #define TYPE_RISCV_K230_SOC "riscv.k230.soc"
 #define RISCV_K230_SOC(obj) \
@@ -52,6 +62,7 @@ typedef struct K230SoCState {
 
     /*< public >*/
     RISCVHartArrayState c908_cpu; /* Small core */
+    RISCVHartArrayState c908v_cpu; /* Big core */
 
     K230WdtState wdt[2];
     K230SdhciState sdhci[K230_SDHCI_COUNT];
@@ -63,25 +74,37 @@ typedef struct K230SoCState {
     K230TSensorState tsensor;
     K230GpioState gpio[2];
     K230IomuxState iomux;
+    K230RegsState uart_ext[K230_UART_COUNT];
     K230I2CState i2c[5];
     K230AdcState adc;
     K230PwmState pwm;
     K230TimerState timer;
     K230SysctlBootState sysctl_boot;
     K230SysctlPowerState sysctl_power;
+    K230SysctlResetState sysctl_reset;
     K230PmuState pmu;
     K230RtcState rtc;
     K230SecurityState security;
     K230VoState vo;
     K230DsiState dsi;
     K230SpiState spi[3];
-    K230RegsState regs[8];
+    K230RegsState regs[K230_REGS_COUNT];
+    K230NonAI2DState nonai_2d;
+    K230IspState isp;
+    K230DewarpState dewarp;
+    K230RxCsiState rx_csi;
     DWC2State usb[2];
     MemoryRegion sram;
+    MemoryRegion kpu_l2_cache;
     MemoryRegion bootrom;
     MemoryRegion flash_xip;
+    MemoryRegion c908v_mem;
+    MemoryRegion c908v_sysmem;
 
     DeviceState *c908_plic;
+    DeviceState *c908v_plic;
+    SplitIRQ plic_irq_splitter[K230_PLIC_NUM_SOURCES];
+    bool c908v_enabled;
 } K230SoCState;
 
 #define TYPE_RISCV_K230_MACHINE MACHINE_TYPE_NAME("k230")
@@ -178,7 +201,14 @@ enum {
     K230_WDT1_IRQ   = 108,
     K230_IPCM_IRQ_BASE = 109,
     K230_IPCM_IRQ_COUNT = 4,
+    K230_ISP_MI_IRQ = 127,
+    K230_ISP_FE_IRQ = 128,
+    K230_ISP_IRQ    = 129,
+    K230_DWE_IRQ    = 130,
+    K230_FE_IRQ     = 131,
     K230_VO_IRQ     = 133,
+    K230_DMA_IRQ    = 140,
+    K230_NON_AI_2D_IRQ = 141,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
     K230_SPI_IRQ    = 146,
@@ -187,12 +217,15 @@ enum {
     K230_USB0_IRQ   = 173,
     K230_USB1_IRQ   = 174,
     K230_PMU_IRQ    = 175,
+    K230_DPU_IRQ    = 186,
+    K230_GNNE_IRQ   = 189,
+    K230_FFT_IRQ    = 190,
+    K230_AI2D_IRQ   = 191,
+    K230_VSE_IRQ    = 204,
 };
 
-#define K230_UART_COUNT 5
 #define K230_I2C_COUNT 5
 #define K230_SPI_COUNT 3
-#define K230_REGS_COUNT 8
 
 enum {
     K230_SPI_QSPI0,
@@ -202,20 +235,26 @@ enum {
 
 enum {
     K230_REGS_CMU,
-    K230_REGS_RMU,
+    K230_REGS_KPU_CFG,
     K230_REGS_HDI,
     K230_REGS_STC,
     K230_REGS_NOC_QOS,
     K230_REGS_CODEC,
     K230_REGS_I2S,
     K230_REGS_DDRC_CFG,
+    K230_REGS_FFT,
+    K230_REGS_AI_2D_ENGINE,
+    K230_REGS_NON_AI_2D,
+    K230_REGS_DPU,
 };
 
 /*
- * Integrates with the interrupt controller (PLIC),
- * which can process 208 interrupt external sources
+ * The TRM lists fewer implemented peripheral interrupt lines, but the
+ * RT-Smart maix3/c908 BSP defines IRQ_MAX_NR as 256 and initializes
+ * PLIC source IDs 1..256.  Keep the PLIC source space wide enough for
+ * those SDK accesses while individual devices still only drive the lines
+ * they implement.
  */
-#define K230_PLIC_NUM_SOURCES 208
 #define K230_PLIC_NUM_PRIORITIES 7
 #define K230_PLIC_PRIORITY_BASE 0x00
 #define K230_PLIC_PENDING_BASE 0x1000

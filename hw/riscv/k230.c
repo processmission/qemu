@@ -15,6 +15,7 @@
 
 #include "qemu/osdep.h"
 #include "cpu-qom.h"
+#include "qemu/bitops.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
@@ -25,11 +26,14 @@
 #include "system/block-backend.h"
 #include "system/blockdev.h"
 #include "target/riscv/cpu.h"
+#include "hw/core/irq.h"
 #include "hw/core/loader.h"
 #include "hw/core/sysbus.h"
+#include "hw/i2c/k230_ov5647.h"
 #include "hw/riscv/k230.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/machines-qom.h"
+#include "hw/intc/k230_clint.h"
 #include "hw/intc/riscv_aclint.h"
 #include "hw/intc/sifive_plic.h"
 #include "hw/char/serial-mm.h"
@@ -46,6 +50,26 @@
 #define K230_NOC_QOS_BASE          0x91302000
 #define K230_NOC_QOS_SIZE          0x1000
 
+#define K230_FIRMWARE_OPENSBI_ADDR 0x00200000
+#define K230_FAKE_KPU_OUTPUT_BASE  0x10090000
+#define K230_FAKE_KPU_OUTPUT_SIZE  0x00100000
+#define K230_CLINT_SMODE_OFFSET    0x0000c000
+#define K230_TIMEBASE_FREQ         27000000
+#define K230_STC_COUNTER_OFFSET    0x40
+#define K230_STC_COUNTER_SIZE      0x30
+#define K230_GNNE_CLEAR_OFFSET     0x128
+#define K230_GNNE_STATUS_OFFSET    0x130
+#define K230_GNNE_STATUS_VALUE     0x0000000400000004ULL
+#define K230_GNNE_START_OFFSET     0x190
+#define K230_GNNE_COMMAND_START    0x100
+#define K230_GNNE_COMMAND_END      0x104
+#define K230_GNNE_COMMAND_HI       0x108
+#define K230_GNNE_COMPLETE_DELAY_NS (100 * 1000)
+#define K230_AI2D_CALC_ENABLE      0x80
+#define K230_AI2D_JOB_OFFSET       0x8c
+#define K230_AI2D_CLEAR_OFFSET     0xa0
+#define K230_AI2D_LEGACY_START     0xc0
+
 static const MemMapEntry memmap[] = {
     [K230_DEV_DDRC] =         { 0x00000000,  0x80000000 },
     [K230_DEV_KPU_L2_CACHE] = { 0x80000000,  0x00200000 },
@@ -59,7 +83,7 @@ static const MemMapEntry memmap[] = {
     [K230_DEV_NON_AI_2D] =    { 0x8080C000,  0x00004000 },
     [K230_DEV_ISP] =          { 0x90000000,  0x00008000 },
     [K230_DEV_DEWARP] =       { 0x90008000,  0x00001000 },
-    [K230_DEV_RX_CSI] =       { 0x90009000,  0x00002000 },
+    [K230_DEV_RX_CSI] =       { 0x90009000,  0x00010000 },
     [K230_DEV_H264] =         { 0x90400000,  0x00010000 },
     [K230_DEV_2P5D] =         { 0x90800000,  0x00040000 },
     [K230_DEV_VO] =           { 0x90840000,  0x00010000 },
@@ -117,6 +141,10 @@ static void k230_soc_init(Object *obj)
     RISCVHartArrayState *cpu0 = &s->c908_cpu;
 
     object_initialize_child(obj, "c908-cpu", cpu0, TYPE_RISCV_HART_ARRAY);
+    memory_region_init(&s->c908v_mem, obj, "k230.c908v-memory", UINT64_MAX);
+    memory_region_init_alias(&s->c908v_sysmem, obj, "k230.c908v-system",
+                             get_system_memory(), 0, UINT64_MAX);
+    memory_region_add_subregion(&s->c908v_mem, 0, &s->c908v_sysmem);
     object_initialize_child(obj, "k230-wdt0", &s->wdt[0], TYPE_K230_WDT);
     object_initialize_child(obj, "k230-wdt1", &s->wdt[1], TYPE_K230_WDT);
     object_initialize_child(obj, "k230-sdhci0", &s->sdhci[0],
@@ -135,6 +163,11 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "k230-gpio0", &s->gpio[0], TYPE_K230_GPIO);
     object_initialize_child(obj, "k230-gpio1", &s->gpio[1], TYPE_K230_GPIO);
     object_initialize_child(obj, "k230-iomux", &s->iomux, TYPE_K230_IOMUX);
+    for (int i = 0; i < K230_UART_COUNT; i++) {
+        g_autofree char *name = g_strdup_printf("k230-uart-ext%d", i);
+
+        object_initialize_child(obj, name, &s->uart_ext[i], TYPE_K230_REGS);
+    }
     for (int i = 0; i < K230_I2C_COUNT; i++) {
         g_autofree char *name = g_strdup_printf("k230-i2c%d", i);
 
@@ -147,6 +180,8 @@ static void k230_soc_init(Object *obj)
                             TYPE_K230_SYSCTL_BOOT);
     object_initialize_child(obj, "k230-sysctl-power", &s->sysctl_power,
                             TYPE_K230_SYSCTL_POWER);
+    object_initialize_child(obj, "k230-sysctl-reset", &s->sysctl_reset,
+                            TYPE_K230_SYSCTL_RESET);
     object_initialize_child(obj, "k230-pmu", &s->pmu, TYPE_K230_PMU);
     object_initialize_child(obj, "k230-rtc", &s->rtc, TYPE_K230_RTC);
     object_initialize_child(obj, "k230-security", &s->security,
@@ -163,6 +198,20 @@ static void k230_soc_init(Object *obj)
 
         object_initialize_child(obj, name, &s->regs[i], TYPE_K230_REGS);
     }
+    object_initialize_child(obj, "k230-nonai-2d", &s->nonai_2d,
+                            TYPE_K230_NONAI_2D);
+    object_initialize_child(obj, "k230-isp", &s->isp, TYPE_K230_ISP);
+    object_initialize_child(obj, "k230-dewarp", &s->dewarp,
+                            TYPE_K230_DEWARP);
+    object_initialize_child(obj, "k230-rx-csi", &s->rx_csi,
+                            TYPE_K230_RX_CSI);
+    for (int i = 0; i < K230_PLIC_NUM_SOURCES; i++) {
+        g_autofree char *name = g_strdup_printf("k230-plic-irq-splitter%d",
+                                                i);
+
+        object_initialize_child(obj, name, &s->plic_irq_splitter[i],
+                                TYPE_SPLIT_IRQ);
+    }
     object_initialize_child(obj, "k230-usb0", &s->usb[0], TYPE_DWC2_USB);
     object_initialize_child(obj, "k230-usb1", &s->usb[1], TYPE_DWC2_USB);
     object_property_add_const_link(OBJECT(&s->usb[0]), "dma-mr",
@@ -177,7 +226,28 @@ static void k230_soc_init(Object *obj)
                          memmap[K230_DEV_BOOTROM].base);
 }
 
-static DeviceState *k230_create_plic(int base_hartid, int hartid_count)
+static void k230_soc_init_c908v_cpu(K230SoCState *s, Object *obj)
+{
+    RISCVHartArrayState *cpu1 = &s->c908v_cpu;
+
+    object_initialize_child(obj, "c908v-cpu", cpu1, TYPE_RISCV_HART_ARRAY);
+    qdev_prop_set_uint32(DEVICE(cpu1), "hartid-base", C908V_CPU_HARTID);
+    qdev_prop_set_string(DEVICE(cpu1), "cpu-type",
+                         TYPE_RISCV_CPU_THEAD_C908V);
+    qdev_prop_set_uint64(DEVICE(cpu1), "resetvec",
+                         memmap[K230_DEV_BOOTROM].base);
+    object_property_set_link(OBJECT(cpu1), "memory", OBJECT(&s->c908v_mem),
+                             &error_abort);
+    qdev_prop_set_bit(DEVICE(cpu1), "start-powered-off", true);
+}
+
+static RISCVHartArrayState *k230_boot_harts(K230MachineState *s)
+{
+    return s->soc.c908v_enabled ? &s->soc.c908v_cpu : &s->soc.c908_cpu;
+}
+
+static DeviceState *k230_create_plic_in(MemoryRegion *mem, int base_hartid,
+                                        int cpu_index_base, int hartid_count)
 {
     g_autofree char *plic_hart_config = NULL;
 
@@ -185,30 +255,62 @@ static DeviceState *k230_create_plic(int base_hartid, int hartid_count)
     plic_hart_config = riscv_plic_hart_config_string(hartid_count);
 
     /* Per-socket PLIC */
-    return sifive_plic_create(memmap[K230_DEV_PLIC].base,
-                              plic_hart_config, hartid_count, base_hartid,
-                              K230_PLIC_NUM_SOURCES,
-                              K230_PLIC_NUM_PRIORITIES,
-                              K230_PLIC_PRIORITY_BASE, K230_PLIC_PENDING_BASE,
-                              K230_PLIC_ENABLE_BASE, K230_PLIC_ENABLE_STRIDE,
-                              K230_PLIC_CONTEXT_BASE,
-                              K230_PLIC_CONTEXT_STRIDE,
-                              memmap[K230_DEV_PLIC].size);
+    return sifive_plic_create_in(mem, memmap[K230_DEV_PLIC].base,
+                                 plic_hart_config, hartid_count, base_hartid,
+                                 cpu_index_base, K230_PLIC_NUM_SOURCES,
+                                 K230_PLIC_NUM_PRIORITIES,
+                                 K230_PLIC_PRIORITY_BASE,
+                                 K230_PLIC_PENDING_BASE,
+                                 K230_PLIC_ENABLE_BASE,
+                                 K230_PLIC_ENABLE_STRIDE,
+                                 K230_PLIC_CONTEXT_BASE,
+                                 K230_PLIC_CONTEXT_STRIDE,
+                                 memmap[K230_DEV_PLIC].size);
 }
 
-static void k230_create_uart(MemoryRegion *sys_mem, DeviceState *plic,
-                             int index)
+static DeviceState *k230_create_plic(int base_hartid, int hartid_count)
+{
+    return k230_create_plic_in(get_system_memory(), base_hartid, base_hartid,
+                               hartid_count);
+}
+
+static qemu_irq k230_plic_irq(K230SoCState *s, int irq)
+{
+    return qdev_get_gpio_in(DEVICE(&s->plic_irq_splitter[irq]), 0);
+}
+
+static void k230_create_plic_irq_splitters(K230SoCState *s)
+{
+    uint16_t num_lines = s->c908v_enabled ? 2 : 1;
+
+    for (int i = 0; i < K230_PLIC_NUM_SOURCES; i++) {
+        DeviceState *splitter = DEVICE(&s->plic_irq_splitter[i]);
+
+        qdev_prop_set_uint16(splitter, "num-lines", num_lines);
+        qdev_realize(splitter, NULL, &error_fatal);
+        qdev_connect_gpio_out(splitter, 0,
+                              qdev_get_gpio_in(DEVICE(s->c908_plic), i));
+        if (s->c908v_enabled) {
+            qdev_connect_gpio_out(splitter, 1,
+                                  qdev_get_gpio_in(DEVICE(s->c908v_plic), i));
+        }
+    }
+}
+
+static void k230_create_uart(MemoryRegion *sys_mem, K230SoCState *s, int index)
 {
     int uart_dev = K230_DEV_UART0 + index;
-    g_autofree char *name = g_strdup_printf("uart%d", index);
+    SysBusDevice *uart_ext = SYS_BUS_DEVICE(&s->uart_ext[index]);
 
     /* Cover the non-16550 part of the SDK's 0x1000 UART window. */
-    create_unimplemented_device(name, memmap[uart_dev].base,
-                                memmap[uart_dev].size);
+    qdev_prop_set_uint64(DEVICE(&s->uart_ext[index]), "size",
+                         memmap[uart_dev].size - 0x20);
+    sysbus_realize(uart_ext, &error_fatal);
+    sysbus_mmio_map(uart_ext, 0, memmap[uart_dev].base + 0x20);
 
     serial_mm_init(sys_mem, memmap[uart_dev].base, 2,
-                   qdev_get_gpio_in(plic, K230_UART0_IRQ + index),
-                   399193, serial_hd(index), DEVICE_LITTLE_ENDIAN);
+                   k230_plic_irq(s, K230_UART0_IRQ + index), 399193,
+                   serial_hd(index), DEVICE_LITTLE_ENDIAN);
 }
 
 static void k230_create_sdhci(K230SoCState *s, int index, int irq)
@@ -218,7 +320,7 @@ static void k230_create_sdhci(K230SoCState *s, int index, int irq)
 
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, memmap[sd_dev].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(DEVICE(s->c908_plic), irq));
+    sysbus_connect_irq(sbd, 0, k230_plic_irq(s, irq));
 }
 
 static void k230_create_usb(K230SoCState *s, int index, int irq)
@@ -228,7 +330,7 @@ static void k230_create_usb(K230SoCState *s, int index, int irq)
 
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, memmap[usb_dev].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(DEVICE(s->c908_plic), irq));
+    sysbus_connect_irq(sbd, 0, k230_plic_irq(s, irq));
 }
 
 static void k230_create_usb_nic(K230SoCState *s)
@@ -251,9 +353,20 @@ static void k230_create_i2c(K230SoCState *s, int index)
 
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, memmap[i2c_dev].base);
-    sysbus_connect_irq(sbd, 0,
-                       qdev_get_gpio_in(DEVICE(s->c908_plic),
-                                        K230_I2C0_IRQ + index));
+    sysbus_connect_irq(sbd, 0, k230_plic_irq(s, K230_I2C0_IRQ + index));
+}
+
+static void k230_create_camera_i2c_devices(K230SoCState *s)
+{
+    static const int ov5647_bus_ids[] = { 0, 1, 3, 4 };
+
+    for (int i = 0; i < ARRAY_SIZE(ov5647_bus_ids); i++) {
+        int index = ov5647_bus_ids[i];
+
+        if (index < K230_I2C_COUNT) {
+            i2c_slave_create_simple(s->i2c[index].bus, TYPE_K230_OV5647, 0x36);
+        }
+    }
 }
 
 static bool k230_create_spi(K230SoCState *s, int index,
@@ -267,9 +380,7 @@ static bool k230_create_spi(K230SoCState *s, int index,
 
     sysbus_mmio_map(sbd, 0, memmap[spi_dev].base);
     for (int i = 0; i < K230_SPI_IRQ_COUNT; i++) {
-        sysbus_connect_irq(sbd, i,
-                           qdev_get_gpio_in(DEVICE(s->c908_plic),
-                                            irq_base + i));
+        sysbus_connect_irq(sbd, i, k230_plic_irq(s, irq_base + i));
     }
 
     return true;
@@ -281,6 +392,76 @@ static bool k230_create_regs(K230SoCState *s, int index,
     SysBusDevice *sbd = SYS_BUS_DEVICE(&s->regs[index]);
 
     qdev_prop_set_uint64(DEVICE(&s->regs[index]), "size", size);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    sysbus_mmio_map(sbd, 0, base);
+    return true;
+}
+
+static bool k230_create_irq_regs(K230SoCState *s, int index,
+                                 hwaddr base, hwaddr size, int irq,
+                                 hwaddr start_offset, hwaddr start2_offset,
+                                 hwaddr start3_offset, hwaddr clear_offset,
+                                 hwaddr status_offset,
+                                 uint64_t status_value,
+                                 uint64_t delay_ns,
+                                 hwaddr command_start_offset,
+                                 hwaddr command_end_offset,
+                                 hwaddr command_hi_offset,
+                                 bool irq_clear_clears_status,
+                                 bool irq_on_any_write, Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->regs[index]);
+
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "size", size);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-start-offset",
+                         start_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-start2-offset",
+                         start2_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-start3-offset",
+                         start3_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-clear-offset",
+                         clear_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-status-offset",
+                         status_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-status-size",
+                         sizeof(status_value));
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-status-value",
+                         status_value);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-delay-ns", delay_ns);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]),
+                         "irq-command-start-offset", command_start_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-command-end-offset",
+                         command_end_offset);
+    qdev_prop_set_uint64(DEVICE(&s->regs[index]), "irq-command-hi-offset",
+                         command_hi_offset);
+    qdev_prop_set_bit(DEVICE(&s->regs[index]), "irq-clear-clears-status",
+                      irq_clear_clears_status);
+    qdev_prop_set_bit(DEVICE(&s->regs[index]), "irq-on-any-write",
+                      irq_on_any_write);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    sysbus_mmio_map(sbd, 0, base);
+    sysbus_connect_irq(sbd, 0, k230_plic_irq(s, irq));
+    return true;
+}
+
+static bool k230_create_stc(K230SoCState *s, hwaddr base, hwaddr size,
+                            Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->regs[K230_REGS_STC]);
+
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_STC]), "size", size);
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_STC]), "counter-offset",
+                         K230_STC_COUNTER_OFFSET);
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_STC]), "counter-size",
+                         K230_STC_COUNTER_SIZE);
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_STC]),
+                         "counter-frequency", K230_TIMEBASE_FREQ);
     if (!sysbus_realize(sbd, errp)) {
         return false;
     }
@@ -320,20 +501,39 @@ static void k230_create_flash_xip(K230SoCState *s, DeviceState *dev,
 static void k230_soc_realize(DeviceState *dev, Error **errp)
 {
     K230SoCState *s = RISCV_K230_SOC(dev);
+    MachineState *machine = MACHINE(qdev_get_machine());
     MemoryRegion *sys_mem = get_system_memory();
     static const int sd_irqs[] = { K230_SD0_IRQ, K230_SD1_IRQ };
     static const int usb_irqs[] = { K230_USB0_IRQ, K230_USB1_IRQ };
     int c908_cpus;
+    int c908v_cpus = 0;
+
+    s->c908v_enabled = machine->smp.cpus > 1;
+    qdev_prop_set_bit(DEVICE(&s->c908_cpu), "start-powered-off",
+                      s->c908v_enabled);
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
 
     c908_cpus = s->c908_cpu.num_harts;
+    if (s->c908v_enabled) {
+        k230_soc_init_c908v_cpu(s, OBJECT(dev));
+        qdev_prop_set_bit(DEVICE(&s->c908v_cpu), "start-powered-off",
+                          false);
+        sysbus_realize(SYS_BUS_DEVICE(&s->c908v_cpu), &error_fatal);
+        c908v_cpus = s->c908v_cpu.num_harts;
+    }
 
     /* SRAM */
     memory_region_init_ram(&s->sram, OBJECT(dev), "sram",
                            memmap[K230_DEV_SRAM].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[K230_DEV_SRAM].base,
                                 &s->sram);
+
+    /* KPU L2 cache is directly addressable by the SDK AI runtime. */
+    memory_region_init_ram(&s->kpu_l2_cache, OBJECT(dev), "k230.kpu-l2-cache",
+                           memmap[K230_DEV_KPU_L2_CACHE].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[K230_DEV_KPU_L2_CACHE].base,
+                                &s->kpu_l2_cache);
 
     /* BootROM */
     memory_region_init_rom(&s->bootrom, OBJECT(dev), "bootrom",
@@ -343,6 +543,12 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     /* PLIC */
     s->c908_plic = k230_create_plic(C908_CPU_HARTID, c908_cpus);
+    if (s->c908v_enabled) {
+        s->c908v_plic = k230_create_plic_in(&s->c908v_mem,
+                                            C908V_CPU_HARTID,
+                                            C908V_CPU_INDEX, c908v_cpus);
+    }
+    k230_create_plic_irq_splitters(s);
 
     /* CLINT */
     riscv_aclint_swi_create(memmap[K230_DEV_CLINT].base,
@@ -352,11 +558,34 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                                C908_CPU_HARTID, c908_cpus,
                                RISCV_ACLINT_DEFAULT_MTIMECMP,
                                RISCV_ACLINT_DEFAULT_MTIME,
-                               RISCV_ACLINT_DEFAULT_TIMEBASE_FREQ, true);
+                               K230_TIMEBASE_FREQ, true);
+    k230_clint_smode_create_in(sys_mem,
+                               memmap[K230_DEV_CLINT].base +
+                               K230_CLINT_SMODE_OFFSET,
+                               C908_CPU_HARTID, C908_CPU_HARTID, c908_cpus);
+    if (s->c908v_enabled) {
+        riscv_aclint_swi_create_in(&s->c908v_mem,
+                                   memmap[K230_DEV_CLINT].base,
+                                   C908V_CPU_HARTID, C908V_CPU_INDEX,
+                                   c908v_cpus, false);
+        riscv_aclint_mtimer_create_in(&s->c908v_mem,
+                                      memmap[K230_DEV_CLINT].base + 0x4000,
+                                      RISCV_ACLINT_DEFAULT_MTIMER_SIZE,
+                                      C908V_CPU_HARTID, C908V_CPU_INDEX,
+                                      c908v_cpus,
+                                      RISCV_ACLINT_DEFAULT_MTIMECMP,
+                                      RISCV_ACLINT_DEFAULT_MTIME,
+                                      K230_TIMEBASE_FREQ, true);
+        k230_clint_smode_create_in(&s->c908v_mem,
+                                   memmap[K230_DEV_CLINT].base +
+                                   K230_CLINT_SMODE_OFFSET,
+                                   C908V_CPU_HARTID, C908V_CPU_INDEX,
+                                   c908v_cpus);
+    }
 
     /* UART */
     for (int i = 0; i < K230_UART_COUNT; i++) {
-        k230_create_uart(sys_mem, DEVICE(s->c908_plic), i);
+        k230_create_uart(sys_mem, s, i);
     }
 
     /* Watchdog */
@@ -368,11 +597,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->wdt[0]), 0, memmap[K230_DEV_WDT0].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt[0]), 0,
-                       qdev_get_gpio_in(DEVICE(s->c908_plic), K230_WDT0_IRQ));
+                       k230_plic_irq(s, K230_WDT0_IRQ));
 
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->wdt[1]), 0, memmap[K230_DEV_WDT1].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt[1]), 0,
-                       qdev_get_gpio_in(DEVICE(s->c908_plic), K230_WDT1_IRQ));
+                       k230_plic_irq(s, K230_WDT1_IRQ));
 
     /* GSDMA/PDMA/UGZIP blocks used by SDK U-Boot and Linux DT. */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->gsdma), errp)) {
@@ -380,6 +609,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->gsdma), 0,
                     memmap[K230_DEV_GSDMA].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->gsdma), 0,
+                       k230_plic_irq(s, K230_DMA_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->pdma), errp)) {
         return;
@@ -416,7 +647,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                     memmap[K230_DEV_MAILBOX].base);
     for (int i = 0; i < K230_IPCM_IRQ_COUNT; i++) {
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->hardlock), i,
-            qdev_get_gpio_in(DEVICE(s->c908_plic), K230_IPCM_IRQ_BASE + i));
+                           k230_plic_irq(s, K230_IPCM_IRQ_BASE + i));
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->tsensor), errp)) {
@@ -436,9 +667,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     for (int bank = 0; bank < 2; bank++) {
         for (int line = 0; line < K230_GPIO_IRQ_COUNT; line++) {
             sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[bank]), line,
-                qdev_get_gpio_in(DEVICE(s->c908_plic),
-                                 K230_GPIO0_IRQ +
-                                 bank * K230_GPIO_IRQ_COUNT + line));
+                k230_plic_irq(s, K230_GPIO0_IRQ +
+                              bank * K230_GPIO_IRQ_COUNT + line));
         }
     }
 
@@ -451,6 +681,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     for (int i = 0; i < K230_I2C_COUNT; i++) {
         k230_create_i2c(s, i);
     }
+    k230_create_camera_i2c_devices(s);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
         return;
@@ -480,6 +711,19 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_power), 0,
                     memmap[K230_DEV_PWR].base);
 
+    object_property_set_link(OBJECT(&s->sysctl_reset), "boot",
+                             OBJECT(&s->sysctl_boot), &error_abort);
+    if (s->c908v_enabled) {
+        object_property_set_link(OBJECT(&s->sysctl_reset), "cpu1",
+                                 OBJECT(&s->c908v_cpu.harts[0]),
+                                 &error_abort);
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sysctl_reset), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_reset), 0,
+                    memmap[K230_DEV_RMU].base);
+
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->pmu), errp)) {
         return;
     }
@@ -490,8 +734,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->rtc), 0, memmap[K230_DEV_RTC].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->rtc), 0,
-                       qdev_get_gpio_in(DEVICE(s->c908_plic),
-                                        K230_PMU_IRQ));
+                       k230_plic_irq(s, K230_PMU_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->security), errp)) {
         return;
@@ -504,7 +747,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->vo), 0, memmap[K230_DEV_VO].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->vo), 0,
-                       qdev_get_gpio_in(DEVICE(s->c908_plic), K230_VO_IRQ));
+                       k230_plic_irq(s, K230_VO_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dsi), errp)) {
         return;
@@ -515,16 +758,36 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                           memmap[K230_DEV_CMU].size, errp)) {
         return;
     }
-    if (!k230_create_regs(s, K230_REGS_RMU, memmap[K230_DEV_RMU].base,
-                          memmap[K230_DEV_RMU].size, errp)) {
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
+                         "complete-zero-base",
+                         K230_FAKE_KPU_OUTPUT_BASE);
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
+                         "complete-zero-size",
+                         K230_FAKE_KPU_OUTPUT_SIZE);
+    qdev_prop_set_bit(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
+                      "complete-zero-command-pages", true);
+    if (!k230_create_irq_regs(s, K230_REGS_KPU_CFG,
+                              memmap[K230_DEV_KPU_CFG].base,
+                              memmap[K230_DEV_KPU_CFG].size, K230_GNNE_IRQ,
+                              K230_GNNE_START_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              K230_GNNE_CLEAR_OFFSET,
+                              K230_GNNE_STATUS_OFFSET,
+                              K230_GNNE_STATUS_VALUE,
+                              K230_GNNE_COMPLETE_DELAY_NS,
+                              K230_GNNE_COMMAND_START,
+                              K230_GNNE_COMMAND_END,
+                              K230_GNNE_COMMAND_HI,
+                              false, false, errp)) {
         return;
     }
     if (!k230_create_regs(s, K230_REGS_HDI, memmap[K230_DEV_HDI].base,
                           memmap[K230_DEV_HDI].size, errp)) {
         return;
     }
-    if (!k230_create_regs(s, K230_REGS_STC, memmap[K230_DEV_STC].base,
-                          memmap[K230_DEV_STC].size, errp)) {
+    if (!k230_create_stc(s, memmap[K230_DEV_STC].base,
+                         memmap[K230_DEV_STC].size, errp)) {
         return;
     }
     if (!k230_create_regs(s, K230_REGS_NOC_QOS, K230_NOC_QOS_BASE,
@@ -544,6 +807,87 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                           memmap[K230_DEV_DDRC_CFG].size, errp)) {
         return;
     }
+    if (!k230_create_irq_regs(s, K230_REGS_FFT, memmap[K230_DEV_FFT].base,
+                              memmap[K230_DEV_FFT].size, K230_FFT_IRQ,
+                              0x10, K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET, 0x20,
+                              K230_REGS_NO_IRQ_OFFSET, 0,
+                              0, K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              true, false, errp)) {
+        return;
+    }
+    if (!k230_create_irq_regs(s, K230_REGS_AI_2D_ENGINE,
+                              memmap[K230_DEV_AI_2D_ENGINE].base,
+                              memmap[K230_DEV_AI_2D_ENGINE].size,
+                              K230_AI2D_IRQ, K230_AI2D_CALC_ENABLE,
+                              K230_AI2D_JOB_OFFSET, K230_AI2D_LEGACY_START,
+                              K230_AI2D_CLEAR_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET, 0,
+                              0, K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              true, false, errp)) {
+        return;
+    }
+    /*
+     * Keep the legacy regs[] slot realized so K230_REGS_DPU retains its old
+     * index, while the dedicated non-AI 2D device owns the MMIO window.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->regs[K230_REGS_NON_AI_2D]),
+                        errp)) {
+        return;
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->nonai_2d), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->nonai_2d), 0,
+                    memmap[K230_DEV_NON_AI_2D].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->nonai_2d), 0,
+                       k230_plic_irq(s, K230_NON_AI_2D_IRQ));
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->isp), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->isp), 0, memmap[K230_DEV_ISP].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->isp), 0,
+                       k230_plic_irq(s, K230_ISP_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->isp), 1,
+                       k230_plic_irq(s, K230_ISP_MI_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->isp), 2,
+                       k230_plic_irq(s, K230_ISP_FE_IRQ));
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->rx_csi), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->rx_csi), 0,
+                    memmap[K230_DEV_RX_CSI].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dewarp), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dewarp), 0,
+                    memmap[K230_DEV_DEWARP].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dewarp), 0,
+                       k230_plic_irq(s, K230_DWE_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dewarp), 1,
+                       k230_plic_irq(s, K230_FE_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dewarp), 2,
+                       k230_plic_irq(s, K230_VSE_IRQ));
+
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_DPU]),
+                         "irq-start-mask", BIT(0));
+    if (!k230_create_irq_regs(s, K230_REGS_DPU,
+                              memmap[K230_DEV_3D_ENGINE].base,
+                              memmap[K230_DEV_3D_ENGINE].size,
+                              K230_DPU_IRQ, 0x200, 0x380,
+                              K230_REGS_NO_IRQ_OFFSET, 0x1fc, 0x1f4, 0x3,
+                              0, K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              K230_REGS_NO_IRQ_OFFSET,
+                              true, false, errp)) {
+        return;
+    }
 
     if (!k230_create_spi(s, K230_SPI_QSPI0, K230_DEV_QSPI0,
                          K230_QSPI0_IRQ, errp)) {
@@ -561,41 +905,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     k230_create_flash_xip(s, dev, sys_mem);
 
     /* unimplemented devices */
-    create_unimplemented_device("kpu.l2-cache",
-                                memmap[K230_DEV_KPU_L2_CACHE].base,
-                                memmap[K230_DEV_KPU_L2_CACHE].size);
-
-    create_unimplemented_device("kpu_cfg", memmap[K230_DEV_KPU_CFG].base,
-                                memmap[K230_DEV_KPU_CFG].size);
-
-    create_unimplemented_device("fft", memmap[K230_DEV_FFT].base,
-                                memmap[K230_DEV_FFT].size);
-
-    create_unimplemented_device("2d-engine.ai",
-                                memmap[K230_DEV_AI_2D_ENGINE].base,
-                                memmap[K230_DEV_AI_2D_ENGINE].size);
-
-    create_unimplemented_device("2d-engine.non-ai",
-                                memmap[K230_DEV_NON_AI_2D].base,
-                                memmap[K230_DEV_NON_AI_2D].size);
-
-    create_unimplemented_device("isp", memmap[K230_DEV_ISP].base,
-                                memmap[K230_DEV_ISP].size);
-
-    create_unimplemented_device("dewarp", memmap[K230_DEV_DEWARP].base,
-                                memmap[K230_DEV_DEWARP].size);
-
-    create_unimplemented_device("rx-csi", memmap[K230_DEV_RX_CSI].base,
-                                memmap[K230_DEV_RX_CSI].size);
-
     create_unimplemented_device("vpu", memmap[K230_DEV_H264].base,
                                 memmap[K230_DEV_H264].size);
 
     create_unimplemented_device("gpu", memmap[K230_DEV_2P5D].base,
                                 memmap[K230_DEV_2P5D].size);
-
-    create_unimplemented_device("3d-engine", memmap[K230_DEV_3D_ENGINE].base,
-                                memmap[K230_DEV_3D_ENGINE].size);
 
 }
 
@@ -623,7 +937,8 @@ type_init(k230_soc_register_types)
 
 static void k230_direct_boot(K230MachineState *s, MachineState *machine)
 {
-    const char *firmware_name = riscv_default_firmware_name(&s->soc.c908_cpu);
+    RISCVHartArrayState *boot_harts = k230_boot_harts(s);
+    const char *firmware_name = riscv_default_firmware_name(boot_harts);
     RISCVBootInfo boot_info = {0};
     hwaddr start_addr = K230_DIRECT_OPENSBI_ADDR;
     hwaddr firmware_end_addr = 0;
@@ -649,7 +964,7 @@ static void k230_direct_boot(K230MachineState *s, MachineState *machine)
 
     qemu_fdt_add_path(machine->fdt, "/chosen");
 
-    riscv_boot_info_init(&boot_info, &s->soc.c908_cpu);
+    riscv_boot_info_init(&boot_info, boot_harts);
     riscv_load_kernel(machine, &boot_info, K230_DIRECT_KERNEL_ADDR, true, NULL);
     kernel_entry = boot_info.image_low_addr;
 
@@ -664,7 +979,7 @@ static void k230_direct_boot(K230MachineState *s, MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
-    riscv_setup_rom_reset_vec(machine, &s->soc.c908_cpu, start_addr,
+    riscv_setup_rom_reset_vec(machine, boot_harts, start_addr,
                               memmap[K230_DEV_BOOTROM].base,
                               memmap[K230_DEV_BOOTROM].size, kernel_entry,
                               K230_DIRECT_DTB_ADDR);
@@ -672,8 +987,9 @@ static void k230_direct_boot(K230MachineState *s, MachineState *machine)
 
 static void k230_firmware_boot(K230MachineState *s, MachineState *machine)
 {
-    const char *firmware_name = riscv_default_firmware_name(&s->soc.c908_cpu);
-    hwaddr start_addr = memmap[K230_DEV_DDRC].base;
+    RISCVHartArrayState *boot_harts = k230_boot_harts(s);
+    const char *firmware_name = riscv_default_firmware_name(boot_harts);
+    hwaddr start_addr = K230_FIRMWARE_OPENSBI_ADDR;
     RISCVBootInfo boot_info = {0};
 
     if (machine->dtb || (machine->kernel_cmdline && *machine->kernel_cmdline)) {
@@ -681,11 +997,11 @@ static void k230_firmware_boot(K230MachineState *s, MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
-    riscv_boot_info_init(&boot_info, &s->soc.c908_cpu);
+    riscv_boot_info_init(&boot_info, boot_harts);
     riscv_find_and_load_firmware(machine, &boot_info, firmware_name,
                                  &start_addr, NULL);
 
-    riscv_setup_rom_reset_vec(machine, &s->soc.c908_cpu, start_addr,
+    riscv_setup_rom_reset_vec(machine, boot_harts, start_addr,
                               memmap[K230_DEV_BOOTROM].base,
                               memmap[K230_DEV_BOOTROM].size, 0, 0);
 }
@@ -780,6 +1096,7 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
 
     mc->desc = "RISC-V Board compatible with Kendryte K230 SDK";
     mc->init = k230_machine_init;
+    mc->max_cpus = 2;
     mc->default_cpus = 1;
     mc->default_ram_id = "riscv.K230.ram"; /* DDR */
     mc->default_ram_size = memmap[K230_DEV_DDRC].size;

@@ -140,6 +140,7 @@ config XIANGSHAN_KUNMINGHU
     select RISCV_ACLINT
     select RISCV_APLIC
     select RISCV_IMSIC
+    select K230_CLINT
     select SERIAL_MM
 
 config MIPS_BOSTON_AIA
@@ -160,6 +161,7 @@ config K230
     select RISCV_APLIC
     select RISCV_IMSIC
     select SERIAL_MM
+    select SPLIT_IRQ
     select UNIMP
     select K230_DISPLAY
     select K230_WDT
@@ -173,8 +175,13 @@ config K230
     select K230_GPIO
     select K230_IOMUX
     select K230_PMU
+    select K230_ISP
+    select K230_RX_CSI
     select K230_REGS
+    select K230_NONAI_2D
+    select K230_DEWARP
     select K230_I2C
+    select K230_OV5647
     select K230_ADC
     select K230_PWM
     select K230_TIMER
