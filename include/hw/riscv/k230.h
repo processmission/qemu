@@ -28,6 +28,7 @@
 #include "hw/misc/k230_hi_sys_cfg.h"
 #include "hw/misc/k230_iomux.h"
 #include "hw/misc/k230_isp.h"
+#include "hw/misc/k230_kpu.h"
 #include "hw/misc/k230_nonai_2d.h"
 #include "hw/misc/k230_pmu.h"
 #include "hw/misc/k230_pwm.h"
@@ -89,6 +90,7 @@ typedef struct K230SoCState {
     K230DsiState dsi;
     K230SpiState spi[3];
     K230RegsState regs[K230_REGS_COUNT];
+    K230KpuState kpu;
     K230NonAI2DState nonai_2d;
     K230IspState isp;
     K230DewarpState dewarp;
