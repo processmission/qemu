@@ -51,20 +51,10 @@
 #define K230_NOC_QOS_SIZE          0x1000
 
 #define K230_FIRMWARE_OPENSBI_ADDR 0x00200000
-#define K230_FAKE_KPU_OUTPUT_BASE  0x10090000
-#define K230_FAKE_KPU_OUTPUT_SIZE  0x00100000
 #define K230_CLINT_SMODE_OFFSET    0x0000c000
 #define K230_TIMEBASE_FREQ         27000000
 #define K230_STC_COUNTER_OFFSET    0x40
 #define K230_STC_COUNTER_SIZE      0x30
-#define K230_GNNE_CLEAR_OFFSET     0x128
-#define K230_GNNE_STATUS_OFFSET    0x130
-#define K230_GNNE_STATUS_VALUE     0x0000000400000004ULL
-#define K230_GNNE_START_OFFSET     0x190
-#define K230_GNNE_COMMAND_START    0x100
-#define K230_GNNE_COMMAND_END      0x104
-#define K230_GNNE_COMMAND_HI       0x108
-#define K230_GNNE_COMPLETE_DELAY_NS (100 * 1000)
 #define K230_AI2D_CALC_ENABLE      0x80
 #define K230_AI2D_JOB_OFFSET       0x8c
 #define K230_AI2D_CLEAR_OFFSET     0xa0
@@ -198,6 +188,7 @@ static void k230_soc_init(Object *obj)
 
         object_initialize_child(obj, name, &s->regs[i], TYPE_K230_REGS);
     }
+    object_initialize_child(obj, "k230-kpu", &s->kpu, TYPE_K230_KPU);
     object_initialize_child(obj, "k230-nonai-2d", &s->nonai_2d,
                             TYPE_K230_NONAI_2D);
     object_initialize_child(obj, "k230-isp", &s->isp, TYPE_K230_ISP);
@@ -477,7 +468,12 @@ static void k230_create_flash_xip(K230SoCState *s, DeviceState *dev,
     K230SpiState *spi = &s->spi[K230_SPI_SPI0];
     uint8_t *storage;
 
-    memory_region_init_rom(&s->flash_xip, OBJECT(dev), "k230.flash-xip",
+    /*
+     * The RT-Smart fastboot image uses the XIP window as a mutable flash
+     * staging area during early startup.  Back it with RAM so direct stores
+     * complete while keeping erased flash contents at 0xff by default.
+     */
+    memory_region_init_ram(&s->flash_xip, OBJECT(dev), "k230.flash-xip",
                            size, &error_fatal);
     storage = memory_region_get_ram_ptr(&s->flash_xip);
     memset(storage, 0xff, size);
@@ -758,30 +754,20 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                           memmap[K230_DEV_CMU].size, errp)) {
         return;
     }
-    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
-                         "complete-zero-base",
-                         K230_FAKE_KPU_OUTPUT_BASE);
-    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
-                         "complete-zero-size",
-                         K230_FAKE_KPU_OUTPUT_SIZE);
-    qdev_prop_set_bit(DEVICE(&s->regs[K230_REGS_KPU_CFG]),
-                      "complete-zero-command-pages", true);
-    if (!k230_create_irq_regs(s, K230_REGS_KPU_CFG,
-                              memmap[K230_DEV_KPU_CFG].base,
-                              memmap[K230_DEV_KPU_CFG].size, K230_GNNE_IRQ,
-                              K230_GNNE_START_OFFSET,
-                              K230_REGS_NO_IRQ_OFFSET,
-                              K230_REGS_NO_IRQ_OFFSET,
-                              K230_GNNE_CLEAR_OFFSET,
-                              K230_GNNE_STATUS_OFFSET,
-                              K230_GNNE_STATUS_VALUE,
-                              K230_GNNE_COMPLETE_DELAY_NS,
-                              K230_GNNE_COMMAND_START,
-                              K230_GNNE_COMMAND_END,
-                              K230_GNNE_COMMAND_HI,
-                              false, false, errp)) {
+    /*
+     * Keep the legacy regs[] slot realized so K230_REGS_KPU_CFG retains its
+     * index, while the dedicated KPU device owns the MMIO window.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->regs[K230_REGS_KPU_CFG]), errp)) {
         return;
     }
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->kpu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->kpu), 0,
+                    memmap[K230_DEV_KPU_CFG].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->kpu), 0,
+                       k230_plic_irq(s, K230_GNNE_IRQ));
     if (!k230_create_regs(s, K230_REGS_HDI, memmap[K230_DEV_HDI].base,
                           memmap[K230_DEV_HDI].size, errp)) {
         return;

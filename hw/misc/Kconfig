@@ -242,6 +242,9 @@ config K230_IOMUX
 config K230_REGS
     bool
 
+config K230_KPU
+    bool
+
 config K230_NONAI_2D
     bool
 

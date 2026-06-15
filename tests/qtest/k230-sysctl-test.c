@@ -13,7 +13,7 @@
 
 #define K230_RMU_BASE  0x91101000
 #define K230_BOOT_BASE 0x91102000
-#define K230_FAKE_KPU_OUTPUT_BASE 0x10090000
+#define K230_FLASH_BASE 0xc0000000
 #define K230_KPU_CFG_BASE 0x80400000
 #define K230_CLINT_BASE 0xf04000000ULL
 #define K230_PLIC_BASE 0xf00000000ULL
@@ -93,15 +93,7 @@
 #define K230_RX_CSI_PHY_DATA0    0x0854
 #define K230_RX_CSI_PHY_CTRL1    0x0858
 #define K230_RX_CSI_PHY_DATA1    0x085c
-#define K230_GNNE_CLEAR       0x128
 #define K230_GNNE_STATUS      0x130
-#define K230_GNNE_START       0x190
-#define K230_GNNE_COMMAND_START 0x100
-#define K230_GNNE_COMMAND_END   0x104
-#define K230_GNNE_COMMAND_TEST  0x01000000
-#define K230_GNNE_DONE        0x0000000400000004ULL
-#define K230_GNNE_DELAY_NS    (100 * 1000)
-#define K230_KPU_PAGE_SIZE    4096
 #define K230_GSDMA_INT_STAT   0x08
 #define K230_GSDMA_CH0_CTL    0x50
 #define K230_GSDMA_CH0_STATUS 0x54
@@ -136,7 +128,6 @@
 #define K230_AI2D_JOB         0x8c
 #define K230_AI2D_CLEAR       0xa0
 #define K230_AI2D_LEGACY_START 0xc0
-#define K230_GNNE_IRQ          189
 #define K230_FFT_IRQ           190
 #define K230_AI2D_IRQ          191
 #define K230_ISP_MI_IRQ        127
@@ -161,11 +152,7 @@
 #define K230_NON_AI_2D_TEST_DST_Y    0x01000300
 #define K230_NON_AI_2D_TEST_DST_U    0x01000400
 #define K230_NON_AI_2D_TEST_DST_V    0x01000500
-#define K230_KPU_OUTPUT_TEST0        K230_FAKE_KPU_OUTPUT_BASE
-#define K230_KPU_OUTPUT_TEST1        (K230_FAKE_KPU_OUTPUT_BASE + 0x3000)
-#define K230_KPU_OUTPUT_UNREFERENCED (K230_FAKE_KPU_OUTPUT_BASE + 0x7000)
-#define K230_KPU_OUTSIDE_OUTPUT_PAGE \
-    (K230_FAKE_KPU_OUTPUT_BASE - K230_KPU_PAGE_SIZE)
+#define K230_FLASH_TEST_OFFSET       0x6000
 
 static void k230_test_cpu1_reset_sequence(const char *machine_args)
 {
@@ -366,99 +353,15 @@ static void test_ov5647_chip_id(void)
     qtest_quit(qts);
 }
 
-static void k230_assert_page_byte(QTestState *qts, uint64_t addr,
-                                  uint8_t expected)
-{
-    static const uint64_t offsets[] = {
-        0,
-        K230_KPU_PAGE_SIZE / 2,
-        K230_KPU_PAGE_SIZE - 32,
-    };
-    uint8_t data[32];
-
-    for (size_t i = 0; i < G_N_ELEMENTS(offsets); i++) {
-        qtest_memread(qts, addr + offsets[i], data, sizeof(data));
-        for (size_t j = 0; j < sizeof(data); j++) {
-            g_assert_cmphex(data[j], ==, expected);
-        }
-    }
-}
-
-static void k230_kpu_trigger_range(QTestState *qts, uint32_t start,
-                                   uint32_t end)
-{
-    qtest_writel(qts, K230_KPU_CFG_BASE + K230_GNNE_COMMAND_START, start);
-    qtest_writel(qts, K230_KPU_CFG_BASE + K230_GNNE_COMMAND_END, end);
-    qtest_writel(qts, K230_KPU_CFG_BASE + K230_GNNE_START, 0x30d40);
-    qtest_clock_step(qts, K230_GNNE_DELAY_NS);
-}
-
-static void k230_kpu_run_commands(QTestState *qts, const uint32_t *commands,
-                                  size_t command_count)
-{
-    for (size_t i = 0; i < command_count; i++) {
-        qtest_writel(qts, K230_GNNE_COMMAND_TEST + i * sizeof(commands[0]),
-                     commands[i]);
-    }
-    k230_kpu_trigger_range(qts, K230_GNNE_COMMAND_TEST,
-                           K230_GNNE_COMMAND_TEST +
-                           command_count * sizeof(commands[0]));
-}
-
-static void k230_kpu_assert_completion_irq(QTestState *qts)
-{
-    g_assert_cmphex(qtest_readq(qts, K230_KPU_CFG_BASE + K230_GNNE_STATUS),
-                    ==, K230_GNNE_DONE);
-    g_assert_cmphex(k230_plic_claim(qts), ==, K230_GNNE_IRQ);
-    qtest_writeq(qts, K230_KPU_CFG_BASE + K230_GNNE_CLEAR, K230_GNNE_DONE);
-    k230_plic_complete(qts, K230_GNNE_IRQ);
-    g_assert_cmphex(k230_plic_claim(qts), ==, 0);
-}
-
-static void test_kpu_command_completion_pages(void)
+static void test_flash_xip_writable(void)
 {
     QTestState *qts = qtest_init("-machine k230");
-    const uint32_t commands[] = {
-        K230_KPU_OUTPUT_TEST0 | 2,
-        K230_KPU_OUTSIDE_OUTPUT_PAGE | 2,
-        K230_KPU_OUTPUT_TEST1 + 0x40,
-        (K230_KPU_OUTPUT_TEST0 + 0x80) | 2,
-    };
+    uint64_t addr = K230_FLASH_BASE + K230_FLASH_TEST_OFFSET;
 
-    k230_plic_enable_irq(qts, K230_GNNE_IRQ);
-    qtest_memset(qts, K230_KPU_OUTPUT_TEST0, 0xa5, K230_KPU_PAGE_SIZE);
-    qtest_memset(qts, K230_KPU_OUTPUT_TEST1, 0x5a, K230_KPU_PAGE_SIZE);
-    qtest_memset(qts, K230_KPU_OUTPUT_UNREFERENCED, 0xc3,
-                 K230_KPU_PAGE_SIZE);
-    qtest_memset(qts, K230_KPU_OUTSIDE_OUTPUT_PAGE, 0x3c,
-                 K230_KPU_PAGE_SIZE);
+    g_assert_cmphex(qtest_readl(qts, addr), ==, 0xffffffff);
 
-    g_assert_cmphex(qtest_readq(qts, K230_KPU_CFG_BASE + K230_GNNE_STATUS),
-                    ==, 0);
-    g_assert_cmphex(k230_plic_claim(qts), ==, 0);
-
-    k230_kpu_run_commands(qts, commands, G_N_ELEMENTS(commands));
-
-    k230_assert_page_byte(qts, K230_KPU_OUTPUT_TEST0, 0);
-    k230_assert_page_byte(qts, K230_KPU_OUTPUT_TEST1, 0);
-    k230_assert_page_byte(qts, K230_KPU_OUTPUT_UNREFERENCED, 0xc3);
-    k230_assert_page_byte(qts, K230_KPU_OUTSIDE_OUTPUT_PAGE, 0x3c);
-    k230_kpu_assert_completion_irq(qts);
-
-    qtest_quit(qts);
-}
-
-static void test_kpu_empty_command_completion(void)
-{
-    QTestState *qts = qtest_init("-machine k230");
-
-    k230_plic_enable_irq(qts, K230_GNNE_IRQ);
-    qtest_memset(qts, K230_KPU_OUTPUT_TEST0, 0xa5, K230_KPU_PAGE_SIZE);
-
-    k230_kpu_trigger_range(qts, 0, 0);
-
-    k230_assert_page_byte(qts, K230_KPU_OUTPUT_TEST0, 0xa5);
-    k230_kpu_assert_completion_irq(qts);
+    qtest_writel(qts, addr, 0x5a17c0de);
+    g_assert_cmphex(qtest_readl(qts, addr), ==, 0x5a17c0de);
 
     qtest_quit(qts);
 }
@@ -782,10 +685,8 @@ int main(int argc, char *argv[])
     qtest_add_func("/k230-sysctl/smp2-topology", test_smp2_topology);
     qtest_add_func("/k230-sysctl/clint-smode-regs", test_clint_smode_regs);
     qtest_add_func("/k230-sysctl/ov5647-chip-id", test_ov5647_chip_id);
-    qtest_add_func("/k230-sysctl/kpu-command-completion-pages",
-                   test_kpu_command_completion_pages);
-    qtest_add_func("/k230-sysctl/kpu-empty-command-completion",
-                   test_kpu_empty_command_completion);
+    qtest_add_func("/k230-sysctl/flash-xip-writable",
+                   test_flash_xip_writable);
     qtest_add_func("/k230-sysctl/media-regs-readback",
                    test_media_regs_readback);
 
