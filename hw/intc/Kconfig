@@ -74,6 +74,9 @@ config LOONGSON_LIOINTC
 config RISCV_ACLINT
     bool
 
+config K230_CLINT
+    bool
+
 config RISCV_APLIC
     bool
     select MSI_NONBROKEN
