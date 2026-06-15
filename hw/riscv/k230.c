@@ -1,7 +1,7 @@
 /*
  * QEMU RISC-V Virt Board Compatible with Kendryte K230 SDK
  *
- * Copyright (c) 2025 Chao Liu <chao.liu.zevorn@gmail.com>
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
@@ -18,9 +18,12 @@
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "hw/core/qdev-properties.h"
 #include "system/device_tree.h"
 #include "system/system.h"
 #include "system/memory.h"
+#include "system/block-backend.h"
+#include "system/blockdev.h"
 #include "target/riscv/cpu.h"
 #include "hw/core/loader.h"
 #include "hw/core/sysbus.h"
@@ -31,11 +34,15 @@
 #include "hw/intc/sifive_plic.h"
 #include "hw/char/serial-mm.h"
 #include "hw/misc/unimp.h"
+#include "hw/sd/sd.h"
 
 /* Align K230_SDK k230_canmv_defconfig */
 #define K230_DIRECT_OPENSBI_ADDR 0x8000000
 #define K230_DIRECT_KERNEL_ADDR  0x8200000
 #define K230_DIRECT_DTB_ADDR     0xa000000
+
+#define K230_NOC_QOS_BASE          0x91302000
+#define K230_NOC_QOS_SIZE          0x1000
 
 static const MemMapEntry memmap[] = {
     [K230_DEV_DDRC] =         { 0x00000000,  0x80000000 },
@@ -110,6 +117,25 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "c908-cpu", cpu0, TYPE_RISCV_HART_ARRAY);
     object_initialize_child(obj, "k230-wdt0", &s->wdt[0], TYPE_K230_WDT);
     object_initialize_child(obj, "k230-wdt1", &s->wdt[1], TYPE_K230_WDT);
+    object_initialize_child(obj, "k230-sdhci0", &s->sdhci[0],
+                            TYPE_K230_SDHCI);
+    object_initialize_child(obj, "k230-sdhci1", &s->sdhci[1],
+                            TYPE_K230_SDHCI);
+    object_initialize_child(obj, "k230-gsdma", &s->gsdma, TYPE_K230_GSDMA);
+    object_initialize_child(obj, "k230-pdma", &s->pdma, TYPE_K230_PDMA);
+    object_initialize_child(obj, "k230-ugzip", &s->ugzip, TYPE_K230_UGZIP);
+    object_initialize_child(obj, "k230-hi-sys-cfg", &s->hi_sys_cfg,
+                            TYPE_K230_HI_SYS_CFG);
+    object_initialize_child(obj, "k230-hardlock", &s->hardlock,
+                            TYPE_K230_HARDLOCK);
+    object_initialize_child(obj, "k230-tsensor", &s->tsensor,
+                            TYPE_K230_TSENSOR);
+    object_initialize_child(obj, "k230-gpio0", &s->gpio[0], TYPE_K230_GPIO);
+    object_initialize_child(obj, "k230-gpio1", &s->gpio[1], TYPE_K230_GPIO);
+    object_initialize_child(obj, "k230-adc", &s->adc, TYPE_K230_ADC);
+    object_initialize_child(obj, "k230-pwm", &s->pwm, TYPE_K230_PWM);
+    object_initialize_child(obj, "k230-timer", &s->timer, TYPE_K230_TIMER);
+    s->ugzip.gsdma = &s->gsdma;
 
     qdev_prop_set_uint32(DEVICE(cpu0), "hartid-base", 0);
     qdev_prop_set_string(DEVICE(cpu0), "cpu-type", TYPE_RISCV_CPU_THEAD_C908);
@@ -151,10 +177,21 @@ static void k230_create_uart(MemoryRegion *sys_mem, DeviceState *plic,
                    399193, serial_hd(index), DEVICE_LITTLE_ENDIAN);
 }
 
+static void k230_create_sdhci(K230SoCState *s, int index, int irq)
+{
+    int sd_dev = K230_DEV_SD0 + index;
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->sdhci[index]);
+
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, memmap[sd_dev].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(DEVICE(s->c908_plic), irq));
+}
+
 static void k230_soc_realize(DeviceState *dev, Error **errp)
 {
     K230SoCState *s = RISCV_K230_SOC(dev);
     MemoryRegion *sys_mem = get_system_memory();
+    static const int sd_irqs[] = { K230_SD0_IRQ, K230_SD1_IRQ };
     int c908_cpus;
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
@@ -206,6 +243,73 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt[1]), 0,
                        qdev_get_gpio_in(DEVICE(s->c908_plic), K230_WDT1_IRQ));
 
+    /* GSDMA/PDMA/UGZIP blocks used by SDK U-Boot and Linux DT. */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->gsdma), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gsdma), 0,
+                    memmap[K230_DEV_GSDMA].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pdma), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pdma), 0, memmap[K230_DEV_DMA].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ugzip), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ugzip), 0,
+                    memmap[K230_DEV_DECOMP_GZIP].base);
+
+    /* SDHCI */
+    for (int i = 0; i < K230_SDHCI_COUNT; i++) {
+        k230_create_sdhci(s, i, sd_irqs[i]);
+    }
+
+    /* High-speed system config bits used by the SDK SDHCI driver. */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->hi_sys_cfg), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->hi_sys_cfg), 0,
+                    memmap[K230_DEV_HI_SYS_CFG].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->hardlock), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->hardlock), 0,
+                    memmap[K230_DEV_MAILBOX].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->tsensor), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->tsensor), 0, memmap[K230_DEV_TS].base);
+
+    for (int i = 0; i < 2; i++) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
+            return;
+        }
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[0]), 0,
+                    memmap[K230_DEV_GPIO0].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[1]), 0,
+                    memmap[K230_DEV_GPIO1].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->adc), 0, memmap[K230_DEV_ADC].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pwm), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pwm), 0, memmap[K230_DEV_PWM].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->timer), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->timer), 0,
+                    memmap[K230_DEV_TIMER].base);
+
     /* unimplemented devices */
     create_unimplemented_device("kpu.l2-cache",
                                 memmap[K230_DEV_KPU_L2_CACHE].base,
@@ -220,16 +324,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("2d-engine.ai",
                                 memmap[K230_DEV_AI_2D_ENGINE].base,
                                 memmap[K230_DEV_AI_2D_ENGINE].size);
-
-    create_unimplemented_device("gsdma", memmap[K230_DEV_GSDMA].base,
-                                memmap[K230_DEV_GSDMA].size);
-
-    create_unimplemented_device("dma", memmap[K230_DEV_DMA].base,
-                                memmap[K230_DEV_DMA].size);
-
-    create_unimplemented_device("decomp-gzip",
-                                memmap[K230_DEV_DECOMP_GZIP].base,
-                                memmap[K230_DEV_DECOMP_GZIP].size);
 
     create_unimplemented_device("2d-engine.non-ai",
                                 memmap[K230_DEV_NON_AI_2D].base,
@@ -277,23 +371,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("pwr", memmap[K230_DEV_PWR].base,
                                 memmap[K230_DEV_PWR].size);
 
-    create_unimplemented_device("ipcm", memmap[K230_DEV_MAILBOX].base,
-                                memmap[K230_DEV_MAILBOX].size);
-
     create_unimplemented_device("iomux", memmap[K230_DEV_IOMUX].base,
                                 memmap[K230_DEV_IOMUX].size);
-
-    create_unimplemented_device("timer", memmap[K230_DEV_TIMER].base,
-                                memmap[K230_DEV_TIMER].size);
-
-    create_unimplemented_device("wdt0", memmap[K230_DEV_WDT0].base,
-                                memmap[K230_DEV_WDT0].size);
-
-    create_unimplemented_device("wdt1", memmap[K230_DEV_WDT1].base,
-                                memmap[K230_DEV_WDT1].size);
-
-    create_unimplemented_device("ts", memmap[K230_DEV_TS].base,
-                                memmap[K230_DEV_TS].size);
 
     create_unimplemented_device("hdi", memmap[K230_DEV_HDI].base,
                                 memmap[K230_DEV_HDI].size);
@@ -303,6 +382,14 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("security", memmap[K230_DEV_SECURITY].base,
                                 memmap[K230_DEV_SECURITY].size);
+
+    /*
+     * SDK U-Boot programs 0x91302310 before starting the UGZIP DMA path.
+     * The register only tunes NoC bandwidth/QoS, so a dummy MMIO page is
+     * enough for software that just needs the write to complete.
+     */
+    create_unimplemented_device("noc-qos", K230_NOC_QOS_BASE,
+                                K230_NOC_QOS_SIZE);
 
     create_unimplemented_device("i2c0", memmap[K230_DEV_I2C0].base,
                                 memmap[K230_DEV_I2C0].size);
@@ -319,18 +406,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("i2c4", memmap[K230_DEV_I2C4].base,
                                 memmap[K230_DEV_I2C4].size);
 
-    create_unimplemented_device("pwm", memmap[K230_DEV_PWM].base,
-                                memmap[K230_DEV_PWM].size);
-
-    create_unimplemented_device("gpio0", memmap[K230_DEV_GPIO0].base,
-                                memmap[K230_DEV_GPIO0].size);
-
-    create_unimplemented_device("gpio1", memmap[K230_DEV_GPIO1].base,
-                                memmap[K230_DEV_GPIO1].size);
-
-    create_unimplemented_device("adc", memmap[K230_DEV_ADC].base,
-                                memmap[K230_DEV_ADC].size);
-
     create_unimplemented_device("codec", memmap[K230_DEV_CODEC].base,
                                 memmap[K230_DEV_CODEC].size);
 
@@ -343,12 +418,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("usb1", memmap[K230_DEV_USB1].base,
                                 memmap[K230_DEV_USB1].size);
 
-    create_unimplemented_device("sd0", memmap[K230_DEV_SD0].base,
-                                memmap[K230_DEV_SD0].size);
-
-    create_unimplemented_device("sd1", memmap[K230_DEV_SD1].base,
-                                memmap[K230_DEV_SD1].size);
-
     create_unimplemented_device("qspi0", memmap[K230_DEV_QSPI0].base,
                                 memmap[K230_DEV_QSPI0].size);
 
@@ -357,9 +426,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("spi", memmap[K230_DEV_SPI].base,
                                 memmap[K230_DEV_SPI].size);
-
-    create_unimplemented_device("hi_sys_cfg", memmap[K230_DEV_HI_SYS_CFG].base,
-                                memmap[K230_DEV_HI_SYS_CFG].size);
 
     create_unimplemented_device("ddrc_cfg", memmap[K230_DEV_DDRC_CFG].base,
                                 memmap[K230_DEV_DDRC_CFG].size);
@@ -472,6 +538,32 @@ static void k230_machine_done(Notifier *notifier, void *data)
     }
 }
 
+static void k230_attach_sd_drive(K230MachineState *s, int sd_index,
+                                 int drive_unit)
+{
+    DriveInfo *dinfo = drive_get(IF_SD, 0, drive_unit);
+    DeviceState *card;
+
+    if (!dinfo) {
+        return;
+    }
+
+    card = qdev_new(TYPE_SD_CARD);
+    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                            &error_fatal);
+    qdev_realize_and_unref(card, s->soc.sdhci[sd_index].sd_bus, &error_fatal);
+}
+
+static void k230_attach_sd_drives(K230MachineState *s)
+{
+    /*
+     * The SDK's CANMV DTB uses SD1 as the removable card slot; keep the first
+     * legacy SD drive there so "-drive if=sd" and "-sd" boot the SDK image.
+     */
+    k230_attach_sd_drive(s, 1, 0);
+    k230_attach_sd_drive(s, 0, 1);
+}
+
 static void k230_machine_init(MachineState *machine)
 {
     MachineClass *mc = MACHINE_GET_CLASS(machine);
@@ -494,6 +586,8 @@ static void k230_machine_init(MachineState *machine)
     memory_region_add_subregion(sys_mem, memmap[K230_DEV_DDRC].base,
                                 machine->ram);
 
+    k230_attach_sd_drives(s);
+
     s->machine_done.notify = k230_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
 }
@@ -511,6 +605,7 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
     mc->default_cpus = 1;
     mc->default_ram_id = "riscv.K230.ram"; /* DDR */
     mc->default_ram_size = memmap[K230_DEV_DDRC].size;
+    mc->auto_create_sdcard = true;
 }
 
 static const TypeInfo k230_machine_typeinfo = {

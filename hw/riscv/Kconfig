@@ -162,3 +162,14 @@ config K230
     select SERIAL_MM
     select UNIMP
     select K230_WDT
+    select K230_SDHCI
+    select K230_GSDMA
+    select K230_PDMA
+    select K230_UGZIP
+    select K230_HI_SYS_CFG
+    select K230_HARDLOCK
+    select K230_TSENSOR
+    select K230_GPIO
+    select K230_ADC
+    select K230_PWM
+    select K230_TIMER

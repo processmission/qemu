@@ -1,7 +1,7 @@
 /*
  * QEMU RISC-V Virt Board Compatible with kendryte K230 SDK
  *
- * Copyright (c) 2025 Chao Liu <chao.liu.zevorn@gmail.com>
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
@@ -16,7 +16,18 @@
 #define HW_K230_H
 
 #include "hw/core/boards.h"
+#include "hw/dma/k230_gsdma.h"
+#include "hw/dma/k230_pdma.h"
+#include "hw/misc/k230_adc.h"
+#include "hw/misc/k230_gpio.h"
+#include "hw/misc/k230_hardlock.h"
+#include "hw/misc/k230_hi_sys_cfg.h"
+#include "hw/misc/k230_pwm.h"
+#include "hw/misc/k230_timer.h"
+#include "hw/misc/k230_tsensor.h"
+#include "hw/misc/k230_ugzip.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/sd/k230_sdhci.h"
 #include "hw/watchdog/k230_wdt.h"
 
 #define C908_CPU_HARTID   (0)
@@ -33,6 +44,17 @@ typedef struct K230SoCState {
     RISCVHartArrayState c908_cpu; /* Small core */
 
     K230WdtState wdt[2];
+    K230SdhciState sdhci[K230_SDHCI_COUNT];
+    K230GsdmaState gsdma;
+    K230PdmaState pdma;
+    K230UgzipState ugzip;
+    K230HiSysCfgState hi_sys_cfg;
+    K230HardlockState hardlock;
+    K230TSensorState tsensor;
+    K230GpioState gpio[2];
+    K230AdcState adc;
+    K230PwmState pwm;
+    K230TimerState timer;
     MemoryRegion sram;
     MemoryRegion bootrom;
 
@@ -129,6 +151,8 @@ enum {
     K230_UART4_IRQ  = 20,
     K230_WDT0_IRQ   = 107,
     K230_WDT1_IRQ   = 108,
+    K230_SD0_IRQ    = 142,
+    K230_SD1_IRQ    = 144,
 };
 
 #define K230_UART_COUNT 5
