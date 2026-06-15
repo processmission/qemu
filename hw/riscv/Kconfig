@@ -171,6 +171,7 @@ config K230
     select K230_TSENSOR
     select K230_GPIO
     select K230_IOMUX
+    select K230_PMU
     select K230_REGS
     select K230_I2C
     select K230_ADC

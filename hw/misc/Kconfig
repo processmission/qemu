@@ -209,6 +209,9 @@ config MCHP_PFSOC_SYSREG
 config SIFIVE_TEST
     bool
 
+config K230_PMU
+    bool
+
 config SIFIVE_E_PRCI
     bool
 

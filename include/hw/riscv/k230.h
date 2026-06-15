@@ -24,6 +24,7 @@
 #include "hw/misc/k230_hardlock.h"
 #include "hw/misc/k230_hi_sys_cfg.h"
 #include "hw/misc/k230_iomux.h"
+#include "hw/misc/k230_pmu.h"
 #include "hw/misc/k230_pwm.h"
 #include "hw/misc/k230_regs.h"
 #include "hw/misc/k230_security.h"
@@ -67,10 +68,11 @@ typedef struct K230SoCState {
     K230TimerState timer;
     K230SysctlBootState sysctl_boot;
     K230SysctlPowerState sysctl_power;
+    K230PmuState pmu;
     K230RtcState rtc;
     K230SecurityState security;
     K230SpiState spi[3];
-    K230RegsState regs[9];
+    K230RegsState regs[8];
     DWC2State usb[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
@@ -186,7 +188,7 @@ enum {
 #define K230_UART_COUNT 5
 #define K230_I2C_COUNT 5
 #define K230_SPI_COUNT 3
-#define K230_REGS_COUNT 9
+#define K230_REGS_COUNT 8
 
 enum {
     K230_SPI_QSPI0,
@@ -195,7 +197,6 @@ enum {
 };
 
 enum {
-    K230_REGS_PMU,
     K230_REGS_CMU,
     K230_REGS_RMU,
     K230_REGS_HDI,
