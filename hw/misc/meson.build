@@ -9,6 +9,7 @@ system_ss.add(when: 'CONFIG_UNIMP', if_true: files('unimp.c'))
 system_ss.add(when: 'CONFIG_EMPTY_SLOT', if_true: files('empty_slot.c'))
 system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
 system_ss.add(when: 'CONFIG_PVPANIC_COMMON', if_true: files('pvpanic.c'))
+system_ss.add(when: 'CONFIG_ROCKCHIP_SYSCON', if_true: files('rockchip_syscon.c'))
 
 # ARM devices
 system_ss.add(when: 'CONFIG_PL310', if_true: files('arm_l2x0.c'))
@@ -176,6 +177,9 @@ system_ss.add(when: 'CONFIG_I2C_ECHO', if_true: files('i2c-echo.c'))
 system_ss.add(when: 'CONFIG_AVR_POWER', if_true: files('avr_power.c'))
 
 system_ss.add(when: 'CONFIG_MAC_VIA', if_true: files('mac_via.c'))
+
+system_ss.add(when: 'CONFIG_RK3588_CRU', if_true: files('rk3588_cru.c'))
+system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
 
 specific_ss.add(when: 'CONFIG_MIPS_CPS', if_true: files('mips_cmgcr.c', 'mips_cpc.c'))
 specific_ss.add(when: 'CONFIG_MIPS_ITU', if_true: files('mips_itu.c'))
