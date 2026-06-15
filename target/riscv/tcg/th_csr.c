@@ -38,6 +38,7 @@
 #define CSR_TH_MCINDEX         0x7d3
 #define CSR_TH_MCDATA0         0x7d4
 #define CSR_TH_MCDATA1         0x7d5
+#define CSR_TH_MCPER           0x7d9
 #define CSR_TH_MSMPR           0x7f3
 #define CSR_TH_CPUID           0xfc0
 #define CSR_TH_MAPBADDR        0xfc1
@@ -124,8 +125,11 @@ static bool test_thead_mvendorid(RISCVCPU *cpu)
 static RISCVException read_th_mxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
-    *val = TH_MXSTATUS_UCME | TH_MXSTATUS_THEADISAEE;
+    /*
+     * QEMU accepts T-Head MAEE PTE attribute bits for translation, but
+     * does not model their cacheability/order side effects.
+     */
+    *val = TH_MXSTATUS_UCME | TH_MXSTATUS_MAEE | TH_MXSTATUS_THEADISAEE;
     return RISCV_EXCP_NONE;
 }
 
@@ -139,8 +143,11 @@ static RISCVException read_unimp_th_csr(CPURISCVState *env, int csrno,
 static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
-    *val = TH_SXSTATUS_UCME | TH_SXSTATUS_THEADISAEE;
+    /*
+     * QEMU accepts T-Head MAEE PTE attribute bits for translation, but
+     * does not model their cacheability/order side effects.
+     */
+    *val = TH_SXSTATUS_UCME | TH_SXSTATUS_MAEE | TH_SXSTATUS_THEADISAEE;
     return RISCV_EXCP_NONE;
 }
 
@@ -209,6 +216,11 @@ const RISCVCSR th_csr_list[] = {
         .csrno = CSR_TH_MCDATA1,
         .insertion_test = test_thead_mvendorid,
         .csr_ops = { "th.mcdata1", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MCPER,
+        .insertion_test = test_thead_mvendorid,
+        .csr_ops = { "th.mcper", mmode, read_unimp_th_csr }
     },
     {
         .csrno = CSR_TH_MSMPR,
