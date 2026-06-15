@@ -36,3 +36,4 @@ config K230_GSDMA
 
 config K230_PDMA
     bool
+    select REGISTER

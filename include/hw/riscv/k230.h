@@ -27,6 +27,7 @@
 #include "hw/misc/k230_hardlock.h"
 #include "hw/misc/k230_hi_sys_cfg.h"
 #include "hw/misc/k230_iomux.h"
+#include "hw/misc/k230_i2s.h"
 #include "hw/misc/k230_isp.h"
 #include "hw/misc/k230_kpu.h"
 #include "hw/misc/k230_nonai_2d.h"
@@ -89,6 +90,7 @@ typedef struct K230SoCState {
     K230VoState vo;
     K230DsiState dsi;
     K230SpiState spi[3];
+    K230I2SState i2s;
     K230RegsState regs[K230_REGS_COUNT];
     K230KpuState kpu;
     K230NonAI2DState nonai_2d;
@@ -211,6 +213,7 @@ enum {
     K230_FE_IRQ     = 131,
     K230_VO_IRQ     = 133,
     K230_DMA_IRQ    = 140,
+    K230_PDMA_IRQ   = 203,
     K230_NON_AI_2D_IRQ = 141,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
