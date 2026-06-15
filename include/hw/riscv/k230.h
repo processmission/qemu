@@ -18,16 +18,21 @@
 #include "hw/core/boards.h"
 #include "hw/dma/k230_gsdma.h"
 #include "hw/dma/k230_pdma.h"
+#include "hw/i2c/k230_i2c.h"
 #include "hw/misc/k230_adc.h"
 #include "hw/misc/k230_gpio.h"
 #include "hw/misc/k230_hardlock.h"
 #include "hw/misc/k230_hi_sys_cfg.h"
+#include "hw/misc/k230_iomux.h"
 #include "hw/misc/k230_pwm.h"
+#include "hw/misc/k230_regs.h"
+#include "hw/misc/k230_security.h"
 #include "hw/misc/k230_sysctl.h"
 #include "hw/misc/k230_timer.h"
 #include "hw/misc/k230_tsensor.h"
 #include "hw/misc/k230_ugzip.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/rtc/k230_rtc.h"
 #include "hw/sd/k230_sdhci.h"
 #include "hw/ssi/k230_spi.h"
 #include "hw/usb/hcd-dwc2.h"
@@ -55,15 +60,21 @@ typedef struct K230SoCState {
     K230HardlockState hardlock;
     K230TSensorState tsensor;
     K230GpioState gpio[2];
+    K230IomuxState iomux;
+    K230I2CState i2c[5];
     K230AdcState adc;
     K230PwmState pwm;
     K230TimerState timer;
     K230SysctlBootState sysctl_boot;
     K230SysctlPowerState sysctl_power;
-    K230SpiState spi;
+    K230RtcState rtc;
+    K230SecurityState security;
+    K230SpiState spi[3];
+    K230RegsState regs[9];
     DWC2State usb[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
+    MemoryRegion flash_xip;
 
     DeviceState *c908_plic;
 } K230SoCState;
@@ -156,16 +167,42 @@ enum {
     K230_UART2_IRQ  = 18,
     K230_UART3_IRQ  = 19,
     K230_UART4_IRQ  = 20,
+    K230_I2C0_IRQ   = 21,
+    K230_GPIO0_IRQ  = 32,
     K230_WDT0_IRQ   = 107,
     K230_WDT1_IRQ   = 108,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
     K230_SPI_IRQ    = 146,
+    K230_QSPI0_IRQ  = 155,
+    K230_QSPI1_IRQ  = 164,
     K230_USB0_IRQ   = 173,
     K230_USB1_IRQ   = 174,
+    K230_PMU_IRQ    = 175,
 };
 
 #define K230_UART_COUNT 5
+#define K230_I2C_COUNT 5
+#define K230_SPI_COUNT 3
+#define K230_REGS_COUNT 9
+
+enum {
+    K230_SPI_QSPI0,
+    K230_SPI_QSPI1,
+    K230_SPI_SPI0,
+};
+
+enum {
+    K230_REGS_PMU,
+    K230_REGS_CMU,
+    K230_REGS_RMU,
+    K230_REGS_HDI,
+    K230_REGS_STC,
+    K230_REGS_NOC_QOS,
+    K230_REGS_CODEC,
+    K230_REGS_I2S,
+    K230_REGS_DDRC_CFG,
+};
 
 /*
  * Integrates with the interrupt controller (PLIC),

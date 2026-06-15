@@ -170,10 +170,15 @@ config K230
     select K230_HARDLOCK
     select K230_TSENSOR
     select K230_GPIO
+    select K230_IOMUX
+    select K230_REGS
+    select K230_I2C
     select K230_ADC
     select K230_PWM
     select K230_TIMER
     select K230_SYSCTL
+    select K230_RTC
+    select K230_SECURITY
     select K230_SPI
     select USB_DWC2
     select USB_RTL8152
