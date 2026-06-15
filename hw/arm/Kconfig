@@ -192,6 +192,27 @@ config SBSA_REF
     select IDE_BUS
     select IDE_DEV
 
+config RK3588_EVB
+    bool
+    default y
+    depends on TCG && AARCH64
+    select ARM_GIC
+    select DEVICE_TREE
+    select DWMAC4
+    select DW_MMC
+    select DW_APB_UART_VENDOR
+    select PCI_EXPRESS_DESIGNWARE
+    select RK3588_CRU
+    select ROCKCHIP_DWCMSHC
+    select ROCKCHIP_PCIE
+    select ROCKCHIP_STIMER
+    select ROCKCHIP_SYSCON
+    select RK3588_SCMI
+    select ROCKCHIP_GPIO
+    select SDHCI
+    select SERIAL_MM
+    select UNIMP
+
 config SABRELITE
     bool
     default y
@@ -466,6 +487,7 @@ config NPCM7XX
     select ARM_GIC
     select SMBUS
     select AT24C  # EEPROM
+    select NPCM_GMAC
     select MAX34451
     select ISL_PMBUS_VR
     select PL310  # cache controller
