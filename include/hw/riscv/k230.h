@@ -120,6 +120,7 @@ typedef struct K230MachineState {
     /*< public >*/
     K230SoCState soc;
     Notifier machine_done;
+    bool boot_both_cores;
 } K230MachineState;
 
 enum {
