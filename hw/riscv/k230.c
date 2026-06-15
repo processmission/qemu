@@ -183,6 +183,7 @@ static void k230_soc_init(Object *obj)
 
         object_initialize_child(obj, name, &s->spi[i], TYPE_K230_SPI);
     }
+    object_initialize_child(obj, "k230-i2s", &s->i2s, TYPE_K230_I2S);
     for (int i = 0; i < K230_REGS_COUNT; i++) {
         g_autofree char *name = g_strdup_printf("k230-regs%d", i);
 
@@ -617,6 +618,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->pdma), 0, memmap[K230_DEV_DMA].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->pdma), 0,
+                       k230_plic_irq(s, K230_PDMA_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ugzip), errp)) {
         return;
@@ -791,10 +794,17 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                           memmap[K230_DEV_CODEC].size, errp)) {
         return;
     }
-    if (!k230_create_regs(s, K230_REGS_I2S, memmap[K230_DEV_I2S].base,
-                          memmap[K230_DEV_I2S].size, errp)) {
+    qdev_prop_set_uint64(DEVICE(&s->regs[K230_REGS_I2S]), "size",
+                         memmap[K230_DEV_I2S].size);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->regs[K230_REGS_I2S]), errp)) {
         return;
     }
+    s->i2s.compat_regs = &s->regs[K230_REGS_I2S];
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->i2s), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->i2s), 0,
+                    memmap[K230_DEV_I2S].base);
     if (!k230_create_regs(s, K230_REGS_DDRC_CFG,
                           memmap[K230_DEV_DDRC_CFG].base,
                           memmap[K230_DEV_DDRC_CFG].size, errp)) {

@@ -178,6 +178,7 @@ config K230
     select K230_ISP
     select K230_RX_CSI
     select K230_REGS
+    select K230_I2S
     select K230_KPU
     select K230_NONAI_2D
     select K230_DEWARP
