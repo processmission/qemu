@@ -14,6 +14,7 @@
 OBJECT_DECLARE_SIMPLE_TYPE(K230GpioState, K230_GPIO)
 
 #define K230_GPIO_SIZE 0x1000
+#define K230_GPIO_IRQ_COUNT 32
 
 struct K230GpioState {
     /*< private >*/
@@ -21,7 +22,10 @@ struct K230GpioState {
 
     /*< public >*/
     MemoryRegion mmio;
+    qemu_irq irq[K230_GPIO_IRQ_COUNT];
     uint8_t regs[K230_GPIO_SIZE];
+    uint32_t input;
+    uint32_t last_input;
 };
 
 #endif /* HW_MISC_K230_GPIO_H */
