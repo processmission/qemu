@@ -28,7 +28,7 @@
 
 #define DWC2_MMIO_SIZE      0x11000
 
-#define DWC2_NB_CHAN        8       /* Number of host channels */
+#define DWC2_NB_CHAN        16      /* Number of host channels */
 #define DWC2_MAX_XFER_SIZE  65536   /* Max transfer size expected in HCTSIZ */
 
 typedef struct DWC2Packet DWC2Packet;
@@ -166,6 +166,7 @@ struct DWC2State {
     uint16_t frame_number;
     uint16_t fi;
     uint16_t next_chan;
+    int irq_level;
     bool working;
     USBPort uport;
     DWC2Packet packet[DWC2_NB_CHAN];                   /* one packet per chan */
