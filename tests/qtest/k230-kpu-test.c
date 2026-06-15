@@ -1341,8 +1341,7 @@ static void test_l2_load_w_rebases_function_source(void)
     size_t command_size = 0;
 
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(2, 0, 0));
-    k230_kpu_command_u32(commands, &command_size, GNNE_LUI(3, 0x96));
-    k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(3, 3, 0x200));
+    k230_kpu_command_u32(commands, &command_size, GNNE_LUI(3, 0x8));
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(5, 0, 4));
     k230_kpu_command_u32(commands, &command_size, GNNE_LUI(6, 0x103));
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(6, 6, 0xb07));
@@ -1355,14 +1354,14 @@ static void test_l2_load_w_rebases_function_source(void)
 
     qtest_memwrite(qts, K230_GNNE_RUNTIME_DDR_BASE + 0x102b07,
                    raw_source, sizeof(raw_source));
-    qtest_memwrite(qts, K230_GNNE_RUNTIME_DDR_BASE + 0x190f07,
+    qtest_memwrite(qts, K230_GNNE_RUNTIME_DDR_BASE + 0x102d07,
                    rebased_source, sizeof(rebased_source));
-    qtest_memset(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x96200, 0xa5,
+    qtest_memset(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x8000, 0xa5,
                  sizeof(data));
 
     k230_kpu_run_command_bytes_at(qts, K230_GNNE_RUNTIME_FUNCTION_COMMAND,
                                   commands, command_size);
-    qtest_memread(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x96200, data,
+    qtest_memread(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x8000, data,
                   sizeof(data));
 
     for (size_t i = 0; i < sizeof(data); i++) {
@@ -1494,8 +1493,7 @@ static void test_l2_load_w_synthesizes_function_arg(void)
     size_t command_size = 0;
 
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(2, 0, 0));
-    k230_kpu_command_u32(commands, &command_size, GNNE_LUI(3, 0x25));
-    k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(3, 3, 0xc0));
+    k230_kpu_command_u32(commands, &command_size, GNNE_LUI(3, 0x8));
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(5, 0, 7));
     k230_kpu_command_u32(commands, &command_size, GNNE_LUI(6, 0x0a));
     k230_kpu_command_u32(commands, &command_size, GNNE_ADDI(6, 6, 0xcde));
@@ -1508,12 +1506,12 @@ static void test_l2_load_w_synthesizes_function_arg(void)
 
     qtest_memwrite(qts, K230_GNNE_RUNTIME_DDR_BASE + 0x9cde,
                    poison, sizeof(poison));
-    qtest_memset(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x250c0, 0xa5,
+    qtest_memset(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x8000, 0xa5,
                  sizeof(data));
 
     k230_kpu_run_command_bytes_at(qts, K230_GNNE_RUNTIME_FUNCTION_COMMAND,
                                   commands, command_size);
-    qtest_memread(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x250c0, data,
+    qtest_memread(qts, K230_GNNE_RUNTIME_RDATA_BASE + 0x8000, data,
                   sizeof(data));
 
     g_assert_cmpmem(data, sizeof(expected), expected, sizeof(expected));

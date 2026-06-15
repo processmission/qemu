@@ -282,6 +282,37 @@ static void test_smp2_topology(void)
     qtest_quit(qts);
 }
 
+static void test_smp2_boot_both_cores_topology(void)
+{
+    QTestState *qts = qtest_init("-machine k230,boot-both-cores=on -smp 2");
+    QDict *resp = k230_query_cpu(qts, 1);
+    QList *cpus;
+    QDict *cpu1 = NULL;
+    QListEntry *entry;
+
+    g_assert_nonnull(resp);
+    cpus = qdict_get_qlist(resp, "return");
+    g_assert_cmpint(qlist_size(cpus), ==, 2);
+    QLIST_FOREACH_ENTRY(cpus, entry) {
+        QDict *cpu = qobject_to(QDict, entry->value);
+
+        if (qdict_get_int(cpu, "cpu-index") == 1) {
+            cpu1 = cpu;
+        }
+    }
+
+    g_assert_nonnull(cpu1);
+    g_assert_cmpstr(qdict_get_str(cpu1, "qom-type"), ==,
+                    "thead-c908v-riscv-cpu");
+    g_assert_false(k230_qom_get_bool(qts, "/machine/soc/c908-cpu/harts[0]",
+                                     "start-powered-off"));
+    g_assert_false(k230_qom_get_bool(qts, "/machine/soc/c908v-cpu/harts[0]",
+                                     "start-powered-off"));
+
+    qobject_unref(resp);
+    qtest_quit(qts);
+}
+
 static void test_clint_smode_regs(void)
 {
     QTestState *qts = qtest_init("-machine k230 -smp 1");
@@ -683,6 +714,8 @@ int main(int argc, char *argv[])
                    test_cpu1_reset_sequence_smp2);
     qtest_add_func("/k230-sysctl/smp1-topology", test_smp1_topology);
     qtest_add_func("/k230-sysctl/smp2-topology", test_smp2_topology);
+    qtest_add_func("/k230-sysctl/smp2-boot-both-cores-topology",
+                   test_smp2_boot_both_cores_topology);
     qtest_add_func("/k230-sysctl/clint-smode-regs", test_clint_smode_regs);
     qtest_add_func("/k230-sysctl/ov5647-chip-id", test_ov5647_chip_id);
     qtest_add_func("/k230-sysctl/flash-xip-writable",

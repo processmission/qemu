@@ -49,6 +49,14 @@ struct K230SysctlResetState {
     uint8_t regs[K230_SYSCTL_SIZE];
     K230SysctlBootState *boot;
     CPUState *cpu1;
+    QEMUTimer *release_timer;
+    uint8_t *rtt_saved;
+    hwaddr rtt_addr;
+    uint32_t rtt_size;
+    bool rtt_saved_valid;
+    bool defer_cpu1_release;
+    uint32_t last_cpu1_rstvec;
+    uint32_t deferred_rstvec;
 };
 
 #endif /* HW_MISC_K230_SYSCTL_H */

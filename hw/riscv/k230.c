@@ -234,6 +234,10 @@ static void k230_soc_init_c908v_cpu(K230SoCState *s, Object *obj)
 
 static RISCVHartArrayState *k230_boot_harts(K230MachineState *s)
 {
+    if (s->boot_both_cores) {
+        return &s->soc.c908_cpu;
+    }
+
     return s->soc.c908v_enabled ? &s->soc.c908v_cpu : &s->soc.c908_cpu;
 }
 
@@ -498,6 +502,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 {
     K230SoCState *s = RISCV_K230_SOC(dev);
     MachineState *machine = MACHINE(qdev_get_machine());
+    K230MachineState *k230_machine = RISCV_K230_MACHINE(machine);
     MemoryRegion *sys_mem = get_system_memory();
     static const int sd_irqs[] = { K230_SD0_IRQ, K230_SD1_IRQ };
     static const int usb_irqs[] = { K230_USB0_IRQ, K230_USB1_IRQ };
@@ -506,7 +511,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     s->c908v_enabled = machine->smp.cpus > 1;
     qdev_prop_set_bit(DEVICE(&s->c908_cpu), "start-powered-off",
-                      s->c908v_enabled);
+                      s->c908v_enabled && !k230_machine->boot_both_cores);
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
 
@@ -709,6 +714,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     object_property_set_link(OBJECT(&s->sysctl_reset), "boot",
                              OBJECT(&s->sysctl_boot), &error_abort);
+    qdev_prop_set_bit(DEVICE(&s->sysctl_reset), "defer-cpu1-release",
+                      k230_machine->boot_both_cores);
     if (s->c908v_enabled) {
         object_property_set_link(OBJECT(&s->sysctl_reset), "cpu1",
                                  OBJECT(&s->c908v_cpu.harts[0]),
@@ -1076,6 +1083,21 @@ static void k230_machine_instance_init(Object *obj)
 {
 }
 
+static bool k230_machine_get_boot_both_cores(Object *obj, Error **errp)
+{
+    K230MachineState *s = RISCV_K230_MACHINE(obj);
+
+    return s->boot_both_cores;
+}
+
+static void k230_machine_set_boot_both_cores(Object *obj, bool value,
+                                             Error **errp)
+{
+    K230MachineState *s = RISCV_K230_MACHINE(obj);
+
+    s->boot_both_cores = value;
+}
+
 static void k230_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -1088,6 +1110,13 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
     mc->default_ram_size = memmap[K230_DEV_DDRC].size;
     mc->default_nic = "usb-rtl8152";
     mc->auto_create_sdcard = true;
+
+    object_class_property_add_bool(oc, "boot-both-cores",
+                                   k230_machine_get_boot_both_cores,
+                                   k230_machine_set_boot_both_cores);
+    object_class_property_set_description(
+        oc, "boot-both-cores",
+        "Start C908 and C908V at reset for U-Boot dual-core bring-up");
 }
 
 static const TypeInfo k230_machine_typeinfo = {
