@@ -54,6 +54,9 @@ config RENESAS_TMR
 config RENESAS_CMT
     bool
 
+config ROCKCHIP_STIMER
+    bool
+
 config SSE_COUNTER
     bool
 

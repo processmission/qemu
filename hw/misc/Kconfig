@@ -43,6 +43,9 @@ config I2C_ECHO
 config PL310
     bool
 
+config ROCKCHIP_SYSCON
+    bool
+
 config INTEGRATOR_DEBUG
     bool
 
@@ -187,6 +190,12 @@ config UNIMP
     bool
 
 config LED
+    bool
+
+config RK3588_CRU
+    bool
+
+config RK3588_SCMI
     bool
 
 config MAC_VIA
