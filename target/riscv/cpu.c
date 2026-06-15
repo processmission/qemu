@@ -3433,6 +3433,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zicboz = true,
 
         .cfg.pmp = true,
+        .cfg.pmp_regions = 64,
         .cfg.mmu = true,
         .cfg.max_satp_mode = VM_1_10_SV48,
 

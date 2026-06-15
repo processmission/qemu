@@ -42,6 +42,8 @@ struct RISCVHartArrayState {
     uint64_t *rnmi_irqvec;
     uint32_t num_rnmi_excpvec;
     uint64_t *rnmi_excpvec;
+    MemoryRegion *memory;
+    bool start_powered_off;
     RISCVCPU *harts;
 };
 

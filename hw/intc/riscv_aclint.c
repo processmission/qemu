@@ -34,6 +34,10 @@
 #include "qemu/timer.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
+#include "system/memory.h"
+#include "system/address-spaces.h"
+
+#define RISCV_ACLINT_CPU_INDEX_AUTO UINT32_MAX
 
 typedef struct riscv_aclint_mtimer_callback {
     RISCVAclintMTimerState *s;
@@ -46,6 +50,37 @@ static void riscv_cpu_set_rdtime_fn(CPURISCVState *env,
 {
     env->rdtime_fn = fn;
     env->rdtime_fn_arg = arg;
+}
+
+static size_t riscv_aclint_hartid(uint32_t hartid_base, uint32_t hart_offset)
+{
+    return hartid_base + hart_offset;
+}
+
+static CPUState *riscv_aclint_cpu_for_hart_offset(uint32_t hartid_base,
+                                                  uint32_t cpu_index_base,
+                                                  uint32_t hart_offset)
+{
+    if (cpu_index_base == RISCV_ACLINT_CPU_INDEX_AUTO) {
+        return cpu_by_arch_id(riscv_aclint_hartid(hartid_base, hart_offset));
+    }
+
+    return qemu_get_cpu(cpu_index_base + hart_offset);
+}
+
+static CPUState *riscv_aclint_mtimer_cpu_for_hart_offset(
+    RISCVAclintMTimerState *mtimer, uint32_t hart_offset)
+{
+    return riscv_aclint_cpu_for_hart_offset(mtimer->hartid_base,
+                                            mtimer->cpu_index_base,
+                                            hart_offset);
+}
+
+static CPUState *riscv_aclint_swi_cpu_for_hart_offset(
+    RISCVAclintSwiState *swi, uint32_t hart_offset)
+{
+    return riscv_aclint_cpu_for_hart_offset(swi->hartid_base,
+                                            swi->cpu_index_base, hart_offset);
 }
 
 static uint64_t cpu_riscv_read_rtc_raw(uint32_t timebase_freq)
@@ -65,8 +100,7 @@ static uint64_t cpu_riscv_read_rtc(void *opaque)
  * trigger timer interrupt if mtimecmp <= current timer value.
  */
 static void riscv_aclint_mtimer_write_timecmp(RISCVAclintMTimerState *mtimer,
-                                              RISCVCPU *cpu,
-                                              int hartid,
+                                              uint32_t hart_offset,
                                               uint64_t value)
 {
     uint32_t timebase_freq = mtimer->timebase_freq;
@@ -75,22 +109,19 @@ static void riscv_aclint_mtimer_write_timecmp(RISCVAclintMTimerState *mtimer,
 
     uint64_t rtc = cpu_riscv_read_rtc(mtimer);
 
-    /* Compute the relative hartid w.r.t the socket */
-    hartid = hartid - mtimer->hartid_base;
-
-    mtimer->timecmp[hartid] = value;
-    if (mtimer->timecmp[hartid] <= rtc) {
+    mtimer->timecmp[hart_offset] = value;
+    if (mtimer->timecmp[hart_offset] <= rtc) {
         /*
          * If we're setting an MTIMECMP value in the "past",
          * immediately raise the timer interrupt
          */
-        qemu_irq_raise(mtimer->timer_irqs[hartid]);
+        qemu_irq_raise(mtimer->timer_irqs[hart_offset]);
         return;
     }
 
     /* otherwise, set up the future timer interrupt */
-    qemu_irq_lower(mtimer->timer_irqs[hartid]);
-    diff = mtimer->timecmp[hartid] - rtc;
+    qemu_irq_lower(mtimer->timer_irqs[hart_offset]);
+    diff = mtimer->timecmp[hart_offset] - rtc;
     /* back to ns (note args switched in muldiv64) */
     uint64_t ns_diff = muldiv64(diff, NANOSECONDS_PER_SECOND, timebase_freq);
 
@@ -115,7 +146,7 @@ static void riscv_aclint_mtimer_write_timecmp(RISCVAclintMTimerState *mtimer,
         next = MIN(next, INT64_MAX);
     }
 
-    timer_mod(mtimer->timers[hartid], next);
+    timer_mod(mtimer->timers[hart_offset], next);
 }
 
 /*
@@ -137,21 +168,22 @@ static uint64_t riscv_aclint_mtimer_read(void *opaque, hwaddr addr,
 
     if (addr >= mtimer->timecmp_base &&
         addr < (mtimer->timecmp_base + (mtimer->num_harts << 3))) {
-        size_t hartid = mtimer->hartid_base +
-                        ((addr - mtimer->timecmp_base) >> 3);
-        size_t hartid_offset = hartid - mtimer->hartid_base;
-        CPUState *cpu = cpu_by_arch_id(hartid);
+        uint32_t hart_offset = (addr - mtimer->timecmp_base) >> 3;
+        size_t hartid = riscv_aclint_hartid(mtimer->hartid_base,
+                                            hart_offset);
+        CPUState *cpu =
+            riscv_aclint_mtimer_cpu_for_hart_offset(mtimer, hart_offset);
         CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
         if (!env) {
             qemu_log_mask(LOG_GUEST_ERROR,
                           "aclint-mtimer: invalid hartid: %zu", hartid);
         } else if ((addr & 0x7) == 0) {
             /* timecmp_lo for RV32/RV64 or timecmp for RV64 */
-            uint64_t timecmp = mtimer->timecmp[hartid_offset];
+            uint64_t timecmp = mtimer->timecmp[hart_offset];
             return (size == 4) ? (timecmp & 0xFFFFFFFF) : timecmp;
         } else if ((addr & 0x7) == 4) {
             /* timecmp_hi */
-            uint64_t timecmp = mtimer->timecmp[hartid_offset];
+            uint64_t timecmp = mtimer->timecmp[hart_offset];
             return (timecmp >> 32) & 0xFFFFFFFF;
         } else {
             qemu_log_mask(LOG_UNIMP,
@@ -181,10 +213,11 @@ static void riscv_aclint_mtimer_write(void *opaque, hwaddr addr,
 
     if (addr >= mtimer->timecmp_base &&
         addr < (mtimer->timecmp_base + (mtimer->num_harts << 3))) {
-        size_t hartid = mtimer->hartid_base +
-                        ((addr - mtimer->timecmp_base) >> 3);
-        size_t hartid_offset = hartid - mtimer->hartid_base;
-        CPUState *cpu = cpu_by_arch_id(hartid);
+        uint32_t hart_offset = (addr - mtimer->timecmp_base) >> 3;
+        size_t hartid = riscv_aclint_hartid(mtimer->hartid_base,
+                                            hart_offset);
+        CPUState *cpu =
+            riscv_aclint_mtimer_cpu_for_hart_offset(mtimer, hart_offset);
         CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
         if (!env) {
             qemu_log_mask(LOG_GUEST_ERROR,
@@ -192,19 +225,18 @@ static void riscv_aclint_mtimer_write(void *opaque, hwaddr addr,
         } else if ((addr & 0x7) == 0) {
             if (size == 4) {
                 /* timecmp_lo for RV32/RV64 */
-                uint64_t timecmp_hi = mtimer->timecmp[hartid_offset] >> 32;
-                riscv_aclint_mtimer_write_timecmp(mtimer, RISCV_CPU(cpu), hartid,
+                uint64_t timecmp_hi = mtimer->timecmp[hart_offset] >> 32;
+                riscv_aclint_mtimer_write_timecmp(mtimer, hart_offset,
                     timecmp_hi << 32 | (value & 0xFFFFFFFF));
             } else {
                 /* timecmp for RV64 */
-                riscv_aclint_mtimer_write_timecmp(mtimer, RISCV_CPU(cpu), hartid,
-                                                  value);
+                riscv_aclint_mtimer_write_timecmp(mtimer, hart_offset, value);
             }
         } else if ((addr & 0x7) == 4) {
             if (size == 4) {
                 /* timecmp_hi for RV32/RV64 */
-                uint64_t timecmp_lo = mtimer->timecmp[hartid_offset];
-                riscv_aclint_mtimer_write_timecmp(mtimer, RISCV_CPU(cpu), hartid,
+                uint64_t timecmp_lo = mtimer->timecmp[hart_offset];
+                riscv_aclint_mtimer_write_timecmp(mtimer, hart_offset,
                     value << 32 | (timecmp_lo & 0xFFFFFFFF));
             } else {
                 qemu_log_mask(LOG_GUEST_ERROR,
@@ -243,13 +275,13 @@ static void riscv_aclint_mtimer_write(void *opaque, hwaddr addr,
 
         /* Check if timer interrupt is triggered for each hart. */
         for (i = 0; i < mtimer->num_harts; i++) {
-            CPUState *cpu = cpu_by_arch_id(mtimer->hartid_base + i);
+            CPUState *cpu =
+                riscv_aclint_mtimer_cpu_for_hart_offset(mtimer, i);
             CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
             if (!env) {
                 continue;
             }
-            riscv_aclint_mtimer_write_timecmp(mtimer, RISCV_CPU(cpu),
-                                              mtimer->hartid_base + i,
+            riscv_aclint_mtimer_write_timecmp(mtimer, i,
                                               mtimer->timecmp[i]);
             riscv_timer_write_timecmp(env, env->stimer, env->stimecmp, 0, MIP_STIP);
             riscv_timer_write_timecmp(env, env->vstimer, env->vstimecmp,
@@ -280,6 +312,8 @@ static const MemoryRegionOps riscv_aclint_mtimer_ops = {
 static const Property riscv_aclint_mtimer_properties[] = {
     DEFINE_PROP_UINT32("hartid-base", RISCVAclintMTimerState,
         hartid_base, 0),
+    DEFINE_PROP_UINT32("cpu-index-base", RISCVAclintMTimerState,
+        cpu_index_base, RISCV_ACLINT_CPU_INDEX_AUTO),
     DEFINE_PROP_UINT32("num-harts", RISCVAclintMTimerState, num_harts, 1),
     DEFINE_PROP_UINT32("timecmp-base", RISCVAclintMTimerState,
         timecmp_base, RISCV_ACLINT_DEFAULT_MTIMECMP),
@@ -307,12 +341,13 @@ static void riscv_aclint_mtimer_realize(DeviceState *dev, Error **errp)
     s->timecmp = g_new0(uint64_t, s->num_harts);
     /* Claim timer interrupt bits */
     for (i = 0; i < s->num_harts; i++) {
-        CPUState *cpu_by_hartid = cpu_by_arch_id(s->hartid_base + i);
-        if (cpu_by_hartid == NULL) {
+        CPUState *cpu_state =
+            riscv_aclint_mtimer_cpu_for_hart_offset(s, i);
+        if (cpu_state == NULL) {
             /* Valid for sparse hart layouts - skip this hart ID */
             continue;
         }
-        RISCVCPU *cpu = RISCV_CPU(cpu_by_hartid);
+        RISCVCPU *cpu = RISCV_CPU(cpu_state);
         if (riscv_cpu_claim_interrupts(cpu, MIP_MTIP) < 0) {
             error_report("MTIP already claimed");
             exit(1);
@@ -376,6 +411,18 @@ DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
     uint32_t timecmp_base, uint32_t time_base, uint32_t timebase_freq,
     bool provide_rdtime)
 {
+    return riscv_aclint_mtimer_create_in(get_system_memory(), addr, size,
+                                         hartid_base,
+                                         RISCV_ACLINT_CPU_INDEX_AUTO,
+                                         num_harts, timecmp_base, time_base,
+                                         timebase_freq, provide_rdtime);
+}
+
+DeviceState *riscv_aclint_mtimer_create_in(MemoryRegion *mem, hwaddr addr,
+    hwaddr size, uint32_t hartid_base, uint32_t cpu_index_base,
+    uint32_t num_harts, uint32_t timecmp_base, uint32_t time_base,
+    uint32_t timebase_freq, bool provide_rdtime)
+{
     int i;
     DeviceState *dev = qdev_new(TYPE_RISCV_ACLINT_MTIMER);
     RISCVAclintMTimerState *s = RISCV_ACLINT_MTIMER(dev);
@@ -386,17 +433,24 @@ DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
     assert(!(time_base & 0x7));
 
     qdev_prop_set_uint32(dev, "hartid-base", hartid_base);
+    qdev_prop_set_uint32(dev, "cpu-index-base", cpu_index_base);
     qdev_prop_set_uint32(dev, "num-harts", num_harts);
     qdev_prop_set_uint32(dev, "timecmp-base", timecmp_base);
     qdev_prop_set_uint32(dev, "time-base", time_base);
     qdev_prop_set_uint32(dev, "aperture-size", size);
     qdev_prop_set_uint32(dev, "timebase-freq", timebase_freq);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    if (mem == get_system_memory()) {
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    } else {
+        memory_region_add_subregion_overlap(mem, addr,
+                                             sysbus_mmio_get_region(
+                                                 SYS_BUS_DEVICE(dev), 0),
+                                             1);
+    }
 
     for (i = 0; i < num_harts; i++) {
-        CPUState *cpu = cpu_by_arch_id(hartid_base + i);
-        RISCVCPU *rvcpu = RISCV_CPU(cpu);
+        CPUState *cpu = riscv_aclint_mtimer_cpu_for_hart_offset(s, i);
         CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
         riscv_aclint_mtimer_callback *cb =
             g_new0(riscv_aclint_mtimer_callback, 1);
@@ -416,7 +470,8 @@ DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
         s->timecmp[i] = 0;
 
         qdev_connect_gpio_out(dev, i,
-                              qdev_get_gpio_in(DEVICE(rvcpu), IRQ_M_TIMER));
+                              qdev_get_gpio_in(DEVICE(RISCV_CPU(cpu)),
+                                               IRQ_M_TIMER));
     }
 
     return dev;
@@ -429,8 +484,10 @@ static uint64_t riscv_aclint_swi_read(void *opaque, hwaddr addr,
     RISCVAclintSwiState *swi = opaque;
 
     if (addr < (swi->num_harts << 2)) {
-        size_t hartid = swi->hartid_base + (addr >> 2);
-        CPUState *cpu = cpu_by_arch_id(hartid);
+        uint32_t hart_offset = addr >> 2;
+        size_t hartid = riscv_aclint_hartid(swi->hartid_base, hart_offset);
+        CPUState *cpu =
+            riscv_aclint_swi_cpu_for_hart_offset(swi, hart_offset);
         CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
         if (!env) {
             qemu_log_mask(LOG_GUEST_ERROR,
@@ -452,18 +509,20 @@ static void riscv_aclint_swi_write(void *opaque, hwaddr addr, uint64_t value,
     RISCVAclintSwiState *swi = opaque;
 
     if (addr < (swi->num_harts << 2)) {
-        size_t hartid = swi->hartid_base + (addr >> 2);
-        CPUState *cpu = cpu_by_arch_id(hartid);
+        uint32_t hart_offset = addr >> 2;
+        size_t hartid = riscv_aclint_hartid(swi->hartid_base, hart_offset);
+        CPUState *cpu =
+            riscv_aclint_swi_cpu_for_hart_offset(swi, hart_offset);
         CPURISCVState *env = cpu ? cpu_env(cpu) : NULL;
         if (!env) {
             qemu_log_mask(LOG_GUEST_ERROR,
                           "aclint-swi: invalid hartid: %zu", hartid);
         } else if ((addr & 0x3) == 0) {
             if (value & 0x1) {
-                qemu_irq_raise(swi->soft_irqs[hartid - swi->hartid_base]);
+                qemu_irq_raise(swi->soft_irqs[hart_offset]);
             } else {
                 if (!swi->sswi) {
-                    qemu_irq_lower(swi->soft_irqs[hartid - swi->hartid_base]);
+                    qemu_irq_lower(swi->soft_irqs[hart_offset]);
                 }
             }
             return;
@@ -486,6 +545,8 @@ static const MemoryRegionOps riscv_aclint_swi_ops = {
 
 static const Property riscv_aclint_swi_properties[] = {
     DEFINE_PROP_UINT32("hartid-base", RISCVAclintSwiState, hartid_base, 0),
+    DEFINE_PROP_UINT32("cpu-index-base", RISCVAclintSwiState, cpu_index_base,
+                       RISCV_ACLINT_CPU_INDEX_AUTO),
     DEFINE_PROP_UINT32("num-harts", RISCVAclintSwiState, num_harts, 1),
     DEFINE_PROP_UINT32("sswi", RISCVAclintSwiState, sswi, false),
 };
@@ -504,12 +565,12 @@ static void riscv_aclint_swi_realize(DeviceState *dev, Error **errp)
 
     /* Claim software interrupt bits */
     for (i = 0; i < swi->num_harts; i++) {
-        CPUState *cpu_by_hartid = cpu_by_arch_id(swi->hartid_base + i);
-        if (cpu_by_hartid == NULL) {
+        CPUState *cpu_state = riscv_aclint_swi_cpu_for_hart_offset(swi, i);
+        if (cpu_state == NULL) {
             /* Valid for sparse hart layouts - skip this hart ID */
             continue;
         }
-        RISCVCPU *cpu = RISCV_CPU(cpu_by_hartid);
+        RISCVCPU *cpu = RISCV_CPU(cpu_state);
         /* We don't claim mip.SSIP because it is writable by software */
         if (riscv_cpu_claim_interrupts(cpu, swi->sswi ? 0 : MIP_MSIP) < 0) {
             error_report("MSIP already claimed");
@@ -559,6 +620,15 @@ static const TypeInfo riscv_aclint_swi_info = {
 DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
     uint32_t num_harts, bool sswi)
 {
+    return riscv_aclint_swi_create_in(get_system_memory(), addr, hartid_base,
+                                      RISCV_ACLINT_CPU_INDEX_AUTO, num_harts,
+                                      sswi);
+}
+
+DeviceState *riscv_aclint_swi_create_in(MemoryRegion *mem, hwaddr addr,
+    uint32_t hartid_base, uint32_t cpu_index_base, uint32_t num_harts,
+    bool sswi)
+{
     int i;
     DeviceState *dev = qdev_new(TYPE_RISCV_ACLINT_SWI);
 
@@ -566,13 +636,22 @@ DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
     assert(!(addr & 0x3));
 
     qdev_prop_set_uint32(dev, "hartid-base", hartid_base);
+    qdev_prop_set_uint32(dev, "cpu-index-base", cpu_index_base);
     qdev_prop_set_uint32(dev, "num-harts", num_harts);
     qdev_prop_set_uint32(dev, "sswi", sswi ? true : false);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    if (mem == get_system_memory()) {
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    } else {
+        memory_region_add_subregion_overlap(mem, addr,
+                                             sysbus_mmio_get_region(
+                                                 SYS_BUS_DEVICE(dev), 0),
+                                             1);
+    }
 
     for (i = 0; i < num_harts; i++) {
-        CPUState *cpu = cpu_by_arch_id(hartid_base + i);
+        CPUState *cpu =
+            riscv_aclint_swi_cpu_for_hart_offset(RISCV_ACLINT_SWI(dev), i);
         if (cpu == NULL) {
             /* Valid for sparse hart layouts - skip this hart ID */
             continue;

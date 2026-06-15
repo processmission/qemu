@@ -38,6 +38,7 @@ typedef struct RISCVAclintMTimerState {
     /*< public >*/
     MemoryRegion mmio;
     uint32_t hartid_base;
+    uint32_t cpu_index_base;
     uint32_t num_harts;
     uint32_t timecmp_base;
     uint32_t time_base;
@@ -51,6 +52,11 @@ DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
     uint32_t timecmp_base, uint32_t time_base, uint32_t timebase_freq,
     bool provide_rdtime);
 
+DeviceState *riscv_aclint_mtimer_create_in(MemoryRegion *mem, hwaddr addr,
+    hwaddr size, uint32_t hartid_base, uint32_t cpu_index_base,
+    uint32_t num_harts, uint32_t timecmp_base, uint32_t time_base,
+    uint32_t timebase_freq, bool provide_rdtime);
+
 #define TYPE_RISCV_ACLINT_SWI "riscv.aclint.swi"
 
 #define RISCV_ACLINT_SWI(obj) \
@@ -63,6 +69,7 @@ typedef struct RISCVAclintSwiState {
     /*< public >*/
     MemoryRegion mmio;
     uint32_t hartid_base;
+    uint32_t cpu_index_base;
     uint32_t num_harts;
     uint32_t sswi;
     qemu_irq *soft_irqs;
@@ -70,6 +77,10 @@ typedef struct RISCVAclintSwiState {
 
 DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
     uint32_t num_harts, bool sswi);
+
+DeviceState *riscv_aclint_swi_create_in(MemoryRegion *mem, hwaddr addr,
+    uint32_t hartid_base, uint32_t cpu_index_base, uint32_t num_harts,
+    bool sswi);
 
 enum {
     RISCV_ACLINT_DEFAULT_MTIMECMP      = 0x0,

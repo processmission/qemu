@@ -30,7 +30,11 @@
 #include "target/riscv/cpu.h"
 #include "migration/vmstate.h"
 #include "hw/core/irq.h"
+#include "system/memory.h"
+#include "system/address-spaces.h"
 #include "system/kvm.h"
+
+#define SIFIVE_PLIC_CPU_INDEX_AUTO UINT32_MAX
 
 static bool addr_between(uint32_t addr, uint32_t base, uint32_t num)
 {
@@ -60,6 +64,30 @@ static uint32_t atomic_set_masked(uint32_t *a, uint32_t mask, uint32_t value)
     } while (old != cmp);
 
     return old;
+}
+
+static uint32_t sifive_plic_hart_offset(SiFivePLICState *plic,
+                                        uint32_t hartid)
+{
+    return hartid - plic->hartid_base;
+}
+
+static uint32_t sifive_plic_cpu_index_for_hart(SiFivePLICState *plic,
+                                               uint32_t hartid)
+{
+    uint32_t cpu_index_base = plic->cpu_index_base;
+
+    if (cpu_index_base == SIFIVE_PLIC_CPU_INDEX_AUTO) {
+        cpu_index_base = plic->hartid_base;
+    }
+
+    return cpu_index_base + sifive_plic_hart_offset(plic, hartid);
+}
+
+static CPUState *sifive_plic_cpu_for_hart(SiFivePLICState *plic,
+                                          uint32_t hartid)
+{
+    return qemu_get_cpu(sifive_plic_cpu_index_for_hart(plic, hartid));
 }
 
 static void sifive_plic_set_pending(SiFivePLICState *plic, int irq, bool level)
@@ -190,7 +218,10 @@ static void sifive_plic_write(void *opaque, hwaddr addr, uint64_t value,
     if (addr_between(addr, plic->priority_base, plic->num_sources << 2)) {
         uint32_t irq = (addr - plic->priority_base) >> 2;
         if (irq == 0) {
-            /* IRQ 0 source prioority is reserved */
+            /* IRQ 0 source priority is reserved. */
+            if (value == 0) {
+                return;
+            }
             qemu_log_mask(LOG_GUEST_ERROR,
                           "%s: Invalid source priority write 0x%"
                           HWADDR_PRIx "\n", __func__, addr);
@@ -399,7 +430,8 @@ static void sifive_plic_realize(DeviceState *dev, Error **errp)
      * hardware controlled when a PLIC is attached.
      */
     for (i = 0; i < s->num_harts; i++) {
-        RISCVCPU *cpu = RISCV_CPU(qemu_get_cpu(s->hartid_base + i));
+        RISCVCPU *cpu =
+            RISCV_CPU(sifive_plic_cpu_for_hart(s, s->hartid_base + i));
         if (riscv_cpu_claim_interrupts(cpu, MIP_SEIP) < 0) {
             error_setg(errp, "SEIP already claimed");
             return;
@@ -433,6 +465,8 @@ static const VMStateDescription vmstate_sifive_plic = {
 static const Property sifive_plic_properties[] = {
     DEFINE_PROP_STRING("hart-config", SiFivePLICState, hart_config),
     DEFINE_PROP_UINT32("hartid-base", SiFivePLICState, hartid_base, 0),
+    DEFINE_PROP_UINT32("cpu-index-base", SiFivePLICState, cpu_index_base,
+                       SIFIVE_PLIC_CPU_INDEX_AUTO),
     /* number of interrupt sources including interrupt source 0 */
     DEFINE_PROP_UINT32("num-sources", SiFivePLICState, num_sources, 1),
     DEFINE_PROP_UINT32("num-priorities", SiFivePLICState, num_priorities, 0),
@@ -481,6 +515,22 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     uint32_t enable_stride, uint32_t context_base,
     uint32_t context_stride, uint32_t aperture_size)
 {
+    return sifive_plic_create_in(get_system_memory(), addr, hart_config,
+                                 num_harts, hartid_base,
+                                 SIFIVE_PLIC_CPU_INDEX_AUTO,
+                                 num_sources, num_priorities, priority_base,
+                                 pending_base, enable_base, enable_stride,
+                                 context_base, context_stride,
+                                 aperture_size);
+}
+
+DeviceState *sifive_plic_create_in(MemoryRegion *mem, hwaddr addr,
+    char *hart_config, uint32_t num_harts, uint32_t hartid_base,
+    uint32_t cpu_index_base, uint32_t num_sources, uint32_t num_priorities,
+    uint32_t priority_base, uint32_t pending_base, uint32_t enable_base,
+    uint32_t enable_stride, uint32_t context_base, uint32_t context_stride,
+    uint32_t aperture_size)
+{
     DeviceState *dev = qdev_new(TYPE_SIFIVE_PLIC);
     int i;
     SiFivePLICState *plic;
@@ -489,6 +539,7 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     assert(context_stride == (context_stride & -context_stride));
     qdev_prop_set_string(dev, "hart-config", hart_config);
     qdev_prop_set_uint32(dev, "hartid-base", hartid_base);
+    qdev_prop_set_uint32(dev, "cpu-index-base", cpu_index_base);
     qdev_prop_set_uint32(dev, "num-sources", num_sources);
     qdev_prop_set_uint32(dev, "num-priorities", num_priorities);
     qdev_prop_set_uint32(dev, "priority-base", priority_base);
@@ -499,20 +550,28 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     qdev_prop_set_uint32(dev, "context-stride", context_stride);
     qdev_prop_set_uint32(dev, "aperture-size", aperture_size);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    if (mem == get_system_memory()) {
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    } else {
+        memory_region_add_subregion_overlap(mem, addr,
+                                             sysbus_mmio_get_region(
+                                                 SYS_BUS_DEVICE(dev), 0),
+                                             1);
+    }
 
     plic = SIFIVE_PLIC(dev);
 
     for (i = 0; i < plic->num_addrs; i++) {
-        int cpu_num = plic->addr_config[i].hartid;
-        CPUState *cpu = qemu_get_cpu(cpu_num);
+        int hartid = plic->addr_config[i].hartid;
+        int hart_offset = sifive_plic_hart_offset(plic, hartid);
+        CPUState *cpu = sifive_plic_cpu_for_hart(plic, hartid);
 
         if (plic->addr_config[i].mode == PLICMode_M) {
-            qdev_connect_gpio_out(dev, cpu_num - hartid_base + num_harts,
+            qdev_connect_gpio_out(dev, hart_offset + num_harts,
                                   qdev_get_gpio_in(DEVICE(cpu), IRQ_M_EXT));
         }
         if (plic->addr_config[i].mode == PLICMode_S) {
-            qdev_connect_gpio_out(dev, cpu_num - hartid_base,
+            qdev_connect_gpio_out(dev, hart_offset,
                                   qdev_get_gpio_in(DEVICE(cpu), IRQ_S_EXT));
         }
     }

@@ -51,13 +51,12 @@ static void riscv_stimer_cb(void *opaque)
     riscv_accel_set_irq(cpu, MIP_STIP, BOOL_TO_MASK(1));
 }
 
-/*
- * Called when timecmp is written to update the QEMU timer or immediately
- * trigger timer interrupt if mtimecmp <= current timer value.
- */
-void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
-                               uint64_t timecmp, uint64_t delta,
-                               uint32_t timer_irq)
+static void riscv_timer_write_timecmp_common(CPURISCVState *env,
+                                             QEMUTimer *timer,
+                                             uint64_t timecmp,
+                                             uint64_t delta,
+                                             uint32_t timer_irq,
+                                             bool require_sstc)
 {
     uint64_t diff, ns_diff, next;
     RISCVAclintMTimerState *mtimer = env->rdtime_fn_arg;
@@ -65,13 +64,18 @@ void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
     uint64_t rtc_r;
     RISCVCPU *cpu;
 
-    if (!riscv_cpu_cfg(env)->ext_sstc || !env->rdtime_fn ||
-        !env->rdtime_fn_arg || !get_field(env->menvcfg, MENVCFG_STCE)) {
+    if (!timer || !env->rdtime_fn || !env->rdtime_fn_arg) {
+        return;
+    }
+
+    if (require_sstc &&
+        (!riscv_cpu_cfg(env)->ext_sstc ||
+         !get_field(env->menvcfg, MENVCFG_STCE))) {
         /* S/VS Timer IRQ depends on sstc extension, rdtime_fn(), and STCE. */
         return;
     }
 
-    if (timer_irq == MIP_VSTIP &&
+    if (require_sstc && timer_irq == MIP_VSTIP &&
         (!riscv_has_ext(env, RVH) || !get_field(env->henvcfg, HENVCFG_STCE))) {
         /* VS Timer IRQ also depends on RVH and henvcfg.STCE. */
         return;
@@ -155,6 +159,26 @@ void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
     }
 
     timer_mod(timer, next);
+}
+
+/*
+ * Called when timecmp is written to update the QEMU timer or immediately
+ * trigger timer interrupt if mtimecmp <= current timer value.
+ */
+void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
+                               uint64_t timecmp, uint64_t delta,
+                               uint32_t timer_irq)
+{
+    riscv_timer_write_timecmp_common(env, timer, timecmp, delta, timer_irq,
+                                     true);
+}
+
+void riscv_timer_write_timecmp_mmio(CPURISCVState *env, QEMUTimer *timer,
+                                    uint64_t timecmp, uint64_t delta,
+                                    uint32_t timer_irq)
+{
+    riscv_timer_write_timecmp_common(env, timer, timecmp, delta, timer_irq,
+                                     false);
 }
 
 /*
