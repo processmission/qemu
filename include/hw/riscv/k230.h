@@ -16,6 +16,7 @@
 #define HW_K230_H
 
 #include "hw/core/boards.h"
+#include "hw/display/k230_display.h"
 #include "hw/dma/k230_gsdma.h"
 #include "hw/dma/k230_pdma.h"
 #include "hw/i2c/k230_i2c.h"
@@ -71,6 +72,8 @@ typedef struct K230SoCState {
     K230PmuState pmu;
     K230RtcState rtc;
     K230SecurityState security;
+    K230VoState vo;
+    K230DsiState dsi;
     K230SpiState spi[3];
     K230RegsState regs[8];
     DWC2State usb[2];
@@ -175,6 +178,7 @@ enum {
     K230_WDT1_IRQ   = 108,
     K230_IPCM_IRQ_BASE = 109,
     K230_IPCM_IRQ_COUNT = 4,
+    K230_VO_IRQ     = 133,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
     K230_SPI_IRQ    = 146,
