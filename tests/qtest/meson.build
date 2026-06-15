@@ -298,7 +298,8 @@ qtests_riscv64 = ['riscv-csr-test'] + \
    config_all_devices.has_key('CONFIG_RISCV_IOMMU') ?
    ['iommu-riscv-test'] : []) + \
   (config_all_devices.has_key('CONFIG_K230') ?
-   ['k230-kpu-test', 'k230-sysctl-test', 'k230-wdt-test'] : [])
+   ['k230-kpu-test', 'k230-sysctl-test', 'k230-wdt-test',
+    'k230-ws2812-amp-test'] : [])
 
 qtests_hexagon = ['boot-serial-test']
 
@@ -399,6 +400,8 @@ qtests = {
   'dbus-vmstate-test': files('migration/migration-qmp.c',
                              'migration/migration-util.c') + dbus_vmstate1 +
                        [gio],
+  'k230-ws2812-amp-test': files('migration/migration-qmp.c',
+                                'migration/migration-util.c'),
   'erst-test': files('erst-test.c'),
   'ivshmem-test': [rt, '../../contrib/ivshmem-server/ivshmem-server.c'],
   'migration-test': test_migration_files + migration_tls_files + migration_colo_files,
