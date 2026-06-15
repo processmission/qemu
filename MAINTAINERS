@@ -1828,13 +1828,17 @@ L: qemu-riscv@nongnu.org
 S: Maintained
 F: docs/system/riscv/k230.rst
 F: hw/dma/k230_*.c
+F: hw/i2c/k230_*.c
 F: hw/misc/k230_*.c
+F: hw/rtc/k230_*.c
 F: hw/riscv/k230.c
 F: hw/sd/k230_sdhci.c
 F: hw/ssi/k230_spi.c
 F: hw/watchdog/k230_wdt.c
 F: include/hw/dma/k230_*.h
+F: include/hw/i2c/k230_*.h
 F: include/hw/misc/k230_*.h
+F: include/hw/rtc/k230_*.h
 F: include/hw/riscv/k230.h
 F: include/hw/sd/k230_sdhci.h
 F: include/hw/ssi/k230_spi.h
