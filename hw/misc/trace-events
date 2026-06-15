@@ -1,5 +1,27 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
+# k230_dewarp.c
+k230_dewarp_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_dewarp_write(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_dewarp_irq(const char *name, bool level) "%s level %d"
+
+# k230_isp.c
+k230_isp_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_isp_write(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_isp_irq(const char *name, bool level) "%s level %d"
+
+# k230_rx_csi.c
+k230_rx_csi_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_rx_csi_write(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_rx_csi_ready(unsigned host, uint32_t status) "host %u status 0x%" PRIx32
+
+# k230_regs.c
+k230_regs_read(const char *name, uint64_t offset, uint64_t data, unsigned size) "%s offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_regs_write(const char *name, uint64_t offset, uint64_t data, unsigned size) "%s offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
+k230_regs_irq(const char *name, bool level) "%s level %d"
+k230_regs_irq_command(const char *name, uint64_t start, uint64_t end, uint64_t hi) "%s start 0x%" PRIx64 " end 0x%" PRIx64 " hi 0x%" PRIx64
+k230_regs_completion_zero_page(const char *name, uint64_t page, uint32_t raw) "%s page 0x%" PRIx64 " raw 0x%" PRIx32
+
 # allwinner-cpucfg.c
 allwinner_cpucfg_cpu_reset(uint8_t cpu_id, uint32_t reset_addr) "id %u, reset_addr 0x%" PRIx32
 allwinner_cpucfg_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %" PRIu32

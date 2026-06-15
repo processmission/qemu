@@ -40,10 +40,13 @@ system_ss.add(when: 'CONFIG_K230_HI_SYS_CFG', if_true: files('k230_hi_sys_cfg.c'
 system_ss.add(when: 'CONFIG_K230_HARDLOCK', if_true: files('k230_hardlock.c'))
 system_ss.add(when: 'CONFIG_K230_TSENSOR', if_true: files('k230_tsensor.c'))
 system_ss.add(when: 'CONFIG_K230_GPIO', if_true: files('k230_gpio.c'))
+system_ss.add(when: 'CONFIG_K230_IOMUX', if_true: files('k230_iomux.c'))
+system_ss.add(when: 'CONFIG_K230_REGS', if_true: files('k230_regs.c'))
 system_ss.add(when: 'CONFIG_K230_ADC', if_true: files('k230_adc.c'))
 system_ss.add(when: 'CONFIG_K230_PWM', if_true: files('k230_pwm.c'))
 system_ss.add(when: 'CONFIG_K230_TIMER', if_true: files('k230_timer.c'))
 system_ss.add(when: 'CONFIG_K230_SYSCTL', if_true: files('k230_sysctl.c'))
+system_ss.add(when: 'CONFIG_K230_SECURITY', if_true: files('k230_security.c'))
 system_ss.add(when: 'CONFIG_K230_UGZIP', if_true: files('k230_ugzip.c'))
 
 subdir('macio')
