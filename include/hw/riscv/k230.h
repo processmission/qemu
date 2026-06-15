@@ -23,11 +23,14 @@
 #include "hw/misc/k230_hardlock.h"
 #include "hw/misc/k230_hi_sys_cfg.h"
 #include "hw/misc/k230_pwm.h"
+#include "hw/misc/k230_sysctl.h"
 #include "hw/misc/k230_timer.h"
 #include "hw/misc/k230_tsensor.h"
 #include "hw/misc/k230_ugzip.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/sd/k230_sdhci.h"
+#include "hw/ssi/k230_spi.h"
+#include "hw/usb/hcd-dwc2.h"
 #include "hw/watchdog/k230_wdt.h"
 
 #define C908_CPU_HARTID   (0)
@@ -55,6 +58,10 @@ typedef struct K230SoCState {
     K230AdcState adc;
     K230PwmState pwm;
     K230TimerState timer;
+    K230SysctlBootState sysctl_boot;
+    K230SysctlPowerState sysctl_power;
+    K230SpiState spi;
+    DWC2State usb[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
 
@@ -153,6 +160,9 @@ enum {
     K230_WDT1_IRQ   = 108,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
+    K230_SPI_IRQ    = 146,
+    K230_USB0_IRQ   = 173,
+    K230_USB1_IRQ   = 174,
 };
 
 #define K230_UART_COUNT 5
