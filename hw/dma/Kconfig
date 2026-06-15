@@ -30,3 +30,9 @@ config SIFIVE_PDMA
 config XLNX_CSU_DMA
     bool
     select REGISTER
+
+config K230_GSDMA
+    bool
+
+config K230_PDMA
+    bool
