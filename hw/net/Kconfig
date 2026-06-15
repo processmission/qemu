@@ -109,6 +109,12 @@ config SUNHME
 config FTGMAC100
     bool
 
+config NPCM_GMAC
+    bool
+
+config DWMAC4
+    bool
+
 config SUNGEM
     bool
     depends on PCI
