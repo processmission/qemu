@@ -171,6 +171,8 @@ enum {
     K230_GPIO0_IRQ  = 32,
     K230_WDT0_IRQ   = 107,
     K230_WDT1_IRQ   = 108,
+    K230_IPCM_IRQ_BASE = 109,
+    K230_IPCM_IRQ_COUNT = 4,
     K230_SD0_IRQ    = 142,
     K230_SD1_IRQ    = 144,
     K230_SPI_IRQ    = 146,
