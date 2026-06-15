@@ -20,6 +20,9 @@ The ``k230`` machine supports the following devices:
 * Platform-Level Interrupt Controller (PLIC)
 * 2 K230 Watchdog Timer
 * 5 UART
+* GSDMA and UGZIP blocks for SDK U-Boot gzip image decompression
+* PDMA register block
+* 2 SDHCI-compatible K230 DWC MSHC controllers
 
 Boot options
 ------------
@@ -58,13 +61,26 @@ initrd range and kernel command line into ``/chosen``. The DTB passed with
 describe that initrd location as usable memory and disable any devices that are
 not emulated by this machine.
 
+SD card image
+~~~~~~~~~~~~~
+
+Attach an SDK SD card image with ``-drive if=sd``. The first SD drive is wired
+to the SDK CANMV removable card slot, ``sdhci1@91581000``:
+
+.. code-block:: bash
+
+   $ qemu-system-riscv64 -machine k230 \
+      -bios "$SDK/little/uboot/u-boot" \
+      -drive if=sd,file="$SDIMG",format=raw \
+      -nographic
+
 U-Boot boot
 ~~~~~~~~~~~
 
-This flow starts SDK U-Boot in M-mode with ``-bios``. Until the SDK storage
-path is modeled, place OpenSBI, Linux, initrd, and DTB in RAM with loader
-devices and run ``bootm`` manually. The Linux Image must be rebuilt with
-standard RISC-V PTE bits before running under QEMU.
+This flow starts SDK U-Boot in M-mode with ``-bios``. The Linux Image must be
+rebuilt with standard RISC-V PTE bits before running under QEMU. You can either
+boot from an attached SDK SD card image or place OpenSBI, Linux, initrd, and
+DTB in RAM with loader devices and run ``bootm`` manually:
 
 .. code-block:: bash
 
@@ -100,14 +116,11 @@ Press Enter to stop autoboot. At the U-Boot prompt, run these commands:
    K230# fdt resize 8192
    K230# fdt set /chosen linux,initrd-start <0x0 0xa100000>
    K230# fdt set /chosen linux,initrd-end <0x0 ${INITRD_END}>
-   K230# fdt set /soc/sdhci0@91580000 status disabled
-   K230# fdt set /soc/sdhci1@91581000 status disabled
    K230# bootm 0xc100000 - 0xa000000
 
 Use ``setenv`` so ``bootm`` writes the kernel command line into
 ``/chosen/bootargs``. The ``fdt`` commands select the loaded DTB, add space for
-edits, describe the initrd range in ``/chosen``, and disable SDHCI nodes because
-this machine does not emulate those controllers yet. Replace ``${INITRD_END}``
-with the host-calculated value above when typing the command. ``cma=0`` avoids
-the SDK kernel reserving too much of the little-core memory window for initramfs
-boot.
+edits, and describe the initrd range in ``/chosen``. Replace
+``${INITRD_END}`` with the host-calculated value above when typing the command.
+``cma=0`` avoids the SDK kernel reserving too much of the little-core memory
+window for initramfs boot.
