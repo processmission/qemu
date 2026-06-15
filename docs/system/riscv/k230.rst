@@ -15,7 +15,7 @@ Supported devices
 -----------------
 The ``k230`` machine supports the following devices:
 
-* 1 c908 cores (little core)
+* 1 T-Head C908 core and optional C908V big core
 * Core Local Interruptor (CLINT)
 * Platform-Level Interrupt Controller (PLIC)
 * 2 K230 Watchdog Timer
@@ -26,101 +26,48 @@ The ``k230`` machine supports the following devices:
 
 Boot options
 ------------
-The ``k230`` machine supports K230 SDK boot through M-mode U-Boot, which then
-starts OpenSBI/Linux with ``bootm``. It also supports direct Linux boot.
+The ``k230`` machine boots the K230 SDK through M-mode U-Boot. U-Boot reads the
+Linux payload from an attached SD card image and then starts OpenSBI/Linux using
+the normal SDK boot flow.
 
-K230 SDK Linux kernels use T-HEAD C9xx private MAEE page table attributes. QEMU
-does not implement MAEE in the generic RISC-V MMU, so such kernels need to be
-built with standard RISC-V PTE bits before they can boot under QEMU.
+QEMU models the K230 SDHCI storage controller used by the CANMV removable card
+slot, so no manual RAM loader setup is needed for the common Linux boot path.
 
 Running
 -------
 
-Direct Linux boot
-~~~~~~~~~~~~~~~~~
+U-Boot SD card boot
+~~~~~~~~~~~~~~~~~~~
 
-This flow lets QEMU load OpenSBI, Linux, initrd, and DTB directly, without
-running SDK U-Boot. The Linux Image must be rebuilt with standard RISC-V PTE
-bits before running under QEMU.
+Use the SDK U-Boot binary as the machine firmware and attach a K230 SDK SD card
+image with ``-drive if=sd``. The first SD drive is wired to the SDK CANMV
+removable card slot, ``sdhci1@91581000``:
 
 .. code-block:: bash
 
    $ SDK=k230_sdk/output/k230_canmv_defconfig
-   $ qemu-system-riscv64 -machine k230 \
-      -kernel "$SDK/images/little-core/Image" \
-      -dtb "/tmp/user-k230-qemu.dtb" \
-      -initrd "$SDK/images/little-core/rootfs.cpio.gz" \
-      -append "console=ttyS0,115200 earlycon=sbi cma=0" \
-      -nographic
-
-Direct boot uses the SDK little-core RAM layout for OpenSBI at
-``0x08000000``, Linux at ``0x08200000``, and the DTB at ``0x0a000000``. The
-initrd is placed by QEMU's generic RISC-V boot helper, and QEMU writes the
-initrd range and kernel command line into ``/chosen``. The DTB passed with
-``-dtb`` should be derived from ``$SDK/images/little-core/k230.dtb`` and must
-describe that initrd location as usable memory and disable any devices that are
-not emulated by this machine.
-
-SD card image
-~~~~~~~~~~~~~
-
-Attach an SDK SD card image with ``-drive if=sd``. The first SD drive is wired
-to the SDK CANMV removable card slot, ``sdhci1@91581000``:
-
-.. code-block:: bash
-
+   $ SDIMG=/path/to/k230-sdk-sdcard.img
    $ qemu-system-riscv64 -machine k230 \
       -bios "$SDK/little/uboot/u-boot" \
       -drive if=sd,file="$SDIMG",format=raw \
       -nographic
 
-U-Boot boot
-~~~~~~~~~~~
-
-This flow starts SDK U-Boot in M-mode with ``-bios``. The Linux Image must be
-rebuilt with standard RISC-V PTE bits before running under QEMU. You can either
-boot from an attached SDK SD card image or place OpenSBI, Linux, initrd, and
-DTB in RAM with loader devices and run ``bootm`` manually:
+For an SDK image that also starts the C908V big core, enable both virtual CPUs:
 
 .. code-block:: bash
 
-   $ SDK=k230_sdk/output/k230_canmv_defconfig
-   $ IMAGE=$SDK/images/little-core/Image
-   $ INITRD=$SDK/images/little-core/rootfs.cpio.gz
-   $ DTB=$SDK/images/little-core/k230.dtb
-   $ FWJUMP_UIMAGE=/tmp/k230-fw-jump.uImage
-   $ INITRD_END=$(printf "0x%x" $((0x0a100000 + $(stat -c %s "$INITRD"))))
-   $ "$SDK/little/buildroot-ext/host/bin/mkimage" \
-      -A riscv -O linux -T kernel -C none \
-      -a 0x8000000 -e 0x8000000 -n opensbi \
-      -d "$SDK/images/little-core/fw_jump.bin" "$FWJUMP_UIMAGE"
-   $ qemu-system-riscv64 -machine k230 \
+   $ qemu-system-riscv64 -machine k230,boot-both-cores=on -smp 2 \
       -bios "$SDK/little/uboot/u-boot" \
-      -device loader,file="$FWJUMP_UIMAGE",addr=0xc100000,force-raw=on \
-      -device loader,file="$IMAGE",addr=0x8200000,force-raw=on \
-      -device loader,file="$INITRD",addr=0xa100000,force-raw=on \
-      -device loader,file="$DTB",addr=0xa000000,force-raw=on \
+      -drive if=sd,file="$SDIMG",format=raw \
       -nographic
 
-The loader addresses mirror the SDK ``k230_canmv_defconfig`` output. Read the
-U-Boot addresses from the generated environment, and read the Linux RAM base
-from the generated ``hw/k230.dts.txt``. This replaces the SDK storage and
-decompression steps.
-
-Press Enter to stop autoboot. At the U-Boot prompt, run these commands:
+Additional UARTs can be connected with extra ``-serial`` options. UART0 is used
+by the U-Boot and Linux console. The C908V RT-Smart console uses UART3:
 
 .. code-block:: bash
 
-   K230# setenv bootargs console=ttyS0,115200 earlycon=sbi cma=0
-   K230# fdt addr 0xa000000
-   K230# fdt resize 8192
-   K230# fdt set /chosen linux,initrd-start <0x0 0xa100000>
-   K230# fdt set /chosen linux,initrd-end <0x0 ${INITRD_END}>
-   K230# bootm 0xc100000 - 0xa000000
-
-Use ``setenv`` so ``bootm`` writes the kernel command line into
-``/chosen/bootargs``. The ``fdt`` commands select the loaded DTB, add space for
-edits, and describe the initrd range in ``/chosen``. Replace
-``${INITRD_END}`` with the host-calculated value above when typing the command.
-``cma=0`` avoids the SDK kernel reserving too much of the little-core memory
-window for initramfs boot.
+   $ qemu-system-riscv64 -machine k230,boot-both-cores=on -smp 2 \
+      -bios "$SDK/little/uboot/u-boot" \
+      -drive if=sd,file="$SDIMG",format=raw \
+      -serial mon:stdio -serial null -serial null -serial pty -serial null \
+      -display none
