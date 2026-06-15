@@ -35,6 +35,8 @@
 #include "hw/char/serial-mm.h"
 #include "hw/misc/unimp.h"
 #include "hw/sd/sd.h"
+#include "hw/usb/usb.h"
+#include "net/net.h"
 
 /* Align K230_SDK k230_canmv_defconfig */
 #define K230_DIRECT_OPENSBI_ADDR 0x8000000
@@ -135,6 +137,17 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "k230-adc", &s->adc, TYPE_K230_ADC);
     object_initialize_child(obj, "k230-pwm", &s->pwm, TYPE_K230_PWM);
     object_initialize_child(obj, "k230-timer", &s->timer, TYPE_K230_TIMER);
+    object_initialize_child(obj, "k230-sysctl-boot", &s->sysctl_boot,
+                            TYPE_K230_SYSCTL_BOOT);
+    object_initialize_child(obj, "k230-sysctl-power", &s->sysctl_power,
+                            TYPE_K230_SYSCTL_POWER);
+    object_initialize_child(obj, "k230-spi", &s->spi, TYPE_K230_SPI);
+    object_initialize_child(obj, "k230-usb0", &s->usb[0], TYPE_DWC2_USB);
+    object_initialize_child(obj, "k230-usb1", &s->usb[1], TYPE_DWC2_USB);
+    object_property_add_const_link(OBJECT(&s->usb[0]), "dma-mr",
+                                   OBJECT(get_system_memory()));
+    object_property_add_const_link(OBJECT(&s->usb[1]), "dma-mr",
+                                   OBJECT(get_system_memory()));
     s->ugzip.gsdma = &s->gsdma;
 
     qdev_prop_set_uint32(DEVICE(cpu0), "hartid-base", 0);
@@ -187,11 +200,35 @@ static void k230_create_sdhci(K230SoCState *s, int index, int irq)
     sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(DEVICE(s->c908_plic), irq));
 }
 
+static void k230_create_usb(K230SoCState *s, int index, int irq)
+{
+    int usb_dev = K230_DEV_USB0 + index;
+    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usb[index]);
+
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, memmap[usb_dev].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(DEVICE(s->c908_plic), irq));
+}
+
+static void k230_create_usb_nic(K230SoCState *s)
+{
+    DeviceState *dev = qemu_create_nic_device("usb-rtl8152", true,
+                                              "r8152_eth");
+
+    if (!dev) {
+        return;
+    }
+
+    qdev_prop_set_string(dev, "port", "1");
+    usb_realize_and_unref(USB_DEVICE(dev), &s->usb[1].bus, &error_fatal);
+}
+
 static void k230_soc_realize(DeviceState *dev, Error **errp)
 {
     K230SoCState *s = RISCV_K230_SOC(dev);
     MemoryRegion *sys_mem = get_system_memory();
     static const int sd_irqs[] = { K230_SD0_IRQ, K230_SD1_IRQ };
+    static const int usb_irqs[] = { K230_USB0_IRQ, K230_USB1_IRQ };
     int c908_cpus;
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
@@ -266,6 +303,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
         k230_create_sdhci(s, i, sd_irqs[i]);
     }
 
+    for (int i = 0; i < 2; i++) {
+        k230_create_usb(s, i, usb_irqs[i]);
+    }
+    k230_create_usb_nic(s);
+
     /* High-speed system config bits used by the SDK SDHCI driver. */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->hi_sys_cfg), errp)) {
         return;
@@ -309,6 +351,28 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->timer), 0,
                     memmap[K230_DEV_TIMER].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sysctl_boot), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_boot), 0,
+                    memmap[K230_DEV_BOOT].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sysctl_power), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl_power), 0,
+                    memmap[K230_DEV_PWR].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->spi), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->spi), 0, memmap[K230_DEV_SPI].base);
+    for (int i = 0; i < K230_SPI_IRQ_COUNT; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi), i,
+                           qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                            K230_SPI_IRQ + i));
+    }
 
     /* unimplemented devices */
     create_unimplemented_device("kpu.l2-cache",
@@ -365,12 +429,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("rmu", memmap[K230_DEV_RMU].base,
                                 memmap[K230_DEV_RMU].size);
 
-    create_unimplemented_device("boot", memmap[K230_DEV_BOOT].base,
-                                memmap[K230_DEV_BOOT].size);
-
-    create_unimplemented_device("pwr", memmap[K230_DEV_PWR].base,
-                                memmap[K230_DEV_PWR].size);
-
     create_unimplemented_device("iomux", memmap[K230_DEV_IOMUX].base,
                                 memmap[K230_DEV_IOMUX].size);
 
@@ -412,20 +470,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("i2s", memmap[K230_DEV_I2S].base,
                                 memmap[K230_DEV_I2S].size);
 
-    create_unimplemented_device("usb0", memmap[K230_DEV_USB0].base,
-                                memmap[K230_DEV_USB0].size);
-
-    create_unimplemented_device("usb1", memmap[K230_DEV_USB1].base,
-                                memmap[K230_DEV_USB1].size);
-
     create_unimplemented_device("qspi0", memmap[K230_DEV_QSPI0].base,
                                 memmap[K230_DEV_QSPI0].size);
 
     create_unimplemented_device("qspi1", memmap[K230_DEV_QSPI1].base,
                                 memmap[K230_DEV_QSPI1].size);
-
-    create_unimplemented_device("spi", memmap[K230_DEV_SPI].base,
-                                memmap[K230_DEV_SPI].size);
 
     create_unimplemented_device("ddrc_cfg", memmap[K230_DEV_DDRC_CFG].base,
                                 memmap[K230_DEV_DDRC_CFG].size);
@@ -605,6 +654,7 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
     mc->default_cpus = 1;
     mc->default_ram_id = "riscv.K230.ram"; /* DDR */
     mc->default_ram_size = memmap[K230_DEV_DDRC].size;
+    mc->default_nic = "usb-rtl8152";
     mc->auto_create_sdcard = true;
 }
 

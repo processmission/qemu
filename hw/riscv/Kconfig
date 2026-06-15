@@ -173,3 +173,7 @@ config K230
     select K230_ADC
     select K230_PWM
     select K230_TIMER
+    select K230_SYSCTL
+    select K230_SPI
+    select USB_DWC2
+    select USB_RTL8152
