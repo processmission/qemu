@@ -87,8 +87,8 @@ Direct Linux Boot
 -----------------
 
 The following command boots the RK3588 Linux image and initramfs stored under
-``build/agent`` and attaches the smoke-test eMMC image, the board GMAC, and one
-PCIe virtio-net device:
+``build/agent`` on the EVB machine, and attaches the smoke-test eMMC image, the
+board GMAC, and one PCIe virtio-net device:
 
 .. code-block:: bash
 
@@ -109,6 +109,25 @@ PCIe virtio-net device:
 
 The kernel console is UART2, so keep ``console=ttyS2,1500000n8`` in the kernel
 command line.
+
+The ROC PC machine supports the same direct Linux boot path:
+
+.. code-block:: bash
+
+   $ build/qemu-system-aarch64 \
+       -accel tcg \
+       -machine rk3588s-roc-pc \
+       -smp 2 \
+       -m 1G \
+       -kernel build/agent/linux-src/arch/arm64/boot/Image \
+       -initrd build/agent/initramfs.cpio.gz \
+       -append "console=ttyS2,1500000n8 rdinit=/init" \
+       -drive if=sd,file=build/agent/rk3588-modeling/logs/emmc-smoke.img,format=raw \
+       -nic user,model=gmac0 \
+       -netdev user,id=vnet0 \
+       -device virtio-net-pci,netdev=vnet0 \
+       -serial mon:stdio \
+       -display none
 
 Firmware U-Boot Boot
 --------------------
