@@ -379,7 +379,7 @@ static void k230_assert_page_byte(QTestState *qts, uint64_t addr,
 
 static QTestState *k230_kpu_init(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     k230_plic_enable_irq(qts, K230_GNNE_IRQ);
     g_assert_cmphex(qtest_readq(qts, K230_KPU_CFG_BASE + K230_GNNE_STATUS),

@@ -50,7 +50,7 @@ class K230Machine(LinuxKernelTest):
         self.wait_for_console_pattern('~ #')
 
     def test_k230_direct_boot(self):
-        self.set_machine('k230')
+        self.set_machine('k230-canmv')
         kernel_path = self.ASSET_KERNEL.fetch()
         dtb_path = self.ASSET_DTB.fetch()
         initrd_path = self.ASSET_INITRD.fetch()
@@ -65,7 +65,7 @@ class K230Machine(LinuxKernelTest):
         self.wait_for_linux_shell()
 
     def test_k230_uboot_boot(self):
-        self.set_machine('k230')
+        self.set_machine('k230-canmv')
         kernel_path = self.ASSET_KERNEL.fetch()
         dtb_path = self.ASSET_DTB.fetch()
         initrd_path = self.ASSET_INITRD.fetch()

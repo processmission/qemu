@@ -111,7 +111,7 @@ typedef struct K230SoCState {
     bool c908v_enabled;
 } K230SoCState;
 
-#define TYPE_RISCV_K230_MACHINE MACHINE_TYPE_NAME("k230")
+#define TYPE_RISCV_K230_MACHINE MACHINE_TYPE_NAME("k230-canmv")
 #define RISCV_K230_MACHINE(obj) \
     OBJECT_CHECK(K230MachineState, (obj), TYPE_RISCV_K230_MACHINE)
 

@@ -183,12 +183,12 @@ static void k230_test_cpu1_reset_sequence(const char *machine_args)
 
 static void test_cpu1_reset_sequence_smp1(void)
 {
-    k230_test_cpu1_reset_sequence("-machine k230 -smp 1");
+    k230_test_cpu1_reset_sequence("-machine k230-canmv -smp 1");
 }
 
 static void test_cpu1_reset_sequence_smp2(void)
 {
-    k230_test_cpu1_reset_sequence("-machine k230 -smp 2");
+    k230_test_cpu1_reset_sequence("-machine k230-canmv -smp 2");
 }
 
 static QDict *k230_query_cpu(QTestState *qts, int cpu_index)
@@ -231,7 +231,7 @@ static bool k230_qom_get_bool(QTestState *qts, const char *path,
 
 static void test_smp1_topology(void)
 {
-    QTestState *qts = qtest_init("-machine k230 -smp 1");
+    QTestState *qts = qtest_init("-machine k230-canmv -smp 1");
     QDict *resp = k230_query_cpu(qts, 0);
     QList *cpus;
     const QListEntry *entry;
@@ -251,7 +251,7 @@ static void test_smp1_topology(void)
 
 static void test_smp2_topology(void)
 {
-    QTestState *qts = qtest_init("-machine k230 -smp 2");
+    QTestState *qts = qtest_init("-machine k230-canmv -smp 2");
     QDict *resp = k230_query_cpu(qts, 1);
     QList *cpus;
     QDict *cpu1 = NULL;
@@ -284,7 +284,7 @@ static void test_smp2_topology(void)
 
 static void test_smp2_boot_both_cores_topology(void)
 {
-    QTestState *qts = qtest_init("-machine k230,boot-both-cores=on -smp 2");
+    QTestState *qts = qtest_init("-machine k230-canmv,boot-both-cores=on -smp 2");
     QDict *resp = k230_query_cpu(qts, 1);
     QList *cpus;
     QDict *cpu1 = NULL;
@@ -315,7 +315,7 @@ static void test_smp2_boot_both_cores_topology(void)
 
 static void test_clint_smode_regs(void)
 {
-    QTestState *qts = qtest_init("-machine k230 -smp 1");
+    QTestState *qts = qtest_init("-machine k230-canmv -smp 1");
 
     qtest_writel(qts, K230_CLINT_BASE + K230_CLINT_SSIP0, 1);
     g_assert_cmphex(qtest_readl(qts, K230_CLINT_BASE + K230_CLINT_SSIP0), ==,
@@ -376,7 +376,7 @@ static void k230_plic_complete(QTestState *qts, unsigned int irq)
 
 static void test_ov5647_chip_id(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     g_assert_cmphex(k230_i2c_read_reg8(qts, K230_I2C0_BASE, 0x300a), ==, 0x56);
     g_assert_cmphex(k230_i2c_read_reg8(qts, K230_I2C0_BASE, 0x300b), ==, 0x47);
@@ -386,7 +386,7 @@ static void test_ov5647_chip_id(void)
 
 static void test_flash_xip_writable(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
     uint64_t addr = K230_FLASH_BASE + K230_FLASH_TEST_OFFSET;
 
     g_assert_cmphex(qtest_readl(qts, addr), ==, 0xffffffff);
@@ -399,7 +399,7 @@ static void test_flash_xip_writable(void)
 
 static void test_media_regs_readback(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
     static const uint8_t nonai_y_src[16] = {
         0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x23,
         0x30, 0x31, 0x32, 0x33, 0x40, 0x41, 0x42, 0x43,

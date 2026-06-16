@@ -1112,7 +1112,7 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
-    mc->desc = "RISC-V Board compatible with Kendryte K230 SDK";
+    mc->desc = "Canaan CanMV-K230 board";
     mc->init = k230_machine_init;
     mc->max_cpus = 2;
     mc->default_cpus = 1;
