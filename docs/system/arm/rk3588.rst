@@ -254,6 +254,23 @@ partition for ZVM guest run records:
 * ``oh_vda.bin`` at ``seek=6144``
 * ``linux_diskimg.bin`` at ``seek=9216``, ``12288``, ``15360``, and ``19432``
 
+Download the ZVM release binaries from the official `ZVM RK3588 download page
+<https://esnl.hnu.edu.cn/zvm/downloads/download_rk3588.html>`_.  The QEMU image
+flow uses these release packages:
+
+* ``kernel_images.zip``: provides ``kernel_images/`` with
+  ``zvm_release_rk3588v2.bin``, ``boot.scr``, ``nrtos_images.bin``, and the
+  raw images used by the package helper.
+* ``file_system_images_part1.zip`` and ``file_system_images_part2.zip``:
+  provide ``file_system_images/``.  Run its ``unpack.sh`` to produce the
+  ``file_system_images/image/`` directory containing ``android_vda.img``,
+  ``oh_vda.bin``, and ``linux_diskimg.bin``.
+
+The Rockchip RKNS firmware binary, ``u-boot-rockchip.bin``, is separate from
+the ZVM release package.  Use the RK3588 U-Boot build produced by the firmware
+flow above, or another ROC-RK3588S-PC U-Boot build that emits the same combined
+Rockchip image.
+
 The release package also ships ``nrtos_imagespack.py`` with
 ``N = 0x1205000``.  For a raw QEMU TF-card image this means the second
 partition must start at sector ``0x1005000`` so that ``seek=1024`` lands
@@ -269,6 +286,47 @@ unmatched kernel, Linux can still reach the Buildroot login prompt but
 ``zshm.ko`` fails to load and ZVM's operation-test heartbeat waits until the
 Linux VM start timeout.  The local validated image uses the release
 ``Image.official`` 5.10.110 kernel in that slot.
+
+To rebuild the boot payloads from the official package, run the package helper
+from the ``kernel_images`` directory and choose option ``3``:
+
+.. code-block:: bash
+
+   $ cd build/agent/zvm-rk3588/work/kernel_images
+   $ printf '3\n' | ./auto_py.sh
+
+This regenerates ``nrtos_images.bin``, ``zvm_release_rk3588v2.bin``, and
+``boot.scr``.  The helper runs ``raw_kernel_images/nrtos_imagespack.py`` first,
+then ``raw_kernel_images/pack_img_v2.py``.  The first script packs the Linux,
+Android, and OpenHarmony kernel/initramfs/DTB slots into fixed-size regions in
+``nrtos_images.bin``.  The second script packs the ZVM segments listed in
+``raw_kernel_images/segments.map`` together with the Zephyr and FreeRTOS helper
+images into ``zvm_release_rk3588v2.bin`` and refreshes the U-Boot script.
+
+The repository also provides a QEMU raw-image helper for the ROC board.  It
+supports Linux hosts with ``dosfstools`` and ``mtools`` installed, and macOS
+hosts through ``hdiutil`` and ``newfs_msdos``:
+
+.. code-block:: bash
+
+   $ ZVM=build/agent/zvm-rk3588
+   $ KIMG=$ZVM/work/kernel_images
+   $ FSIMG=$ZVM/work/file_system_images_official/image
+   $ UBOOT=$ZVM/scratch/u-boot-roc-zvmcompat-build/u-boot-rockchip.bin
+   $ OUT=$ZVM/scratch/zvm-rk3588-qemu-roc-sd-official-fixed.img
+   $ scripts/zvm/rk3588s-roc-pc-make-zvm-image.sh \
+       --kernel-dir "$KIMG" \
+       --filesystem-dir "$FSIMG" \
+       --uboot-rockchip "$UBOOT" \
+       --output "$OUT" \
+       --force
+
+The script creates the 32 GiB raw card image, writes the MBR partition table,
+formats both FAT partitions, copies ``zvm_release_rk3588v2.bin`` and
+``boot.scr``/``boot.scr.uimg`` to the first partition, writes
+``nrtos_images.bin`` to the second partition at ``bs=1M seek=1024``, writes the
+Android/OpenHarmony/Linux file-system images at the offsets listed above, and
+installs ``u-boot-rockchip.bin`` at LBA 64.
 
 When diagnosing ``Timeout waiting for vm: linux_os-1 start`` or
 ``Failed to run linux VM 1, ret=-19``, check the image contents before changing
