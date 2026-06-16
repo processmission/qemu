@@ -28,7 +28,7 @@
 
 static void test_register_read_write(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     /* Test Control Register (CR) read/write */
     qtest_writel(qts, WDT_BASE + K230_WDT_CR, 0xFFFFFFFF);
@@ -50,7 +50,7 @@ static void test_register_read_write(void)
 
 static void test_counter_restart(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     /* Enable watchdog and set timeout */
     qtest_writel(qts, WDT_BASE + K230_WDT_CR, K230_WDT_CR_WDT_EN);
@@ -76,7 +76,7 @@ static void test_counter_restart(void)
 
 static void test_interrupt_mode(void)
 {
-    QTestState *qts = qtest_init("-machine k230 --trace k230_*,file=k230.log");
+    QTestState *qts = qtest_init("-machine k230-canmv --trace k230_*,file=k230.log");
 
     /* Set interrupt mode and enable watchdog */
     qtest_writel(qts, WDT_BASE + K230_WDT_CR,
@@ -100,7 +100,7 @@ static void test_interrupt_mode(void)
 
 static void test_reset_mode(void)
 {
-    QTestState *qts = qtest_init("-machine k230 -no-reboot");
+    QTestState *qts = qtest_init("-machine k230-canmv -no-reboot");
 
     /* Set reset mode and enable watchdog */
     qtest_writel(qts, WDT_BASE + K230_WDT_CR, K230_WDT_CR_WDT_EN);
@@ -117,7 +117,7 @@ static void test_reset_mode(void)
 
 static void test_timeout_calculation(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     /* Test different timeout values */
     for (uint32_t top = 0; top <= 15; top++) {
@@ -137,7 +137,7 @@ static void test_timeout_calculation(void)
 
 static void test_wdt1_registers(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     /* Test WDT1 registers (second watchdog) */
     qtest_writel(qts, K230_WDT1_BASE + K230_WDT_CR, 0xFFFFFFFF);
@@ -154,7 +154,7 @@ static void test_wdt1_registers(void)
 
 static void test_enable_disable(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     /* Initially disabled */
     uint32_t cr = qtest_readl(qts, WDT_BASE + K230_WDT_CR);

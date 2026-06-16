@@ -238,7 +238,7 @@ static void k230_enable_ws2812_tx(QTestState *qts)
 
 static void test_i2s_init_registers(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
     g_assert_cmphex(qtest_readl(qts, K230_I2S_BASE + K230_I2S_IER), ==, 0);
     g_assert_cmphex(qtest_readl(qts, K230_I2S_BASE + K230_I2S_ITER), ==, 0);
     g_assert_cmphex(qtest_readl(qts, K230_I2S_BASE + K230_I2S_CER), ==, 0);
@@ -290,7 +290,7 @@ static void test_i2s_init_registers(void)
 
 static void test_direct_tx_encoded_words(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
 
     k230_enable_ws2812_tx(qts);
     qtest_writel(qts, K230_I2S_BASE + K230_I2S_TXFFR, 1);
@@ -324,7 +324,7 @@ static void write_le32(uint8_t *buf, size_t offset, uint32_t value)
 
 static void test_pdma_memory_to_i2s(void)
 {
-    QTestState *qts = qtest_init("-machine k230");
+    QTestState *qts = qtest_init("-machine k230-canmv");
     uint8_t data[16];
     uint8_t desc[16];
 
@@ -375,7 +375,7 @@ static void test_pdma_memory_to_i2s(void)
 
 static void test_amp_exact_reset_sequence(void)
 {
-    QTestState *qts = qtest_init("-machine k230 -smp 2");
+    QTestState *qts = qtest_init("-machine k230-canmv -smp 2");
     QDict *cpu1;
 
     cpu1 = k230_query_cpu(qts, 1);
@@ -408,7 +408,7 @@ static void test_amp_exact_reset_sequence(void)
 
 static void test_amp_deferred_reset_reassert_restores_rtt(void)
 {
-    QTestState *qts = qtest_init("-machine k230,boot-both-cores=on -smp 2");
+    QTestState *qts = qtest_init("-machine k230-canmv,boot-both-cores=on -smp 2");
     static const uint8_t pattern[K230_CPU1_TEST_PATTERN_SIZE] = {
         0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
         0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xf0, 0x0f,
@@ -433,7 +433,7 @@ static void test_amp_deferred_reset_reassert_restores_rtt(void)
 
 static void test_amp_deferred_release_snapshots_rstvec(void)
 {
-    QTestState *qts = qtest_init("-machine k230,boot-both-cores=on -smp 2");
+    QTestState *qts = qtest_init("-machine k230-canmv,boot-both-cores=on -smp 2");
     static const uint8_t pattern[K230_CPU1_TEST_PATTERN_SIZE] = {
         0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18,
         0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90,
@@ -471,8 +471,8 @@ static void test_amp_deferred_release_migration(void)
     };
 
     g_assert_nonnull(tmpdir);
-    src = qtest_init("-machine k230,boot-both-cores=on -smp 2 -nic none");
-    dst = qtest_init("-machine k230,boot-both-cores=on -smp 2 "
+    src = qtest_init("-machine k230-canmv,boot-both-cores=on -smp 2 -nic none");
+    dst = qtest_init("-machine k230-canmv,boot-both-cores=on -smp 2 "
                      "-incoming defer -nic none");
 
     k230_assert_cpu1_reset(src);

@@ -1822,11 +1822,11 @@ F: docs/system/riscv/xiangshan-kunminghu.rst
 F: hw/riscv/xiangshan_kmh.c
 F: include/hw/riscv/xiangshan_kmh.h
 
-K230 Machines
+CanMV-K230 Machines
 M: Chao Liu <chao.liu@processmission.com>
 L: qemu-riscv@nongnu.org
 S: Maintained
-F: docs/system/riscv/k230.rst
+F: docs/system/riscv/k230-canmv.rst
 F: hw/display/k230_*.c
 F: hw/dma/k230_*.c
 F: hw/i2c/k230_*.c
