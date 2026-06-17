@@ -109,6 +109,9 @@ config SUNHME
 config FTGMAC100
     bool
 
+config PHYTIUM_XMAC
+    bool
+
 config NPCM_GMAC
     bool
 
