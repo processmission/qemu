@@ -275,6 +275,7 @@ qtests_aarch64 = \
    config_all_devices.has_key('CONFIG_ARM_VIRT') ?
    ['iommu-smmuv3-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_PHYTIUMPI') ? ['phytiumpi-test'] : []) + \
   qtests_cxl +                                                                                  \
   ['arm-cpu-features',
    'numa-test',
