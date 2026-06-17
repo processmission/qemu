@@ -213,6 +213,19 @@ config RK3588_EVB
     select SERIAL_MM
     select UNIMP
 
+config PHYTIUMPI
+    bool
+    default y
+    depends on TCG && AARCH64
+    select ARM_GIC
+    select DEVICE_TREE
+    select PHYTIUM_DDR_CTRL
+    select PHYTIUM_MCI
+    select PHYTIUM_SCP_MAILBOX
+    select PHYTIUM_XMAC
+    select PL011 # UART
+    select UNIMP
+
 config SABRELITE
     bool
     default y
