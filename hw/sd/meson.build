@@ -1,6 +1,7 @@
 system_ss.add(when: 'CONFIG_PL181', if_true: files('pl181.c'))
 system_ss.add(when: 'CONFIG_SD', if_true: files('sd.c', 'core.c'))
 system_ss.add(when: 'CONFIG_DW_MMC', if_true: files('dw_mmc.c'))
+system_ss.add(when: 'CONFIG_PHYTIUM_MCI', if_true: files('phytium-mci.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_DWCMSHC', if_true: files('rockchip_dwcmshc.c'))
 system_ss.add(when: 'CONFIG_SDHCI', if_true: files('sdhci.c'))
 system_ss.add(when: 'CONFIG_SDHCI_PCI', if_true: files('sdhci-pci.c'))

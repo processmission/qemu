@@ -6,6 +6,10 @@ config DW_MMC
     bool
     select SD
 
+config PHYTIUM_MCI
+    bool
+    select SD
+
 config SSI_SD
     bool
     depends on SSI
