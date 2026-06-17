@@ -96,6 +96,7 @@ Board-specific documentation
    arm/mcimx7d-sabre
    arm/imx8m
    arm/orangepi
+   arm/phytium-pi
    arm/raspi
    arm/rk3588
    arm/collie
