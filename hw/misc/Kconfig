@@ -46,6 +46,12 @@ config PL310
 config ROCKCHIP_SYSCON
     bool
 
+config PHYTIUM_DDR_CTRL
+    bool
+
+config PHYTIUM_SCP_MAILBOX
+    bool
+
 config INTEGRATOR_DEBUG
     bool
 
