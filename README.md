@@ -12,6 +12,7 @@ for new machine requests or bug reports.
 | arch | machine | direct booting | firmware booting | documentation |
 | --- | --- | --- | --- | --- |
 | RISC-V | `k230-canmv` | ✅ | ✅ | [docs/system/riscv/k230-canmv.rst](docs/system/riscv/k230-canmv.rst) |
+| RISC-V | `milkv-duo` | ✅ | ✅ | [docs/system/riscv/milkv-duo.rst](docs/system/riscv/milkv-duo.rst) |
 | ARM | `phytium-pi` | ✅ | ✅ | [docs/system/arm/phytium-pi.rst](docs/system/arm/phytium-pi.rst) |
 | ARM | `rk3588-evb` | ✅ | ✅ | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
 | ARM | `rk3588s-roc-pc` | ✅ | ✅ | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
