@@ -50,7 +50,7 @@ requires_binary()
 
 configure_qemu()
 {
-    config_opts="--enable-werror \
+    config_opts="${QEMU_WERROR---enable-werror} \
                  ${TARGET_LIST:+--target-list=${TARGET_LIST}} \
                  --prefix=$INSTALL_DIR \
                  $enable_rust \

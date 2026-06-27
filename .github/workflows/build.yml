@@ -52,7 +52,7 @@ jobs:
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd)
           -w $(pwd)/tests/docker/
           docker.io/pboqemu/qemu-ci:${{matrix.container}}
-          env QEMU_SRC=$(pwd) ENABLE_RUST=0 INSTALL_DIR=/ BUILD_DIR=/tmp MAKEFLAGS="-j $(nproc)"
+          env QEMU_SRC=$(pwd) QEMU_WERROR="${{ env.QEMU_WERROR }}" ENABLE_RUST=0 INSTALL_DIR=/ BUILD_DIR=/tmp MAKEFLAGS="-j $(nproc)"
           ./test-build
 
   build:
