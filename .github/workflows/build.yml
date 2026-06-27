@@ -164,7 +164,7 @@ jobs:
       - run: brew uninstall cmake # conflict with install command below
       - run: brew install --quiet $(env HOMEBREW_NO_ENV_HINTS=1 brew deps --include-build qemu) bison flex
       - run: ./configure ${{ env.QEMU_WERROR }} --target-list=x86_64-softmmu && ninja -C build
-      - run: ./build/qemu-system-x86_64 -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
+      - run: ./build/qemu-system-x86_64-unsigned -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
 
   build-freebsd:
     needs: checkapply
