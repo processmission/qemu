@@ -7,6 +7,7 @@
  */
 
 #include "qemu/osdep.h"
+#include <glib/gstdio.h>
 #include "qemu/bswap.h"
 #include "libqtest.h"
 #include "migration/migration-qmp.h"
