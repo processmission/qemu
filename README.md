@@ -13,7 +13,7 @@ for new machine requests or bug reports.
 | --- | --- | --- | --- | --- |
 | RISC-V | [`k230-canmv`](docs/system/riscv/k230-canmv.rst) | ✅ | ✅ | PM |
 | RISC-V | [`milkv-duo`](docs/system/riscv/milkv-duo.rst) | ✅ | ✅ | UP |
-| RISC-V | [`riscv-server-ref`](docs/system/riscv/riscv-server-ref.rst) | ✅ | ✅ | UP+PM |
+| RISC-V | [`riscv-server-ref`](docs/system/riscv/riscv-server-ref.rst) | ✅ | ✅ | UP |
 | ARM | [`phytium-pi`](docs/system/arm/phytium-pi.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588-evb`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588s-roc-pc`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
@@ -22,8 +22,8 @@ Source legend:
 
 - `PM`: Process Mission downstream-maintained model.
 - `UP`: imported from upstream QEMU/qemu-devel.
+- `OSS`: imported from other open-source repositories.
 - `VND`: imported from vendor sources.
-- `+PM`: includes Process Mission downstream fixups or local maintenance.
 
 ## Development Workflow
 
