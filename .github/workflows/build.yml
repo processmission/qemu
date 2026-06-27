@@ -7,6 +7,9 @@ env:
   # local board imports with cross-toolchain warnings, so keep Werror strictness
   # only for the source CI repository.
   QEMU_WERROR: ${{ github.repository == 'p-b-o/qemu-ci' && '--enable-werror' || '--disable-werror' }}
+  # Full thorough functional coverage includes host-sensitive GPU/KVM cases.
+  # Keep it in p-b-o/qemu-ci; downstream runs use quick functional smoke.
+  QEMU_FUNC_SUITES: ${{ github.repository == 'p-b-o/qemu-ci' && '--suite func-quick --suite func-thorough' || '--suite func-quick' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -437,5 +440,5 @@ jobs:
       - run: >
           podman run --pull newer --init --privileged --rm -i $([ -e /dev/kvm ] && echo '-v /dev/kvm:/dev/kvm') -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx "./build/pyvenv/bin/meson test -C build --setup thorough --suite func-quick --suite func-thorough -j1 --timeout-multiplier 0 --print-errorlogs --wrapper $(pwd)/scripts/run-functional-test.sh --max-lines=0"
+          bash -cx "./build/pyvenv/bin/meson test -C build --setup thorough ${{ env.QEMU_FUNC_SUITES }} -j1 --timeout-multiplier 0 --print-errorlogs --wrapper $(pwd)/scripts/run-functional-test.sh --max-lines=0"
           # Run with -j1 to avoid issues with parallel runs
