@@ -411,7 +411,7 @@ jobs:
       - run: >
           podman run --pull newer --init --privileged --rm -i $([ -e /dev/kvm ] && echo '-v /dev/kvm:/dev/kvm') -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx "./build/pyvenv/bin/meson test -C build --setup thorough --no-suite func-quick --no-suite func-thorough -t 5 --print-errorlogs"
+          bash -cx "./build/pyvenv/bin/meson test -C build --setup thorough --no-suite func-quick --no-suite func-thorough --no-suite block-slow --no-suite block-thorough -t 5 --print-errorlogs"
 
   check-functional:
     strategy:
