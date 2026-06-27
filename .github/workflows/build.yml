@@ -6,7 +6,7 @@ env:
   # p-b-o/qemu-ci is an upstream-series runner. This downstream tree carries
   # local board imports with cross-toolchain warnings, so keep Werror strictness
   # only for the source CI repository.
-  QEMU_WERROR: ${{ github.repository == 'p-b-o/qemu-ci' && '--enable-werror' || '' }}
+  QEMU_WERROR: ${{ github.repository == 'p-b-o/qemu-ci' && '--enable-werror' || '--disable-werror' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
