@@ -16,6 +16,11 @@ jobs:
       - run: bash -c '[ ! -f shazam.log ] || { cat shazam.log; exit 1; }'
 
   checkpatch:
+    # This branch carries downstream history, so upstream/master..HEAD spans
+    # pre-existing board imports. Keep p-b-o's checkpatch job only for the
+    # qemu-ci repository where that range is constructed for mailing-list
+    # series branches.
+    if: ${{ github.repository == 'p-b-o/qemu-ci' }}
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
