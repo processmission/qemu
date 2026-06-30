@@ -1,6 +1,7 @@
 /GNUmakefile
 /build/
 /.cache/
+/.oh-my-qemu/
 /.vscode/
 *.pyc
 .sdk
