@@ -25,18 +25,41 @@ jobs:
       - run: bash -c '[ ! -f shazam.log ] || { cat shazam.log; exit 1; }'
 
   checkpatch:
-    # This branch carries downstream history, so upstream/master..HEAD spans
-    # pre-existing board imports. Keep p-b-o's checkpatch job only for the
-    # qemu-ci repository where that range is constructed for mailing-list
-    # series branches.
-    if: ${{ github.repository == 'p-b-o/qemu-ci' }}
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - run: git fetch -a origin --unshallow || true
-      - run: git remote add upstream -f https://gitlab.com/qemu-project/qemu
-      - run: ./scripts/checkpatch.pl $(git merge-base upstream/master HEAD)..HEAD
+        with:
+          fetch-depth: 0
+      - id: patch-range
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$REPOSITORY" = "p-b-o/qemu-ci" ]; then
+              git remote add upstream https://gitlab.com/qemu-project/qemu
+              git fetch --no-tags upstream master
+              base="$(git merge-base upstream/master HEAD)"
+              echo "range=$base..HEAD" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+
+          base_ref="$(gh pr list --repo "$REPOSITORY" --head "$REF_NAME" \
+              --state open --json baseRefName --jq '.[0].baseRefName // ""')"
+          if [ -z "$base_ref" ]; then
+              echo "No open PR found for $REF_NAME; skipping checkpatch"
+              echo "range=" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+
+          git fetch --no-tags origin "$base_ref"
+          base="$(git merge-base "origin/$base_ref" HEAD)"
+          echo "range=$base..HEAD" >> "$GITHUB_OUTPUT"
+      - if: ${{ steps.patch-range.outputs.range != '' }}
+        run: ./scripts/checkpatch.pl "${{ steps.patch-range.outputs.range }}"
 
   # Use prebuilt images instead of rebuilding them in CI.
   build-cross:
