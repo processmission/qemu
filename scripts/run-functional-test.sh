@@ -26,7 +26,7 @@ EOF
 trap "rm -rf $test_log" EXIT
 
 err=0
-delay=10m
+delay=${QEMU_FUNCTIONAL_TEST_TIMEOUT:-10m}
 timeout $delay "$@" > $test_log/stdout 2> $test_log/stderr || err=$?
 
 if [ $err -eq 0 ]; then
