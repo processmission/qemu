@@ -38,8 +38,7 @@ jobs:
       - run: git remote add upstream -f https://gitlab.com/qemu-project/qemu
       - run: ./scripts/checkpatch.pl $(git merge-base upstream/master HEAD)..HEAD
 
-  # use docker-run to not rebuild images
-  # images are built daily and pushed on pboqemu/qemu-ci:*
+  # Use prebuilt images instead of rebuilding them in CI.
   build-cross:
     needs: checkapply
     runs-on: ubuntu-24.04
