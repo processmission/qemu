@@ -1,0 +1,12 @@
+diff --git a/dts/upstream/src/arm64/rockchip/rk3588s-roc-pc.dts b/dts/upstream/src/arm64/rockchip/rk3588s-roc-pc.dts
+index 7e179862..880ba418 100644
+--- a/dts/upstream/src/arm64/rockchip/rk3588s-roc-pc.dts
++++ b/dts/upstream/src/arm64/rockchip/rk3588s-roc-pc.dts
+@@ -13,2 +13,5 @@
+-	model = "Firefly Station M3";
+-	compatible = "firefly,rk3588s-roc-pc", "rockchip,rk3588s";
++	model = "Firefly ROC-RK3588S-PC";
++	compatible = "rockchip,rk3588s-firefly-roc-pc",
++		     "firefly,rk3588s-roc-pc",
++		     "rockchip,rk3588s",
++		     "rockchip,rk3588";
