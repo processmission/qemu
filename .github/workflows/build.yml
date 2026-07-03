@@ -441,3 +441,101 @@ jobs:
           docker.io/pboqemu/qemu-ci:debian
           bash -cx "./build/pyvenv/bin/meson test -C build --setup thorough ${{ env.QEMU_FUNC_SUITES }} -j1 --timeout-multiplier 0 --print-errorlogs --wrapper $(pwd)/scripts/run-functional-test.sh --max-lines=0"
           # Run with -j1 to avoid issues with parallel runs
+
+  check-functional-rk3588-zvm:
+    needs: checkapply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - uses: actions/checkout@v6
+      - uses: actions/cache@v4
+        with:
+          path: .cache/qemu-test/download
+          key: zvm-rk3588-assets-v1
+      - run: >
+          podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
+          docker.io/pboqemu/qemu-ci:debian
+          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --target-list=aarch64-softmmu && ninja -C build qemu-system-aarch64 qemu-img'
+      - run: |
+          podman run --pull newer --init --privileged --rm -i -v $(pwd):$(pwd) -w $(pwd)
+          docker.io/pboqemu/qemu-ci:debian
+          bash -exc '
+          missing=0
+          for cmd in curl zstd mkfs.vfat mcopy; do
+              command -v "$cmd" >/dev/null || missing=1
+          done
+          command -v 7z >/dev/null || command -v 7zz >/dev/null || missing=1
+          if [ "$missing" -ne 0 ]; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                  --no-install-recommends curl dosfstools mtools zstd
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                  --no-install-recommends 7zip || \
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                  --no-install-recommends p7zip-full
+          fi
+
+          cache_root=$(pwd)/.cache/qemu-test
+          cache_dir=$cache_root/download
+          mkdir -p "$cache_dir"
+
+          run_test()
+          {
+              timeout=$1
+              test_name=$2
+
+              QEMU_TEST_CACHE_DIR=$cache_root \
+              QEMU_FUNCTIONAL_TEST_TIMEOUT=$timeout \
+              ./build/pyvenv/bin/meson test -C build --setup thorough \
+                  -j1 --timeout-multiplier 0 --print-errorlogs \
+                  --wrapper $(pwd)/scripts/run-functional-test.sh \
+                  --max-lines=0 "$test_name"
+          }
+
+          download_asset()
+          {
+              url=$1
+              sha=$2
+              dest=$cache_dir/$sha
+              tmp=$dest.tmp
+
+              if [ -f "$dest" ] &&
+                 printf "%s  %s\n" "$sha" "$dest" | sha256sum -c -
+              then
+                  return 0
+              fi
+
+              rm -f "$dest" "$tmp"
+              curl -fL --retry 5 --retry-all-errors \
+                  --connect-timeout 30 --speed-time 120 --speed-limit 1024 \
+                  -o "$tmp" "$url"
+              printf "%s  %s\n" "$sha" "$tmp" | sha256sum -c -
+              mv "$tmp" "$dest"
+          }
+
+          run_test 15m qemu:func-aarch64-rk3588_zvm
+
+          download_asset \
+              https://esnl.hnu.edu.cn/zvm/resource/kernel_images.zip \
+              05aa22b772808abef7082d3dfc513ea75b0813f3e0d4f028ad595e2c86fe3ec7 &
+          pids=$!
+          download_asset \
+              https://esnl.hnu.edu.cn/zvm/resource/file_system_images_part1.zip \
+              9a1840d8d486b2de8e8bedc1647cd3c5aa2f622111b45bb9f0d8e1d26b07c5f0 &
+          pids="$pids $!"
+          download_asset \
+              https://esnl.hnu.edu.cn/zvm/resource/file_system_images_part2.zip \
+              17b048b0a473dcbd4e5b7f1c5d4f50547ffefe3e040c0b8835e55cba7f45b823 &
+          pids="$pids $!"
+
+          status=0
+          for pid in $pids; do
+              wait "$pid" || status=1
+          done
+          if [ "$status" -ne 0 ]; then
+              exit "$status"
+          fi
+
+          run_test 90m qemu:func-aarch64-rk3588_zvm_linux_guest
+          '
