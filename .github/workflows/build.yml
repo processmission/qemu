@@ -481,9 +481,10 @@ jobs:
           docker.io/pboqemu/qemu-ci:debian
           bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --target-list=aarch64-softmmu && ninja -C build qemu-system-aarch64 qemu-img'
       - run: |
-          podman run --pull newer --init --privileged --rm -i -v $(pwd):$(pwd) -w $(pwd)
-          docker.io/pboqemu/qemu-ci:debian
-          bash -exc '
+          podman run --pull newer --init --privileged --rm -i \
+              -v $(pwd):$(pwd) -w $(pwd) \
+              docker.io/pboqemu/qemu-ci:debian \
+              bash -exc '
           missing=0
           for cmd in curl zstd mkfs.vfat mcopy; do
               command -v "$cmd" >/dev/null || missing=1
