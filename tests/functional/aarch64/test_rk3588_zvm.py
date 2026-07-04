@@ -37,6 +37,7 @@ class RK3588ZVM(QemuSystemTest):
 
         vm.set_console()
         vm.add_args('-accel', 'tcg',
+                    '-icount', 'shift=0,sleep=off',
                     '-smp', '8',
                     '-m', '1G',
                     '-drive',
