@@ -51,6 +51,10 @@ config VIRTIO_SERIAL
 config MAX78000_UART
     bool
 
+config NXP_LPUART
+    bool
+    select REGISTER
+
 config STM32F2XX_USART
     bool
 
