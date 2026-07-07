@@ -127,6 +127,7 @@ static void s32k5_create_gic(S32K5MachineState *sms, MemoryRegion *sysmem)
             [GTIMER_PHYS] = ARCH_TIMER_NS_EL1_IRQ,
             [GTIMER_VIRT] = ARCH_TIMER_VIRT_IRQ,
             [GTIMER_HYP]  = ARCH_TIMER_NS_EL2_IRQ,
+            [GTIMER_SEC]  = ARCH_TIMER_S_EL1_IRQ,
         };
 
         for (int irq = 0; irq < ARRAY_SIZE(timer_irq); irq++) {
