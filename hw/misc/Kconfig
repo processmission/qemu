@@ -195,6 +195,10 @@ config AUX
 config UNIMP
     bool
 
+config NXP_S32_MC_ME
+    bool
+    select REGISTER
+
 config LED
     bool
 
