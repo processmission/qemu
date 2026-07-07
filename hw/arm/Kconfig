@@ -213,6 +213,16 @@ config RK3588_EVB
     select SERIAL_MM
     select UNIMP
 
+config S32K5
+    bool
+    default y
+    depends on TCG && ARM
+    select ARM_GIC
+    select ARM_GICV5 if TCG
+    select NXP_LPUART
+    select NXP_S32_MC_ME
+    select UNIMP
+
 config PHYTIUMPI
     bool
     default y
