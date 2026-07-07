@@ -199,7 +199,7 @@ jobs:
       - uses: vmactions/freebsd-vm@v1
         with:
           copyback: false
-          release: "14.3"
+          release: "14.4"
       - run: rsync -av ./ freebsd:/home/qemu/
       - shell: freebsd {0}
         run: set -ex && pkg update && pkg install -y git gcc gmake python pkgconf pixman bison flex glib ninja
