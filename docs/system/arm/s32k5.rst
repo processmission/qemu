@@ -1,0 +1,131 @@
+.. SPDX-License-Identifier: GPL-2.0-or-later
+
+NXP S32K5 board (``s32k566-cvb-r52``)
+=====================================
+
+Overview
+--------
+
+The ``s32k566-cvb-r52`` machine models the Cortex-R52 side of the NXP
+S32K5XXCVB evaluation board with an S32K566 SoC.  It is a minimal board model
+intended for RTOS boot smoke tests, including Zephyr images built for the
+``s32k5xxcvb/s32k566/r52`` board target.
+
+The model does not aim to provide complete S32K5 automotive SoC coverage.  It
+implements the CPU, memory, interrupt controller, LPUART console, and the small
+Mode Entry (MC_ME) register subset needed by the verified Zephyr startup flow.
+It should not be used as a compatibility promise for other S32K5 firmware.
+
+Supported devices
+-----------------
+
+The ``s32k566-cvb-r52`` machine currently provides:
+
+* up to two Arm Cortex-R52 CPUs, with one CPU enabled by default;
+* GICv3 interrupt controller with architectural timer interrupt wiring;
+* Code MRAM mapped at ``0x08000000``;
+* SRAM windows at ``0x21000000``, ``0x21080000``, ``0x21100000``, and
+  ``0x22000000``;
+* NXP S32 MC_ME register subset at ``0x40498000``;
+* NXP LPUART0 at ``0x400e0000``, connected to QEMU serial port 0.
+
+The MC_ME model covers the partition and mode update handshake used during
+Zephyr SoC initialization.  The LPUART model covers the polling console path
+used by Zephyr's MCUX LPUART driver.
+
+Memory map
+----------
+
+The machine exposes the following implemented regions:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Address
+     - Size
+     - Description
+   * - ``0x08000000``
+     - ``32 MiB + 0x100``
+     - Code MRAM, used as the direct kernel loader address
+   * - ``0x21000000``
+     - ``512 KiB``
+     - Shared SRAM0
+   * - ``0x21080000``
+     - ``512 KiB``
+     - Shared SRAM1
+   * - ``0x21100000``
+     - ``512 KiB``
+     - Shared SRAM2
+   * - ``0x22000000``
+     - ``1 MiB`` by default
+     - CPE SRAM, backed by the machine RAM property
+   * - ``0x400e0000``
+     - ``0x4000``
+     - LPUART0
+   * - ``0x40498000``
+     - ``0x4000``
+     - MC_ME
+   * - ``0x43000000``
+     - device-defined
+     - GICv3 distributor
+   * - ``0x43100000``
+     - device-defined
+     - GICv3 redistributor region
+
+Boot options
+------------
+
+Use ``-kernel`` to load an ELF image built for the S32K566 Cortex-R52 memory
+map.  The loader start address is ``0x08000000``.  The default and only
+supported CPU type is ``cortex-r52``, so the ``-cpu`` option is optional.
+
+For example, a Zephyr ``hello_world`` image with UART console enabled can be
+started with:
+
+.. code-block:: bash
+
+   $ qemu-system-arm \
+       -machine s32k566-cvb-r52 \
+       -cpu cortex-r52 \
+       -display none \
+       -monitor none \
+       -serial stdio \
+       -kernel /path/to/zephyr.elf
+
+The first QEMU serial port is connected to LPUART0.  For Zephyr, visible
+console output requires the image to enable serial console support and to use
+LPUART0 as ``zephyr,console``.  The upstream board defconfig may leave the
+console disabled; in that case the image can still boot, but no UART output is
+expected.
+
+The machine has no firmware loader, flash programmer, SD/eMMC controller, or
+network device.  Boot media such as U-Boot images, SD card images, and Linux
+distribution images are therefore not supported by this machine.
+
+Known limitations
+-----------------
+
+The machine intentionally stubs or omits many S32K5 peripherals.  In
+particular, the following areas are not complete hardware models:
+
+* clock controller register blocks;
+* SIUL2 pinmux/GPIO blocks;
+* SWT startup watchdog;
+* xSPI controller;
+* eDMA controller;
+* flash programming, reset management, and low-power modes.
+
+The current model is suitable for direct RTOS image loading.  It does not
+implement a firmware boot flow or a general-purpose Linux platform.  The
+S32K566 side modeled here is an Arm Cortex-R52 real-time core, not an
+A-profile Linux board model.
+
+Running tests
+-------------
+
+The qtest coverage for this machine checks construction, MC_ME update behavior,
+and LPUART reset/read/write behavior:
+
+.. code-block:: bash
+
+   $ meson test -C build qtest-arm/s32k5-test

@@ -17,6 +17,7 @@ for new machine requests or bug reports.
 | ARM | [`phytium-pi`](docs/system/arm/phytium-pi.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588-evb`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588s-roc-pc`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
+| ARM | [`s32k566-cvb-r52`](docs/system/arm/s32k5.rst) | ✅ | ❌ | PM |
 
 Source legend:
 
