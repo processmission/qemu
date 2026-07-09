@@ -58,9 +58,19 @@ RK3588 kernel and ZVM smoke tests:
 * Rockchip DesignWare PCIe host wrapper, including MSI/MSI-X through GIC ITS.
 * Firmware-only USB2 EHCI/OHCI register windows used by U-Boot bootflow
   scanning.
+* Optional RK3588 RKNN/RKNPU core register model, enabled with
+  ``-machine ...,rknpu=on``.  This exposes the three RK3588 RKNN cores and
+  implements the Linux mainline ``rocket`` driver's register-level job
+  submission path with fake completion interrupts.
 
 The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
 machine source refers to GIC Shared Peripheral Interrupt numbers.
+
+The optional RKNPU model is not a full neural-network accelerator emulator. It
+does not execute RKNN command streams, produce inference outputs, model the
+Rockchip IOMMU blocks, or claim compatibility with the vendor ``rknpu2``/RKNN
+Runtime stack.  It is intended as the first open-driver milestone for probing
+and completing minimal ``rocket`` jobs.
 
 Common IP boundaries
 --------------------
