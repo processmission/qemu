@@ -225,6 +225,7 @@ config RK3588
     select ROCKCHIP_SYSCON
     select RK3588_SCMI
     select ROCKCHIP_GPIO
+    select ROCKCHIP_IOMMU
     select ROCKCHIP_RKNN
     select SDHCI
     select SERIAL_MM

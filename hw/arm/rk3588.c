@@ -30,6 +30,7 @@
 #include "rk3588-internal.h"
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
+#include "hw/misc/rockchip_iommu.h"
 #include "hw/misc/rockchip_rknn.h"
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_atf_ddr.h"
@@ -195,6 +196,7 @@ struct RK3588MachineState {
     DeviceState *gmac0;
     DeviceState *gmac1;
     DeviceState *rknn[3];
+    DeviceState *rknn_mmu[3];
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
@@ -270,6 +272,10 @@ enum {
     RK3588_RKNN2_PC,
     RK3588_RKNN2_CNA,
     RK3588_RKNN2_CORE,
+    RK3588_RKNN0_MMU0,
+    RK3588_RKNN0_MMU1,
+    RK3588_RKNN1_MMU,
+    RK3588_RKNN2_MMU,
     RK3588_SDMMC,
     RK3588_SDHCI,
     RK3588_GIC_DIST,
@@ -332,6 +338,10 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_RKNN2_PC] =     { 0xfdad0000, ROCKCHIP_RKNN_WINDOW_SIZE },
     [RK3588_RKNN2_CNA] =    { 0xfdad1000, ROCKCHIP_RKNN_WINDOW_SIZE },
     [RK3588_RKNN2_CORE] =   { 0xfdad3000, ROCKCHIP_RKNN_WINDOW_SIZE },
+    [RK3588_RKNN0_MMU0] =   { 0xfdab9000, ROCKCHIP_IOMMU_WINDOW_SIZE },
+    [RK3588_RKNN0_MMU1] =   { 0xfdaba000, ROCKCHIP_IOMMU_WINDOW_SIZE },
+    [RK3588_RKNN1_MMU] =    { 0xfdaca000, ROCKCHIP_IOMMU_WINDOW_SIZE },
+    [RK3588_RKNN2_MMU] =    { 0xfdada000, ROCKCHIP_IOMMU_WINDOW_SIZE },
     [RK3588_SDMMC] =        { 0xfe2c0000, 0x00004000 },
     [RK3588_SDHCI] =        { 0xfe2e0000, 0x00010000 },
     [RK3588_GIC_DIST] =     { 0xfe600000, 0x00010000 },
@@ -1072,6 +1082,16 @@ static void rk3588_fdt_add_rknpu_nodes(void *fdt, uint32_t cru_phandle,
         RK3588_RKNN1_CORE,
         RK3588_RKNN2_CORE,
     };
+    static const int iommu_memmap0[] = {
+        RK3588_RKNN0_MMU0,
+        RK3588_RKNN1_MMU,
+        RK3588_RKNN2_MMU,
+    };
+    static const int iommu_memmap1[] = {
+        RK3588_RKNN0_MMU1,
+        -1,
+        -1,
+    };
     static const int irq[] = {
         RK3588_RKNN0_SPI,
         RK3588_RKNN1_SPI,
@@ -1104,6 +1124,47 @@ static void rk3588_fdt_add_rknpu_nodes(void *fdt, uint32_t cru_phandle,
     static const char * const reset_names[] = {
         "srst_a", "srst_h",
     };
+    static const char * const iommu_compat[] = {
+        "rockchip,rk3588-iommu", "rockchip,rk3568-iommu",
+    };
+    static const char * const iommu_clock_names[] = {
+        "aclk", "iface",
+    };
+    uint32_t iommu_phandle[3];
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(pc_memmap); i++) {
+        uint64_t iommu_base = rk3588_memmap[iommu_memmap0[i]].base;
+        g_autofree char *iommu = g_strdup_printf("/iommu@%" PRIx64,
+                                                 iommu_base);
+
+        iommu_phandle[i] = qemu_fdt_alloc_phandle(fdt);
+        qemu_fdt_add_subnode(fdt, iommu);
+        qemu_fdt_setprop_string_array(fdt, iommu, "compatible",
+                                      (char **)&iommu_compat,
+                                      ARRAY_SIZE(iommu_compat));
+        if (iommu_memmap1[i] >= 0) {
+            qemu_fdt_setprop_sized_cells(fdt, iommu, "reg",
+                                         2, rk3588_memmap[iommu_memmap0[i]].base,
+                                         2, rk3588_memmap[iommu_memmap0[i]].size,
+                                         2, rk3588_memmap[iommu_memmap1[i]].base,
+                                         2, rk3588_memmap[iommu_memmap1[i]].size);
+        } else {
+            qemu_fdt_setprop_sized_cells(fdt, iommu, "reg",
+                                         2, rk3588_memmap[iommu_memmap0[i]].base,
+                                         2, rk3588_memmap[iommu_memmap0[i]].size);
+        }
+        qemu_fdt_setprop_cells(fdt, iommu, "interrupts",
+                               FDT_GIC_SPI, irq[i],
+                               FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+        qemu_fdt_setprop_cells(fdt, iommu, "clocks",
+                               clk_phandle, clk_phandle);
+        qemu_fdt_setprop_string_array(fdt, iommu, "clock-names",
+                                      (char **)&iommu_clock_names,
+                                      ARRAY_SIZE(iommu_clock_names));
+        qemu_fdt_setprop_cell(fdt, iommu, "#iommu-cells", 0);
+        qemu_fdt_setprop_cell(fdt, iommu, "phandle", iommu_phandle[i]);
+        qemu_fdt_setprop_string(fdt, iommu, "status", "okay");
+    }
 
     for (unsigned int i = 0; i < ARRAY_SIZE(pc_memmap); i++) {
         uint64_t base = rk3588_memmap[pc_memmap[i]].base;
@@ -1138,6 +1199,7 @@ static void rk3588_fdt_add_rknpu_nodes(void *fdt, uint32_t cru_phandle,
         qemu_fdt_setprop_string_array(fdt, node, "reset-names",
                                       (char **)&reset_names,
                                       ARRAY_SIZE(reset_names));
+        qemu_fdt_setprop_cell(fdt, node, "iommus", iommu_phandle[i]);
         qemu_fdt_setprop_string(fdt, node, "status", "okay");
     }
 }
@@ -2536,6 +2598,16 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         RK3588_RKNN1_CORE,
         RK3588_RKNN2_CORE,
     };
+    static const int iommu_memmap0[] = {
+        RK3588_RKNN0_MMU0,
+        RK3588_RKNN1_MMU,
+        RK3588_RKNN2_MMU,
+    };
+    static const int iommu_memmap1[] = {
+        RK3588_RKNN0_MMU1,
+        -1,
+        -1,
+    };
     static const int irq[] = {
         RK3588_RKNN0_SPI,
         RK3588_RKNN1_SPI,
@@ -2544,6 +2616,22 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
 
     if (!s->rknpu) {
         return;
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn_mmu); i++) {
+        g_autofree char *name = g_strdup_printf("rknn-mmu%u", i);
+        SysBusDevice *sbd;
+
+        s->rknn_mmu[i] = qdev_new(TYPE_ROCKCHIP_IOMMU);
+        qdev_prop_set_uint32(s->rknn_mmu[i], "num-mmu",
+                             iommu_memmap1[i] >= 0 ? 2 : 1);
+        object_property_add_child(OBJECT(s), name, OBJECT(s->rknn_mmu[i]));
+        sbd = SYS_BUS_DEVICE(s->rknn_mmu[i]);
+        sysbus_realize(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, rk3588_memmap[iommu_memmap0[i]].base);
+        if (iommu_memmap1[i] >= 0) {
+            sysbus_mmio_map(sbd, 1, rk3588_memmap[iommu_memmap1[i]].base);
+        }
     }
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn); i++) {

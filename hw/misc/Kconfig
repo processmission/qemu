@@ -230,6 +230,10 @@ config ROCKCHIP_RKNN
     bool
     select REGISTER
 
+config ROCKCHIP_IOMMU
+    bool
+    select REGISTER
+
 config SPACEMIT_K3_CTRL
     bool
 
