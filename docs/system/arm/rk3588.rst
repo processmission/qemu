@@ -68,9 +68,11 @@ machine source refers to GIC Shared Peripheral Interrupt numbers.
 
 The optional RKNPU model is not a full neural-network accelerator emulator. It
 does not execute RKNN command streams, produce inference outputs, model the
-Rockchip IOMMU blocks, or claim compatibility with the vendor ``rknpu2``/RKNN
-Runtime stack.  It is intended as the first open-driver milestone for probing
-and completing minimal ``rocket`` jobs.
+Rockchip IOMMU DMA translation path, generate IOMMU fault IRQs, or claim
+compatibility with the vendor ``rknpu2``/RKNN Runtime stack.  It includes a
+minimal Rockchip IOMMU control-plane stub so Linux can probe, attach, map, and
+zap through the open ``rocket`` driver path.  It is intended as the first
+open-driver milestone for probing and completing minimal ``rocket`` jobs.
 
 Common IP boundaries
 --------------------

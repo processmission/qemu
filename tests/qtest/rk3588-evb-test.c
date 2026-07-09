@@ -93,6 +93,10 @@
 #define RK3588_RKNN0_SPI 110
 #define RK3588_RKNN1_SPI 111
 #define RK3588_RKNN2_SPI 112
+#define RK3588_RKNN0_MMU_BASE 0xfdab9000ULL
+#define RK3588_RKNN0_MMU1_BASE 0xfdaba000ULL
+#define RK3588_RKNN1_MMU_BASE 0xfdaca000ULL
+#define RK3588_RKNN2_MMU_BASE 0xfdada000ULL
 #define RK3588_SRST_A_RKNN1 250
 #define RK3588_SRST_H_RKNN1 252
 #define RK3588_SRST_A_RKNN2 254
@@ -236,6 +240,16 @@
 #define RKNN_COMPLETE_DELAY_NS (100 * 1000)
 #define RKNN_PC_VERSION_VALUE 0x00000100
 #define RKNN_PC_VERSION_NUM_VALUE 0x00003588
+#define RK_IOMMU_DTE_ADDR 0x00
+#define RK_IOMMU_STATUS 0x04
+#define RK_IOMMU_COMMAND 0x08
+#define RK_IOMMU_INT_MASK 0x1c
+#define RK_IOMMU_STATUS_RESET 0x80000018
+#define RK_IOMMU_STATUS_PAGING_ENABLED 0x00000001
+#define RK_IOMMU_WINDOW_SIZE 0x100
+#define RK_IOMMU_CMD_ENABLE_PAGING 0
+#define RK_IOMMU_CMD_DISABLE_PAGING 1
+#define RK_IOMMU_CMD_FORCE_RESET 6
 #define RK3588_GPIO0_QOM "/machine/gpio0"
 #define GPIO_PIN0 0x00000001U
 #define GPIO_PIN0_WE 0x00010000U
@@ -323,6 +337,14 @@ static char *rk3588_fdtget(const char *fdtget, const char *dtb,
     return stdout_text;
 }
 
+static void rk3588_assert_fdt_cells_consumed(const char *cells, int consumed)
+{
+    g_assert_cmpint(consumed, >, 0);
+
+    for (const char *p = cells + consumed; *p; p++) {
+        g_assert_true(g_ascii_isspace(*p));
+    }
+}
 static void test_rk3588_machine_creation(void)
 {
     QTestState *qts = rk3588_qtest_start(1);
@@ -875,22 +897,36 @@ static void test_rk3588_rknpu_fdt(void)
 {
     static const struct {
         const char *node;
+        const char *iommu_node;
+        uint64_t iommu_base0;
+        uint64_t iommu_base1;
+        unsigned int iommu_windows;
         unsigned int irq;
         unsigned int reset_a;
         unsigned int reset_h;
     } nodes[] = {
         {
             .node = "/npu@fdab0000",
+            .iommu_node = "/iommu@fdab9000",
+            .iommu_base0 = RK3588_RKNN0_MMU_BASE,
+            .iommu_base1 = RK3588_RKNN0_MMU1_BASE,
+            .iommu_windows = 2,
             .irq = RK3588_RKNN0_SPI,
             .reset_a = RK3588_SRST_A_RKNN0,
             .reset_h = RK3588_SRST_H_RKNN0,
         }, {
             .node = "/npu@fdac0000",
+            .iommu_node = "/iommu@fdaca000",
+            .iommu_base0 = RK3588_RKNN1_MMU_BASE,
+            .iommu_windows = 1,
             .irq = RK3588_RKNN1_SPI,
             .reset_a = RK3588_SRST_A_RKNN1,
             .reset_h = RK3588_SRST_H_RKNN1,
         }, {
             .node = "/npu@fdad0000",
+            .iommu_node = "/iommu@fdada000",
+            .iommu_base0 = RK3588_RKNN2_MMU_BASE,
+            .iommu_windows = 1,
             .irq = RK3588_RKNN2_SPI,
             .reset_a = RK3588_SRST_A_RKNN2,
             .reset_h = RK3588_SRST_H_RKNN2,
@@ -951,8 +987,28 @@ static void test_rk3588_rknpu_fdt(void)
             rk3588_fdtget(fdtget, dtb, "u", nodes[i].node, "resets");
         g_autofree char *interrupts =
             rk3588_fdtget(fdtget, dtb, "u", nodes[i].node, "interrupts");
+        g_autofree char *iommus =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].node, "iommus");
+        g_autofree char *iommu_compatible =
+            rk3588_fdtget(fdtget, dtb, "s", nodes[i].iommu_node,
+                          "compatible");
+        g_autofree char *iommu_phandle =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].iommu_node,
+                          "phandle");
+        g_autofree char *iommu_cells =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].iommu_node,
+                          "#iommu-cells");
+        g_autofree char *iommu_reg =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].iommu_node, "reg");
+        g_autofree char *iommu_interrupts =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].iommu_node,
+                          "interrupts");
         unsigned int phandle_a, reset_a, phandle_h, reset_h;
         unsigned int irq_type, irq, irq_flags, irq_cell;
+        unsigned int npu_iommu_phandle, iommu_node_phandle;
+        unsigned int iommu_cell_count;
+        unsigned int reg[8];
+        int consumed = 0;
 
         g_assert_nonnull(strstr(compatible, "rockchip,rk3588-rknn-core"));
         g_assert_nonnull(strstr(reg_names, "pc"));
@@ -975,6 +1031,47 @@ static void test_rk3588_rknpu_fdt(void)
         g_assert_cmpuint(irq, ==, nodes[i].irq);
         g_assert_cmpuint(irq_flags, ==, 4);
         g_assert_cmpuint(irq_cell, ==, 0);
+
+        g_assert_nonnull(strstr(iommu_compatible, "rockchip,rk3588-iommu"));
+        g_assert_nonnull(strstr(iommu_compatible, "rockchip,rk3568-iommu"));
+        g_assert_cmpint(sscanf(iommus, "%u", &npu_iommu_phandle), ==, 1);
+        g_assert_cmpint(sscanf(iommu_phandle, "%u", &iommu_node_phandle), ==,
+                        1);
+        g_assert_cmpuint(npu_iommu_phandle, ==, iommu_node_phandle);
+        g_assert_cmpint(sscanf(iommu_cells, "%u", &iommu_cell_count), ==, 1);
+        g_assert_cmpuint(iommu_cell_count, ==, 0);
+
+        g_assert_cmpint(sscanf(iommu_interrupts, "%u %u %u %u",
+                               &irq_type, &irq,
+                               &irq_flags, &irq_cell), ==, 4);
+        g_assert_cmpuint(irq_type, ==, 0);
+        g_assert_cmpuint(irq, ==, nodes[i].irq);
+        g_assert_cmpuint(irq_flags, ==, 4);
+        g_assert_cmpuint(irq_cell, ==, 0);
+
+        if (nodes[i].iommu_windows == 2) {
+            g_assert_cmpint(sscanf(iommu_reg,
+                                   "%u %u %u %u %u %u %u %u %n",
+                                   &reg[0], &reg[1], &reg[2], &reg[3],
+                                   &reg[4], &reg[5], &reg[6], &reg[7],
+                                   &consumed), ==,
+                            8);
+            rk3588_assert_fdt_cells_consumed(iommu_reg, consumed);
+            g_assert_cmpuint(reg[4], ==, 0);
+            g_assert_cmpuint(reg[5], ==, nodes[i].iommu_base1);
+            g_assert_cmpuint(reg[6], ==, 0);
+            g_assert_cmpuint(reg[7], ==, RK_IOMMU_WINDOW_SIZE);
+        } else {
+            g_assert_cmpint(sscanf(iommu_reg, "%u %u %u %u %n",
+                                   &reg[0], &reg[1], &reg[2], &reg[3],
+                                   &consumed), ==,
+                            4);
+            rk3588_assert_fdt_cells_consumed(iommu_reg, consumed);
+        }
+        g_assert_cmpuint(reg[0], ==, 0);
+        g_assert_cmpuint(reg[1], ==, nodes[i].iommu_base0);
+        g_assert_cmpuint(reg[2], ==, 0);
+        g_assert_cmpuint(reg[3], ==, RK_IOMMU_WINDOW_SIZE);
     }
 
     unlink(dtb);
@@ -1017,6 +1114,67 @@ static void test_rk3588_rknpu_version_and_cores(void)
                         0xc0de0000 + i);
         g_assert_cmphex(qtest_readl(qts, core_bases[i] + RKNN_POINTER), ==,
                         0x35880000 + i);
+    }
+
+    qtest_quit(qts);
+}
+
+static void rk3588_assert_iommu_reset(QTestState *qts, uint64_t base)
+{
+    g_assert_cmphex(qtest_readl(qts, base + RK_IOMMU_STATUS), ==,
+                    RK_IOMMU_STATUS_RESET);
+    g_assert_cmphex(qtest_readl(qts, base + RK_IOMMU_INT_MASK), ==, 0);
+}
+
+static void test_rk3588_rknpu_iommu_mmio(void)
+{
+    static const uint64_t mmu_bases[] = {
+        RK3588_RKNN0_MMU_BASE,
+        RK3588_RKNN0_MMU1_BASE,
+        RK3588_RKNN1_MMU_BASE,
+        RK3588_RKNN2_MMU_BASE,
+    };
+    QTestState *qts = rk3588_qtest_start_rknpu();
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(mmu_bases); i++) {
+        rk3588_assert_iommu_reset(qts, mmu_bases[i]);
+    }
+
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+                 0x12345000);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_MMU_BASE +
+                                RK_IOMMU_DTE_ADDR), ==, 0x12345000);
+
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_MMU_BASE +
+                                RK_IOMMU_STATUS) &
+                    RK_IOMMU_STATUS_PAGING_ENABLED, ==,
+                    RK_IOMMU_STATUS_PAGING_ENABLED);
+
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_DISABLE_PAGING);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_MMU_BASE +
+                                RK_IOMMU_STATUS) &
+                    RK_IOMMU_STATUS_PAGING_ENABLED, ==, 0);
+
+    qtest_writel(qts, RK3588_RKNN0_MMU1_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_MMU1_BASE +
+                                RK_IOMMU_STATUS) &
+                    RK_IOMMU_STATUS_PAGING_ENABLED, ==,
+                    RK_IOMMU_STATUS_PAGING_ENABLED);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_MMU_BASE +
+                                RK_IOMMU_STATUS) &
+                    RK_IOMMU_STATUS_PAGING_ENABLED, ==, 0);
+
+    qtest_writel(qts, RK3588_RKNN0_MMU1_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_FORCE_RESET);
+    rk3588_assert_iommu_reset(qts, RK3588_RKNN0_MMU1_BASE);
+
+    qtest_system_reset(qts);
+    for (unsigned int i = 0; i < ARRAY_SIZE(mmu_bases); i++) {
+        rk3588_assert_iommu_reset(qts, mmu_bases[i]);
     }
 
     qtest_quit(qts);
@@ -1182,6 +1340,8 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_rknpu_fdt);
     qtest_add_func("/rk3588/rknpu-version-and-cores",
                    test_rk3588_rknpu_version_and_cores);
+    qtest_add_func("/rk3588/rknpu-iommu-mmio",
+                   test_rk3588_rknpu_iommu_mmio);
     qtest_add_func("/rk3588/rknpu-start-complete-irq",
                    test_rk3588_rknpu_start_complete_irq);
     qtest_add_func("/rk3588/rknpu-reset-state",
