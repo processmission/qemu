@@ -8,6 +8,8 @@
 
 #include "qemu/osdep.h"
 #include "libqtest.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 
 #define RK3588_QTEST_RAM_SIZE 0x20000000ULL
 #define RK3588_RAM_BASE 0x00200000ULL
@@ -68,6 +70,15 @@
 #define RK3588_STIMER_BASE 0xfd8c8000ULL
 #define RK3588_GMAC0_BASE 0xfe1b0000ULL
 #define RK3588_GMAC1_BASE 0xfe1c0000ULL
+#define RK3588_RKNN0_PC_BASE 0xfdab0000ULL
+#define RK3588_RKNN0_CNA_BASE 0xfdab1000ULL
+#define RK3588_RKNN0_CORE_BASE 0xfdab3000ULL
+#define RK3588_RKNN1_PC_BASE 0xfdac0000ULL
+#define RK3588_RKNN1_CNA_BASE 0xfdac1000ULL
+#define RK3588_RKNN1_CORE_BASE 0xfdac3000ULL
+#define RK3588_RKNN2_PC_BASE 0xfdad0000ULL
+#define RK3588_RKNN2_CNA_BASE 0xfdad1000ULL
+#define RK3588_RKNN2_CORE_BASE 0xfdad3000ULL
 #define RK3588_SCMI_SHMEM_BASE 0x0010f000ULL
 #define RK3588_SDMMC_BASE 0xfe2c0000ULL
 #define RK3588_SDHCI_BASE 0xfe2e0000ULL
@@ -79,6 +90,16 @@
 #define RK3588_GIC_ITS0_BASE 0xfe640000ULL
 #define RK3588_GIC_ITS1_BASE 0xfe660000ULL
 #define RK3588_GICR_BASE 0xfe680000ULL
+#define RK3588_RKNN0_SPI 110
+#define RK3588_RKNN1_SPI 111
+#define RK3588_RKNN2_SPI 112
+#define RK3588_SRST_A_RKNN1 250
+#define RK3588_SRST_H_RKNN1 252
+#define RK3588_SRST_A_RKNN2 254
+#define RK3588_SRST_H_RKNN2 256
+#define RK3588_SRST_A_RKNN0 272
+#define RK3588_SRST_H_RKNN0 274
+#define RK3588_GIC_QOM "/machine/gic"
 #define RK3588_GPIO0_BASE 0xfd8a0000ULL
 #define RK3588_UART2_BASE 0xfeb50000ULL
 #define RK3588_ZVM_LOW_RAM_BASE 0x68000000ULL
@@ -197,6 +218,24 @@
 #define DW_UART_USR_BUSY 0x1
 #define DW_UART_USR_TFNF 0x2
 #define DW_UART_USR_TFE 0x4
+#define RKNN_PC_VERSION 0x0000
+#define RKNN_PC_VERSION_NUM 0x0004
+#define RKNN_PC_OPERATION_ENABLE 0x0008
+#define RKNN_PC_BASE_ADDRESS 0x0010
+#define RKNN_PC_REGISTER_AMOUNTS 0x0014
+#define RKNN_PC_INTERRUPT_MASK 0x0020
+#define RKNN_PC_INTERRUPT_CLEAR 0x0024
+#define RKNN_PC_INTERRUPT_STATUS 0x0028
+#define RKNN_PC_INTERRUPT_RAW_STATUS 0x002c
+#define RKNN_PC_TASK_CON 0x0030
+#define RKNN_PC_TASK_DMA_BASE_ADDR 0x0034
+#define RKNN_PC_TASK_STATUS 0x003c
+#define RKNN_POINTER 0x0004
+#define RKNN_PC_OPERATION_ENABLE_OP_EN 0x00000001
+#define RKNN_DPU_INTERRUPT_BITS 0x00000300
+#define RKNN_COMPLETE_DELAY_NS (100 * 1000)
+#define RKNN_PC_VERSION_VALUE 0x00000100
+#define RKNN_PC_VERSION_NUM_VALUE 0x00003588
 #define RK3588_GPIO0_QOM "/machine/gpio0"
 #define GPIO_PIN0 0x00000001U
 #define GPIO_PIN0_WE 0x00010000U
@@ -214,6 +253,74 @@ static QTestState *rk3588_qtest_start_zvm_ram(void)
 {
     return qtest_init("-machine " RK3588_EVB_MACHINE
                       ",zvm-ram=on -smp 1 -m 512M");
+}
+
+static QTestState *rk3588_qtest_start_rknpu(void)
+{
+    return qtest_init("-machine " RK3588_EVB_MACHINE
+                      ",rknpu=on -smp 1 -m 512M");
+}
+
+static bool rk3588_qom_has_machine_child(QTestState *qts, const char *name)
+{
+    QDict *rsp;
+    QList *children;
+    QListEntry *entry;
+    bool found = false;
+
+    rsp = qtest_qmp(qts,
+                    "{ 'execute': 'qom-list',"
+                    "  'arguments': { 'path': '/machine' } }");
+    g_assert(qdict_haskey(rsp, "return"));
+    children = qdict_get_qlist(rsp, "return");
+
+    QLIST_FOREACH_ENTRY(children, entry) {
+        QDict *child = qobject_to(QDict, qlist_entry_obj(entry));
+
+        if (!g_strcmp0(qdict_get_str(child, "name"), name)) {
+            found = true;
+            break;
+        }
+    }
+
+    qobject_unref(rsp);
+    return found;
+}
+
+static char *rk3588_create_dummy_kernel(void)
+{
+    g_autoptr(GError) error = NULL;
+    char *path = NULL;
+    int fd;
+
+    fd = g_file_open_tmp("rk3588-kernel-XXXXXX", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(write(fd, "\177ELF", 4), ==, 4);
+    close(fd);
+
+    return path;
+}
+
+static char *rk3588_fdtget(const char *fdtget, const char *dtb,
+                           const char *type, const char *node,
+                           const char *property)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+    char *stdout_text = NULL;
+    int status;
+    char *argv[] = {
+        (char *)fdtget, (char *)"-t", (char *)type, (char *)dtb,
+        (char *)node, (char *)property, NULL,
+    };
+
+    g_spawn_sync(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL,
+                 &stdout_text, &stderr_text, &status, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(status, ==, 0);
+
+    return stdout_text;
 }
 
 static void test_rk3588_machine_creation(void)
@@ -753,6 +860,248 @@ static void test_rk3588_gpio_bank(void)
     qtest_quit(qts);
 }
 
+static void test_rk3588_rknpu_disabled_by_default(void)
+{
+    QTestState *qts = rk3588_qtest_start(1);
+
+    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn0"));
+    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn1"));
+    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn2"));
+
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_fdt(void)
+{
+    static const struct {
+        const char *node;
+        unsigned int irq;
+        unsigned int reset_a;
+        unsigned int reset_h;
+    } nodes[] = {
+        {
+            .node = "/npu@fdab0000",
+            .irq = RK3588_RKNN0_SPI,
+            .reset_a = RK3588_SRST_A_RKNN0,
+            .reset_h = RK3588_SRST_H_RKNN0,
+        }, {
+            .node = "/npu@fdac0000",
+            .irq = RK3588_RKNN1_SPI,
+            .reset_a = RK3588_SRST_A_RKNN1,
+            .reset_h = RK3588_SRST_H_RKNN1,
+        }, {
+            .node = "/npu@fdad0000",
+            .irq = RK3588_RKNN2_SPI,
+            .reset_a = RK3588_SRST_A_RKNN2,
+            .reset_h = RK3588_SRST_H_RKNN2,
+        },
+    };
+    const char *qemu = g_getenv("QTEST_QEMU_BINARY");
+    g_autofree char *fdtget = g_find_program_in_path("fdtget");
+    g_autofree char *kernel = NULL;
+    g_autofree char *dtb = NULL;
+    g_autofree char *machine = NULL;
+    g_autoptr(GError) error = NULL;
+    int fd;
+    int status;
+    char *argv[12];
+
+    if (!qemu) {
+        g_test_skip("QTEST_QEMU_BINARY not set");
+        return;
+    }
+    if (!fdtget) {
+        g_test_skip("fdtget not available");
+        return;
+    }
+
+    kernel = rk3588_create_dummy_kernel();
+    fd = g_file_open_tmp("rk3588-dtb-XXXXXX", &dtb, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+
+    machine = g_strdup_printf(RK3588_EVB_MACHINE ",rknpu=on,dumpdtb=%s", dtb);
+    argv[0] = (char *)qemu;
+    argv[1] = (char *)"-machine";
+    argv[2] = machine;
+    argv[3] = (char *)"-smp";
+    argv[4] = (char *)"1";
+    argv[5] = (char *)"-m";
+    argv[6] = (char *)"512M";
+    argv[7] = (char *)"-kernel";
+    argv[8] = kernel;
+    argv[9] = (char *)"-display";
+    argv[10] = (char *)"none";
+    argv[11] = NULL;
+
+    g_spawn_sync(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL,
+                 &status, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(status, ==, 0);
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(nodes); i++) {
+        g_autofree char *compatible =
+            rk3588_fdtget(fdtget, dtb, "s", nodes[i].node, "compatible");
+        g_autofree char *reg_names =
+            rk3588_fdtget(fdtget, dtb, "s", nodes[i].node, "reg-names");
+        g_autofree char *reset_names =
+            rk3588_fdtget(fdtget, dtb, "s", nodes[i].node, "reset-names");
+        g_autofree char *resets =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].node, "resets");
+        g_autofree char *interrupts =
+            rk3588_fdtget(fdtget, dtb, "u", nodes[i].node, "interrupts");
+        unsigned int phandle_a, reset_a, phandle_h, reset_h;
+        unsigned int irq_type, irq, irq_flags, irq_cell;
+
+        g_assert_nonnull(strstr(compatible, "rockchip,rk3588-rknn-core"));
+        g_assert_nonnull(strstr(reg_names, "pc"));
+        g_assert_nonnull(strstr(reg_names, "cna"));
+        g_assert_nonnull(strstr(reg_names, "core"));
+        g_assert_nonnull(strstr(reset_names, "srst_a"));
+        g_assert_nonnull(strstr(reset_names, "srst_h"));
+
+        g_assert_cmpint(sscanf(resets, "%u %u %u %u",
+                               &phandle_a, &reset_a,
+                               &phandle_h, &reset_h), ==, 4);
+        g_assert_cmpuint(phandle_a, ==, phandle_h);
+        g_assert_cmpuint(reset_a, ==, nodes[i].reset_a);
+        g_assert_cmpuint(reset_h, ==, nodes[i].reset_h);
+
+        g_assert_cmpint(sscanf(interrupts, "%u %u %u %u",
+                               &irq_type, &irq,
+                               &irq_flags, &irq_cell), ==, 4);
+        g_assert_cmpuint(irq_type, ==, 0);
+        g_assert_cmpuint(irq, ==, nodes[i].irq);
+        g_assert_cmpuint(irq_flags, ==, 4);
+        g_assert_cmpuint(irq_cell, ==, 0);
+    }
+
+    unlink(dtb);
+    unlink(kernel);
+}
+
+static void test_rk3588_rknpu_version_and_cores(void)
+{
+    static const uint64_t pc_bases[] = {
+        RK3588_RKNN0_PC_BASE,
+        RK3588_RKNN1_PC_BASE,
+        RK3588_RKNN2_PC_BASE,
+    };
+    static const uint64_t cna_bases[] = {
+        RK3588_RKNN0_CNA_BASE,
+        RK3588_RKNN1_CNA_BASE,
+        RK3588_RKNN2_CNA_BASE,
+    };
+    static const uint64_t core_bases[] = {
+        RK3588_RKNN0_CORE_BASE,
+        RK3588_RKNN1_CORE_BASE,
+        RK3588_RKNN2_CORE_BASE,
+    };
+    QTestState *qts = rk3588_qtest_start_rknpu();
+
+    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn0"));
+    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn1"));
+    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn2"));
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(pc_bases); i++) {
+        g_assert_cmphex(qtest_readl(qts, pc_bases[i] + RKNN_PC_VERSION), ==,
+                        RKNN_PC_VERSION_VALUE);
+        g_assert_cmphex(qtest_readl(qts,
+                                    pc_bases[i] + RKNN_PC_VERSION_NUM), ==,
+                        RKNN_PC_VERSION_NUM_VALUE);
+
+        qtest_writel(qts, cna_bases[i] + RKNN_POINTER, 0xc0de0000 + i);
+        qtest_writel(qts, core_bases[i] + RKNN_POINTER, 0x35880000 + i);
+        g_assert_cmphex(qtest_readl(qts, cna_bases[i] + RKNN_POINTER), ==,
+                        0xc0de0000 + i);
+        g_assert_cmphex(qtest_readl(qts, core_bases[i] + RKNN_POINTER), ==,
+                        0x35880000 + i);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_start_complete_irq(void)
+{
+    QTestState *qts = rk3588_qtest_start_rknpu();
+
+    qtest_irq_intercept_in(qts, RK3588_GIC_QOM);
+
+    qtest_writel(qts, RK3588_RKNN0_CNA_BASE + RKNN_POINTER, 0x00100000);
+    qtest_writel(qts, RK3588_RKNN0_CORE_BASE + RKNN_POINTER, 0x00101000);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
+                 0x00200000);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS, 7);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_INTERRUPT_MASK,
+                 RKNN_DPU_INTERRUPT_BITS);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_INTERRUPT_CLEAR,
+                 RKNN_DPU_INTERRUPT_BITS);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_TASK_CON, 0x00010001);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_TASK_DMA_BASE_ADDR, 0);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_OPERATION_ENABLE,
+                 RKNN_PC_OPERATION_ENABLE_OP_EN);
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_STATUS), ==, 0);
+    g_assert_false(qtest_get_irq(qts, RK3588_RKNN0_SPI));
+
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==,
+                    RKNN_DPU_INTERRUPT_BITS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_STATUS), ==,
+                    RKNN_DPU_INTERRUPT_BITS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_OPERATION_ENABLE) &
+                    RKNN_PC_OPERATION_ENABLE_OP_EN, ==, 0);
+    g_assert_true(qtest_get_irq(qts, RK3588_RKNN0_SPI));
+
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_INTERRUPT_CLEAR,
+                 RKNN_DPU_INTERRUPT_BITS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_STATUS), ==, 0);
+    g_assert_false(qtest_get_irq(qts, RK3588_RKNN0_SPI));
+
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_reset_state(void)
+{
+    QTestState *qts = rk3588_qtest_start_rknpu();
+
+    qtest_writel(qts, RK3588_RKNN0_CNA_BASE + RKNN_POINTER, 0xffffffff);
+    qtest_writel(qts, RK3588_RKNN0_CORE_BASE + RKNN_POINTER, 0xffffffff);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_INTERRUPT_MASK,
+                 RKNN_DPU_INTERRUPT_BITS);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_OPERATION_ENABLE,
+                 RKNN_PC_OPERATION_ENABLE_OP_EN);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==,
+                    RKNN_DPU_INTERRUPT_BITS);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_VERSION), ==,
+                    RKNN_PC_VERSION_VALUE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_MASK), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_CNA_BASE +
+                                RKNN_POINTER), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_CORE_BASE +
+                                RKNN_POINTER), ==, 0);
+
+    qtest_quit(qts);
+}
+
 static void test_rk3588_smp_creation(void)
 {
     QTestState *qts = rk3588_qtest_start(8);
@@ -810,6 +1159,10 @@ int main(int argc, char **argv)
         g_test_skip("arm-gicv3-its device not available");
         return 0;
     }
+    if (!qtest_has_device("rockchip.rk3588-rknn-core")) {
+        g_test_skip("rockchip.rk3588-rknn-core device not available");
+        return 0;
+    }
 
     qtest_add_func("/rk3588-evb/machine-creation",
                    test_rk3588_machine_creation);
@@ -824,6 +1177,15 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588-evb/its-lpi", test_rk3588_its_lpi);
     qtest_add_func("/rk3588-evb/pcie", test_rk3588_pcie);
     qtest_add_func("/rk3588-evb/gpio-bank", test_rk3588_gpio_bank);
+    qtest_add_func("/rk3588/rknpu-disabled-by-default",
+                   test_rk3588_rknpu_disabled_by_default);
+    qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_rknpu_fdt);
+    qtest_add_func("/rk3588/rknpu-version-and-cores",
+                   test_rk3588_rknpu_version_and_cores);
+    qtest_add_func("/rk3588/rknpu-start-complete-irq",
+                   test_rk3588_rknpu_start_complete_irq);
+    qtest_add_func("/rk3588/rknpu-reset-state",
+                   test_rk3588_rknpu_reset_state);
     qtest_add_func("/rk3588-evb/zvm-ram", test_rk3588_zvm_ram);
 
     return g_test_run();
