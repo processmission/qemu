@@ -2625,6 +2625,7 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         s->rknn_mmu[i] = qdev_new(TYPE_ROCKCHIP_IOMMU);
         qdev_prop_set_uint32(s->rknn_mmu[i], "num-mmu",
                              iommu_memmap1[i] >= 0 ? 2 : 1);
+        qdev_prop_set_uint32(s->rknn_mmu[i], "core-index", i);
         object_property_add_child(OBJECT(s), name, OBJECT(s->rknn_mmu[i]));
         sbd = SYS_BUS_DEVICE(s->rknn_mmu[i]);
         sysbus_realize(sbd, &error_fatal);

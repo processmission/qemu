@@ -17,6 +17,7 @@
 #include "hw/misc/rockchip_rknn.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "trace.h"
 
 REG32(PC_VERSION, 0x0000)
 REG32(PC_VERSION_NUM, 0x0004)
@@ -42,10 +43,18 @@ REG32(CORE_S_POINTER, 0x0004)
 
 static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 {
+    bool old_level = s->irq_level;
+
     s->pc_regs[R_PC_INTERRUPT_STATUS] =
         s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] &
         s->pc_regs[R_PC_INTERRUPT_MASK];
     s->irq_level = s->pc_regs[R_PC_INTERRUPT_STATUS] != 0;
+    if (s->irq_level != old_level) {
+        trace_rockchip_rknn_irq(s->core_index, s->irq_level,
+                                s->pc_regs[R_PC_INTERRUPT_RAW_STATUS],
+                                s->pc_regs[R_PC_INTERRUPT_MASK],
+                                s->pc_regs[R_PC_INTERRUPT_STATUS]);
+    }
     qemu_set_irq(s->irq, s->irq_level);
 }
 
@@ -58,12 +67,22 @@ static void rockchip_rknn_complete(void *opaque)
     s->pc_regs[R_PC_TASK_STATUS] = 1;
     s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= ROCKCHIP_RKNN_DPU_INTERRUPT_BITS;
     rockchip_rknn_update_irq(s);
+    trace_rockchip_rknn_complete(s->core_index,
+                                 s->pc_regs[R_PC_INTERRUPT_RAW_STATUS],
+                                 s->pc_regs[R_PC_INTERRUPT_STATUS]);
 }
 
 static void rockchip_rknn_start(RockchipRKNNCoreState *s)
 {
     s->busy = true;
     s->pc_regs[R_PC_TASK_STATUS] = 0;
+    trace_rockchip_rknn_start(s->core_index,
+                              s->pc_regs[R_PC_BASE_ADDRESS],
+                              s->pc_regs[R_PC_REGISTER_AMOUNTS],
+                              s->pc_regs[R_PC_TASK_CON],
+                              s->pc_regs[R_PC_TASK_DMA_BASE_ADDR],
+                              s->cna_regs[R_CNA_S_POINTER],
+                              s->core_regs[R_CORE_S_POINTER]);
     timer_mod(&s->complete_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               ROCKCHIP_RKNN_COMPLETE_DELAY_NS);

@@ -511,3 +511,14 @@ iommu_testdev_dma_read(uint64_t gva, uint32_t len) "gva=0x%" PRIx64 " len=%u"
 iommu_testdev_dma_verify(uint32_t expected, uint32_t actual) "expected=0x%x actual=0x%x"
 iommu_testdev_dma_result(uint32_t result) "DMA completed result=0x%x"
 iommu_testdev_dma_armed(bool armed) "armed=%d"
+
+# rockchip_rknn.c
+rockchip_rknn_start(uint32_t core, uint32_t base, uint32_t amounts, uint32_t task_con, uint32_t task_dma, uint32_t cna_pointer, uint32_t core_pointer) "core=%u base=0x%08x amounts=%u task_con=0x%08x task_dma=0x%08x cna=0x%08x core_ptr=0x%08x"
+rockchip_rknn_complete(uint32_t core, uint32_t raw_status, uint32_t status) "core=%u raw=0x%08x status=0x%08x"
+rockchip_rknn_irq(uint32_t core, bool level, uint32_t raw_status, uint32_t mask, uint32_t status) "core=%u level=%d raw=0x%08x mask=0x%08x status=0x%08x"
+
+# rockchip_iommu.c
+rockchip_iommu_dte_addr(uint32_t core, uint32_t bank, uint64_t dte_addr) "core=%u bank=%u dte_addr=0x%08" PRIx64
+rockchip_iommu_command(uint32_t core, uint32_t bank, uint64_t command) "core=%u bank=%u command=%" PRIu64
+rockchip_iommu_zap_one_line(uint32_t core, uint32_t bank, uint64_t iova) "core=%u bank=%u iova=0x%08" PRIx64
+rockchip_iommu_int_mask(uint32_t core, uint32_t bank, uint64_t mask, uint32_t status) "core=%u bank=%u mask=0x%08" PRIx64 " status=0x%08x"
