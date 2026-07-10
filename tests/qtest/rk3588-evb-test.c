@@ -243,6 +243,41 @@
 #define RKNN_COMPLETE_DELAY_NS (100 * 1000)
 #define RKNN_PC_VERSION_VALUE 0x00000100
 #define RKNN_PC_VERSION_NUM_VALUE 0x00003588
+#define RKNN_REGCMD_TARGET_CNA 0x0201ULL
+#define RKNN_REGCMD_TARGET_CORE 0x0801ULL
+#define RKNN_REGCMD_TARGET_DPU 0x1001ULL
+#define RKNN_REGCMD_TARGET_DPU_RDMA 0x2001ULL
+#define RKNN_REGCMD(target, value, reg) \
+    (((target) << 48) | ((uint64_t)(uint32_t)(value) << 16) | (reg))
+#define RKNN_CNA_DATA_SIZE0 0x1020ULL
+#define RKNN_CNA_DATA_SIZE1 0x1024ULL
+#define RKNN_CNA_FEATURE_DATA_ADDR 0x1070ULL
+#define RKNN_CNA_DMA_CON1 0x107cULL
+#define RKNN_CNA_DMA_CON2 0x1080ULL
+#define RKNN_CNA_FC_DATA_SIZE0 0x1084ULL
+#define RKNN_CNA_FC_DATA_SIZE1 0x1088ULL
+#define RKNN_CNA_DCOMP_ADDR0 0x1110ULL
+#define RKNN_CORE_MISC_CFG 0x3010ULL
+#define RKNN_CORE_DATAOUT_SIZE_0 0x3014ULL
+#define RKNN_CORE_DATAOUT_SIZE_1 0x3018ULL
+#define RKNN_CORE_CLIP_TRUNCATE 0x301cULL
+#define RKNN_DPU_FEATURE_MODE_CFG 0x400cULL
+#define RKNN_DPU_DATA_FORMAT 0x4010ULL
+#define RKNN_DPU_DST_BASE_ADDR 0x4020ULL
+#define RKNN_DPU_DST_SURF_STRIDE 0x4024ULL
+#define RKNN_DPU_DATA_CUBE_WIDTH 0x4030ULL
+#define RKNN_DPU_DATA_CUBE_HEIGHT 0x4034ULL
+#define RKNN_DPU_DATA_CUBE_CHANNEL 0x403cULL
+#define RKNN_DPU_RDMA_DATA_CUBE_WIDTH 0x500cULL
+#define RKNN_DPU_RDMA_DATA_CUBE_HEIGHT 0x5010ULL
+#define RKNN_DPU_RDMA_DATA_CUBE_CHANNEL 0x5014ULL
+#define RKNN_DPU_RDMA_SRC_BASE_ADDR 0x5018ULL
+#define RKNN_DPU_RDMA_BS_BASE_ADDR 0x5020ULL
+#define RKNN_DPU_RDMA_BN_BASE_ADDR 0x502cULL
+#define RKNN_DPU_RDMA_ERDMA_CFG 0x5034ULL
+#define RKNN_DPU_RDMA_EW_BASE_ADDR 0x5038ULL
+#define RKNN_DPU_RDMA_EW_SURF_STRIDE 0x5040ULL
+#define RKNN_DPU_RDMA_FEATURE_MODE_CFG 0x5044ULL
 #define RK_IOMMU_DTE_ADDR 0x00
 #define RK_IOMMU_STATUS 0x04
 #define RK_IOMMU_COMMAND 0x08
@@ -1344,6 +1379,102 @@ static void test_rk3588_rknpu_regcmd_sample_window_trace(void)
                             "value=0x00000013"));
 }
 
+static void test_rk3588_rknpu_regcmd_summary_trace(void)
+{
+    static const uint64_t regcmd[] = {
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x01230045,
+                    RKNN_CNA_DATA_SIZE0),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x00560789,
+                    RKNN_CNA_DATA_SIZE1),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x12345000,
+                    RKNN_CNA_FEATURE_DATA_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x00001230,
+                    RKNN_CNA_DMA_CON1),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x00004560,
+                    RKNN_CNA_DMA_CON2),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x00330022,
+                    RKNN_CNA_FC_DATA_SIZE0),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x00000044,
+                    RKNN_CNA_FC_DATA_SIZE1),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CNA, 0x23456000,
+                    RKNN_CNA_DCOMP_ADDR0),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CORE, 0x00000003,
+                    RKNN_CORE_MISC_CFG),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CORE, 0x00550066,
+                    RKNN_CORE_DATAOUT_SIZE_0),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CORE, 0x00000077,
+                    RKNN_CORE_DATAOUT_SIZE_1),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_CORE, 0x0000001f,
+                    RKNN_CORE_CLIP_TRUNCATE),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00001234,
+                    RKNN_DPU_FEATURE_MODE_CFG),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00005678,
+                    RKNN_DPU_DATA_FORMAT),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x34567000,
+                    RKNN_DPU_DST_BASE_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00001230,
+                    RKNN_DPU_DST_SURF_STRIDE),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00000010,
+                    RKNN_DPU_DATA_CUBE_WIDTH),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00000020,
+                    RKNN_DPU_DATA_CUBE_HEIGHT),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU, 0x00310030,
+                    RKNN_DPU_DATA_CUBE_CHANNEL),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00000011,
+                    RKNN_DPU_RDMA_DATA_CUBE_WIDTH),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00000022,
+                    RKNN_DPU_RDMA_DATA_CUBE_HEIGHT),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00000033,
+                    RKNN_DPU_RDMA_DATA_CUBE_CHANNEL),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x45678000,
+                    RKNN_DPU_RDMA_SRC_BASE_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x56789000,
+                    RKNN_DPU_RDMA_BS_BASE_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x6789a000,
+                    RKNN_DPU_RDMA_BN_BASE_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00002468,
+                    RKNN_DPU_RDMA_ERDMA_CFG),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x789ab000,
+                    RKNN_DPU_RDMA_EW_BASE_ADDR),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00004560,
+                    RKNN_DPU_RDMA_EW_SURF_STRIDE),
+        RKNN_REGCMD(RKNN_REGCMD_TARGET_DPU_RDMA, 0x00013579,
+                    RKNN_DPU_RDMA_FEATURE_MODE_CFG),
+    };
+    g_autofree char *contents = NULL;
+
+    contents = rk3588_run_rknpu_trace_regcmd(regcmd, ARRAY_SIZE(regcmd));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_cna_io core=0 "
+                            "bank=0 "
+                            "feature_addr=0x12345000 input=291x69x1929 "
+                            "line_stride=4656 "
+                            "surf_stride=17760 dcomp_addr=0x23456000"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_cna_fc core=0 "
+                            "bank=0 fc=51x34x68"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_core core=0 bank=0 "
+                            "misc_cfg=0x00000003 out=102x85x119 "
+                            "clip_truncate=31"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_dpu core=0 bank=0 "
+                            "dst_addr=0x34567000 surf_stride=291 "
+                            "cube=16x32x48 orig_channels=49 "
+                            "feature_mode=0x00001234 "
+                            "data_format=0x00005678"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_rdma_io core=0 "
+                            "bank=0 "
+                            "src_addr=0x45678000 bs_addr=0x56789000 "
+                            "bn_addr=0x6789a000 ew_addr=0x789ab000"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_summary_rdma_shape core=0 "
+                            "bank=0 cube=17x34x51 ew_surf_stride=1110 "
+                            "feature_mode=0x00013579 "
+                            "erdma_cfg=0x00002468"));
+}
+
 static void test_rk3588_rknpu_regcmd_raw_unknown_trace(void)
 {
     static const uint64_t regcmd[] = {
@@ -1500,6 +1631,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_regcmd_ingest_trace);
     qtest_add_func("/rk3588/rknpu-regcmd-sample-window-trace",
                    test_rk3588_rknpu_regcmd_sample_window_trace);
+    qtest_add_func("/rk3588/rknpu-regcmd-summary-trace",
+                   test_rk3588_rknpu_regcmd_summary_trace);
     qtest_add_func("/rk3588/rknpu-regcmd-raw-unknown-trace",
                    test_rk3588_rknpu_regcmd_raw_unknown_trace);
     qtest_add_func("/rk3588/rknpu-reset-state",
