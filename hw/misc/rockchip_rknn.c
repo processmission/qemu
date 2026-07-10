@@ -68,6 +68,25 @@ typedef struct RockchipRKNNRegcmdStats {
     uint32_t unknown;
 } RockchipRKNNRegcmdStats;
 
+static const char *rockchip_rknn_regcmd_unhandled_kind(uint64_t raw,
+                                                       uint32_t target)
+{
+    if (raw == 0) {
+        return "zero";
+    }
+    if (target == 0) {
+        return "target-zero";
+    }
+    if (target == 0x0041) {
+        return "pre-op-enable";
+    }
+    if (target == 0x0081) {
+        return "block-op-enable";
+    }
+
+    return NULL;
+}
+
 static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 {
     bool old_level = s->irq_level;
@@ -173,6 +192,8 @@ static void rockchip_rknn_ingest_regcmd(RockchipRKNNCoreState *s,
     RockchipRKNNRegcmdStats stats = { 0 };
     bool trace_shadow_write =
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE);
+    bool trace_unhandled =
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_UNHANDLED);
 
     rockchip_rknn_clear_regcmd_shadow(s);
 
@@ -182,15 +203,22 @@ static void rockchip_rknn_ingest_regcmd(RockchipRKNNCoreState *s,
         uint32_t value = (raw >> 16) & 0xffffffff;
         uint32_t target = (raw >> 48) & 0xffff;
         const char *domain = NULL;
+        const char *kind;
         uint32_t rel = 0;
 
         if (!rockchip_rknn_regcmd_shadow_write(s, target, reg, value,
                                                &domain, &rel)) {
-            if (raw == 0 || target == 0 ||
-                target == 0x0041 || target == 0x0081) {
+            kind = rockchip_rknn_regcmd_unhandled_kind(raw, target);
+            if (kind) {
                 stats.raw++;
             } else {
+                kind = "unknown";
                 stats.unknown++;
+            }
+            if (trace_unhandled) {
+                trace_rockchip_rknn_regcmd_unhandled(s->core_index, bank, i,
+                                                     kind, target, reg, value,
+                                                     raw);
             }
             continue;
         }
@@ -235,7 +263,8 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
     bool trace_words = trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD);
     bool trace_ingest =
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
-        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE);
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_UNHANDLED);
     unsigned int bank = 0;
     const char *reason = NULL;
     hwaddr phys = 0;
@@ -313,6 +342,7 @@ static void rockchip_rknn_start(RockchipRKNNCoreState *s)
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_UNHANDLED) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE_ERROR)) {
         rockchip_rknn_trace_regcmd_sample(s);
     }

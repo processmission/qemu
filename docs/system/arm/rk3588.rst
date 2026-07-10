@@ -73,11 +73,11 @@ IRQs, or claim compatibility with the vendor ``rknpu2``/RKNN Runtime stack.  It
 includes a minimal Rockchip IOMMU control-plane stub so Linux can probe, attach,
 map, and zap through the open ``rocket`` driver path.  For debugging, trace
 events can walk the RK3588 IOMMU v2 page tables, sample submitted ``rocket``
-register command buffers, decode bounded command prefixes, and update internal
-non-migrated shadow register state for trace analysis.  That sampled command
-stream is still not executed and does not affect guest-visible completion
-behavior.  The model is intended as the first open-driver milestone for probing
-and completing minimal ``rocket`` jobs.
+register command buffers, decode bounded command prefixes, report raw or
+unknown command words, and update internal non-migrated shadow register state
+for trace analysis.  That sampled command stream is still not executed and does
+not affect guest-visible completion behavior.  The model is intended as the
+first open-driver milestone for probing and completing minimal ``rocket`` jobs.
 
 Common IP boundaries
 --------------------
