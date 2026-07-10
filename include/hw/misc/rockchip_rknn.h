@@ -18,6 +18,8 @@
 #define TYPE_ROCKCHIP_RKNN_CORE "rockchip.rk3588-rknn-core"
 OBJECT_DECLARE_SIMPLE_TYPE(RockchipRKNNCoreState, ROCKCHIP_RKNN_CORE)
 
+typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
+
 #define ROCKCHIP_RKNN_WINDOW_SIZE 0x1000
 #define ROCKCHIP_RKNN_PC_R_MAX (0x40 / 4)
 #define ROCKCHIP_RKNN_CNA_R_MAX (0x8 / 4)
@@ -50,6 +52,9 @@ struct RockchipRKNNCoreState {
     uint32_t regcmd_shadow_dpu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_ppu[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_ppu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    RockchipRKNNPipelineTask *pending_pipeline;
+    bool pending_pipeline_valid;
+    bool functional;
     bool busy;
     bool irq_level;
 };

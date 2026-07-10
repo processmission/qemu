@@ -2,9 +2,9 @@
  * Rockchip IOMMU
  *
  * This is a minimal RK3588-oriented model for Linux rockchip-iommu driver
- * bring-up. It accepts the control path used for domain attach/map/zap, but
- * does not translate DMA or generate IOMMU faults/IRQs. Current RKNN
- * fake-completion does not perform DMA.
+ * bring-up. It accepts the control path used for domain attach/map/zap and
+ * exposes bounded v2 page-table translation to the RKNN functional backend.
+ * It does not generate IOMMU faults/IRQs.
  *
  * Copyright (c) 2026 Process Mission
  *
@@ -54,6 +54,8 @@ enum {
 
 #define ROCKCHIP_IOMMU_DTE_VALID BIT(0)
 #define ROCKCHIP_IOMMU_PTE_VALID BIT(0)
+#define ROCKCHIP_IOMMU_PTE_READABLE BIT(1)
+#define ROCKCHIP_IOMMU_PTE_WRITABLE BIT(2)
 #define ROCKCHIP_IOMMU_V2_DESC_ADDRESS_MASK 0xfffffff0U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_MASK1 0x00000f00U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_MASK2 0x000000f0U
@@ -106,6 +108,7 @@ static hwaddr rockchip_iommu_v2_desc_address(uint32_t desc)
 
 static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
                                              unsigned int i, uint32_t iova,
+                                             bool check_access, bool write,
                                              hwaddr *phys,
                                              const char **reason)
 {
@@ -115,6 +118,12 @@ static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
     uint32_t page_offset = extract32(iova, 0, 12);
     uint32_t dte;
     uint32_t pte;
+
+    if (check_access && !(s->regs[i][R_STATUS] &
+                          R_STATUS_PAGING_ENABLED_MASK)) {
+        *reason = "paging-disabled";
+        return false;
+    }
 
     if (!dt_addr) {
         *reason = "no-dte-addr";
@@ -143,6 +152,13 @@ static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
         return false;
     }
 
+    if (check_access &&
+        ((write && !(pte & ROCKCHIP_IOMMU_PTE_WRITABLE)) ||
+         (!write && !(pte & ROCKCHIP_IOMMU_PTE_READABLE)))) {
+        *reason = write ? "pte-not-writable" : "pte-not-readable";
+        return false;
+    }
+
     *phys = rockchip_iommu_v2_desc_address(pte) + page_offset;
     *reason = "ok";
     return true;
@@ -160,7 +176,31 @@ bool rockchip_iommu_iova_to_phys(RockchipIOMMUState *s, uint32_t iova,
     }
 
     for (unsigned int i = 0; i < num_mmu; i++) {
-        if (rockchip_iommu_bank_iova_to_phys(s, i, iova, phys, reason)) {
+        if (rockchip_iommu_bank_iova_to_phys(s, i, iova, false, false,
+                                             phys, reason)) {
+            *bank = i;
+            return true;
+        }
+    }
+
+    *bank = 0;
+    return false;
+}
+
+bool rockchip_iommu_translate(RockchipIOMMUState *s, uint32_t iova,
+                              bool write, hwaddr *phys,
+                              unsigned int *bank, const char **reason)
+{
+    unsigned int num_mmu = MIN(s->num_mmu, ROCKCHIP_IOMMU_MAX_MMU);
+
+    if (!num_mmu) {
+        *reason = "no-mmu-bank";
+        return false;
+    }
+
+    for (unsigned int i = 0; i < num_mmu; i++) {
+        if (rockchip_iommu_bank_iova_to_phys(s, i, iova, true, write,
+                                             phys, reason)) {
             *bank = i;
             return true;
         }

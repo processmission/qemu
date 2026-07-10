@@ -1,0 +1,17 @@
+RK3588 RKNPU INT8 Matmul Golden Vector
+=======================================
+
+This is a byte-for-byte hardware capture for C[1,32] = A[1,64] * B[32,64].
+It was produced by TestOS on an Orange Pi 5 Plus (RK3588) on 2026-07-11.
+The source capture completed with the NPU DPU interrupt and reported zero
+mismatches against its logical reference.
+
+Files and SHA256:
+
+* regcmd.bin: fa207b02c53962c5b904a6d610ce3d8d8140cf6daaacb08bfe67a704a7812f43
+* input-npu-layout-i8.bin: 382f8bcaff07882ea1555755e07ede60b0f45f0580674f72d55d0e0e28da7d59
+* weights-npu-layout-i8.bin: 6be1f993686a24cde8c929b7a6633551bbe4bd5ae114c5c609d029497b4b03c4
+* output-npu-layout-i32.bin: 66c8a1c4124a3304a2854c1592d4c35fc9a8d4646e43232b5f1042de64b6d964
+
+The qtest consumes these files directly.  It does not synthesize tensor
+layout or expected output using the model's layout formulas.

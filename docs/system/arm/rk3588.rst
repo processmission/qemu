@@ -67,17 +67,54 @@ The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
 machine source refers to GIC Shared Peripheral Interrupt numbers.
 
 The optional RKNPU model is not a full neural-network accelerator emulator. It
-does not execute RKNN command streams, produce inference outputs, model the
-Rockchip IOMMU as a guest-visible DMA translation engine, generate IOMMU fault
-IRQs, or claim compatibility with the vendor ``rknpu2``/RKNN Runtime stack.  It
-includes a minimal Rockchip IOMMU control-plane stub so Linux can probe, attach,
-map, and zap through the open ``rocket`` driver path.  For debugging, trace
-events can walk the RK3588 IOMMU v2 page tables, sample submitted ``rocket``
-register command buffers, decode bounded command prefixes, report raw or
-unknown command words, and update internal non-migrated shadow register state
-for trace analysis.  That sampled command stream is still not executed and does
-not affect guest-visible completion behavior.  The model is intended as the
-first open-driver milestone for probing and completing minimal ``rocket`` jobs.
+does not generally execute RKNN command streams, model IOMMU faults, generate
+IOMMU fault IRQs, or claim compatibility with the vendor ``rknpu2``/RKNN
+Runtime stack.  It includes a minimal Rockchip IOMMU control-plane stub so Linux
+can probe, attach, map, and zap through the open ``rocket`` driver path.  For
+debugging, trace events can walk the RK3588 IOMMU v2 page tables, sample
+submitted ``rocket`` register command buffers, decode bounded command prefixes,
+report raw or unknown command words, and update internal non-migrated shadow
+register state for trace analysis.
+
+An experimental functional mode is available with
+``-machine ...,rknpu=on,rknpu-functional=on``.  It routes PC-fetched register
+commands into banked CNA, CORE, DPU, DPU-RDMA, PPU, and PPU-RDMA register files,
+then decodes an immutable hardware-pipeline task.  The first validated backend
+profile is a signed INT8 1x1 CNA/MAC pipeline with signed INT32 DPU output.
+Independent hardware scans establish the current functional coverage range:
+``M <= 64``, and storage/output dimensions of ``K=32,64,96,128`` and
+``N=32,64,96``.  This is a temporary capture-coverage gate, not a global
+hardware shape restriction or guest-visible rejection path.  The mode uses the
+modeled RK3588 IOMMU page tables, including paging state and PTE read/write
+permissions, to read commands, input, and weights and writes the NPU-layout
+output before raising
+the normal completion interrupt.  Unsupported configurations and mapping
+failures retain fake-completion behavior without writing tensor output.  The
+property is off by default; when it is off the model performs no functional
+DMA reads or writes.  Other pipeline configurations, PPU execution, multi-task
+scheduling, and cycle timing remain unimplemented.
+
+The decoder keeps software-visible valid and storage dimensions separate.
+For this INT8 profile, CNA ``DATA_SIZE1`` supplies valid and storage input
+channels, CNA ``WEIGHT_SIZE2`` supplies weight kernels, and DPU
+``DATA_CUBE_CHANNEL`` supplies original and cube output channels.  CORE and
+DPU WDMA channel fields are checked against the cube size.  Hardware-level
+shape checks use the documented INT8 storage-channel granularity of 8.  The
+captured profile also checks the documented ``CNA_CONV_CON2`` kernel-group,
+feature-grain, CSC enable, and command-FIFO-reset fields against the values
+used by the validated command stream; this is capture matching, not a general
+kernel-group or feature-grain rule.  The current aligned INT32 executor uses a
+four-channel storage atom; other DPU
+output layouts remain under hardware investigation.  Partial valid/storage or
+valid/cube submissions are decoded but remain outside the tensor-DMA capture
+gate until their compact DPU writeback layout is modeled.  The executor's
+16-channel feature layout and tuple gate are implementation limits, not
+hardware requirements.  In particular, hardware captures with ``M=2``,
+``M=3``, and ``M=5`` prove that M need not be a multiple of four.
+The qtest suite directly replays and byte-compares the smallest captured
+``M=1,K=64,N=32`` vector in
+``tests/data/rk3588-rknpu-matmul-int8-m1-k64-n32``; its provenance and input,
+weight, command, and output checksums are recorded alongside the files.
 
 Common IP boundaries
 --------------------

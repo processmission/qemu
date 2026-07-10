@@ -34,5 +34,8 @@ struct RockchipIOMMUState {
 bool rockchip_iommu_iova_to_phys(RockchipIOMMUState *s, uint32_t iova,
                                  hwaddr *phys, unsigned int *bank,
                                  const char **reason);
+bool rockchip_iommu_translate(RockchipIOMMUState *s, uint32_t iova,
+                              bool write, hwaddr *phys,
+                              unsigned int *bank, const char **reason);
 
 #endif /* HW_MISC_ROCKCHIP_IOMMU_H */
