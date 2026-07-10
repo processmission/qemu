@@ -17,6 +17,7 @@
 #include "hw/misc/rockchip_iommu.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "trace.h"
 
 REG32(DTE_ADDR, 0x00)
 REG32(STATUS, 0x04)
@@ -50,7 +51,7 @@ enum {
     (R_STATUS_IDLE_MASK | R_STATUS_REPLAY_BUFFER_EMPTY_MASK | \
      R_STATUS_STALL_NOT_ACTIVE_MASK)
 
-static unsigned int rockchip_iommu_index(RegisterInfo *reg)
+static unsigned int rockchip_iommu_bank(RegisterInfo *reg)
 {
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
 
@@ -70,11 +71,21 @@ static void rockchip_iommu_update_irq(RockchipIOMMUState *s, unsigned int i)
                                s->regs[i][R_INT_MASK];
 }
 
+static void rockchip_iommu_dte_addr_postw(RegisterInfo *reg, uint64_t val)
+{
+    RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
+
+    trace_rockchip_iommu_dte_addr(s->core_index, rockchip_iommu_bank(reg),
+                                  val);
+}
+
 static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
 {
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
-    unsigned int i = rockchip_iommu_index(reg);
+    unsigned int i = rockchip_iommu_bank(reg);
     uint32_t status = s->regs[i][R_STATUS];
+
+    trace_rockchip_iommu_command(s->core_index, i, val);
 
     switch (val) {
     case RK_MMU_CMD_ENABLE_PAGING:
@@ -119,7 +130,7 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
 static uint64_t rockchip_iommu_int_clear_prew(RegisterInfo *reg, uint64_t val)
 {
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
-    unsigned int i = rockchip_iommu_index(reg);
+    unsigned int i = rockchip_iommu_bank(reg);
 
     s->regs[i][R_INT_RAWSTAT] &= ~((uint32_t)val);
     rockchip_iommu_update_irq(s, i);
@@ -129,12 +140,24 @@ static uint64_t rockchip_iommu_int_clear_prew(RegisterInfo *reg, uint64_t val)
 static void rockchip_iommu_int_mask_postw(RegisterInfo *reg, uint64_t val)
 {
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
+    unsigned int i = rockchip_iommu_bank(reg);
 
-    rockchip_iommu_update_irq(s, rockchip_iommu_index(reg));
+    rockchip_iommu_update_irq(s, i);
+    trace_rockchip_iommu_int_mask(s->core_index, i, val,
+                                  s->regs[i][R_INT_STATUS]);
+}
+
+static void rockchip_iommu_zap_one_line_postw(RegisterInfo *reg, uint64_t val)
+{
+    RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
+
+    trace_rockchip_iommu_zap_one_line(s->core_index, rockchip_iommu_bank(reg),
+                                      val);
 }
 
 static const RegisterAccessInfo rockchip_iommu_regs_info[] = {
     {   .name = "DTE_ADDR", .addr = A_DTE_ADDR,
+        .post_write = rockchip_iommu_dte_addr_postw,
     }, { .name = "STATUS", .addr = A_STATUS,
         .reset = ROCKCHIP_IOMMU_STATUS_RESET,
         .ro = UINT32_MAX,
@@ -143,6 +166,7 @@ static const RegisterAccessInfo rockchip_iommu_regs_info[] = {
     }, { .name = "PAGE_FAULT_ADDR", .addr = A_PAGE_FAULT_ADDR,
         .ro = UINT32_MAX,
     }, { .name = "ZAP_ONE_LINE", .addr = A_ZAP_ONE_LINE,
+        .post_write = rockchip_iommu_zap_one_line_postw,
     }, { .name = "INT_RAWSTAT", .addr = A_INT_RAWSTAT,
         .ro = UINT32_MAX,
     }, { .name = "INT_CLEAR", .addr = A_INT_CLEAR,
@@ -206,12 +230,14 @@ static const VMStateDescription vmstate_rockchip_iommu = {
                                ROCKCHIP_IOMMU_MAX_MMU,
                                ROCKCHIP_IOMMU_R_MAX),
         VMSTATE_UINT32(num_mmu, RockchipIOMMUState),
+        VMSTATE_UINT32(core_index, RockchipIOMMUState),
         VMSTATE_END_OF_LIST()
     },
 };
 
 static const Property rockchip_iommu_properties[] = {
     DEFINE_PROP_UINT32("num-mmu", RockchipIOMMUState, num_mmu, 1),
+    DEFINE_PROP_UINT32("core-index", RockchipIOMMUState, core_index, 0),
 };
 
 static void rockchip_iommu_class_init(ObjectClass *klass, const void *data)
