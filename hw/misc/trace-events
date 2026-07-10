@@ -514,6 +514,8 @@ iommu_testdev_dma_armed(bool armed) "armed=%d"
 
 # rockchip_rknn.c
 rockchip_rknn_start(uint32_t core, uint32_t base, uint32_t amounts, uint32_t task_con, uint32_t task_dma, uint32_t cna_pointer, uint32_t core_pointer) "core=%u base=0x%08x amounts=%u task_con=0x%08x task_dma=0x%08x cna=0x%08x core_ptr=0x%08x"
+rockchip_rknn_regcmd_sample(uint32_t core, uint32_t bank, uint32_t iova, uint64_t phys, uint32_t command_bytes, uint32_t sample_bytes, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3) "core=%u bank=%u iova=0x%08x phys=0x%08" PRIx64 " command_bytes=%u sample_bytes=%u words=0x%08x,0x%08x,0x%08x,0x%08x"
+rockchip_rknn_regcmd_sample_error(uint32_t core, uint32_t iova, const char *reason) "core=%u iova=0x%08x reason=%s"
 rockchip_rknn_complete(uint32_t core, uint32_t raw_status, uint32_t status) "core=%u raw=0x%08x status=0x%08x"
 rockchip_rknn_irq(uint32_t core, bool level, uint32_t raw_status, uint32_t mask, uint32_t status) "core=%u level=%d raw=0x%08x mask=0x%08x status=0x%08x"
 

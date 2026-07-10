@@ -17,6 +17,8 @@
 #include "hw/misc/rockchip_rknn.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "system/dma.h"
+#include "trace/control.h"
 #include "trace.h"
 
 REG32(PC_VERSION, 0x0000)
@@ -40,6 +42,9 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_PC_VERSION_NUM 0x00003588
 #define ROCKCHIP_RKNN_DPU_INTERRUPT_BITS 0x00000300
 #define ROCKCHIP_RKNN_COMPLETE_DELAY_NS (100 * 1000)
+#define ROCKCHIP_RKNN_REGCMD_SAMPLE_MAX 16
+#define ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK 0xfffffff0U
+#define ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK 0x0000ffffU
 
 static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 {
@@ -72,6 +77,47 @@ static void rockchip_rknn_complete(void *opaque)
                                  s->pc_regs[R_PC_INTERRUPT_STATUS]);
 }
 
+static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
+{
+    uint32_t iova = s->pc_regs[R_PC_BASE_ADDRESS] &
+                    ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
+    uint32_t amounts = s->pc_regs[R_PC_REGISTER_AMOUNTS] &
+                       ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK;
+    uint32_t command_bytes = (amounts + 1) * sizeof(uint64_t);
+    uint32_t sample_bytes;
+    unsigned int bank = 0;
+    const char *reason = NULL;
+    hwaddr phys = 0;
+    uint8_t sample[ROCKCHIP_RKNN_REGCMD_SAMPLE_MAX] = { 0 };
+
+    if (!s->iommu) {
+        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
+                                                "no-iommu-link");
+        return;
+    }
+
+    if (!rockchip_iommu_iova_to_phys(s->iommu, iova, &phys, &bank, &reason)) {
+        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova, reason);
+        return;
+    }
+
+    sample_bytes = MIN(command_bytes, ROCKCHIP_RKNN_REGCMD_SAMPLE_MAX);
+    sample_bytes = MIN(sample_bytes, 0x1000 - (uint32_t)(phys & 0xfff));
+
+    if (dma_memory_read(&address_space_memory, phys, sample, sample_bytes,
+                        MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
+                                                "sample-read-failed");
+        return;
+    }
+
+    trace_rockchip_rknn_regcmd_sample(s->core_index, bank, iova, phys,
+                                      command_bytes, sample_bytes,
+                                      ldl_le_p(sample), ldl_le_p(sample + 4),
+                                      ldl_le_p(sample + 8),
+                                      ldl_le_p(sample + 12));
+}
+
 static void rockchip_rknn_start(RockchipRKNNCoreState *s)
 {
     s->busy = true;
@@ -83,6 +129,10 @@ static void rockchip_rknn_start(RockchipRKNNCoreState *s)
                               s->pc_regs[R_PC_TASK_DMA_BASE_ADDR],
                               s->cna_regs[R_CNA_S_POINTER],
                               s->core_regs[R_CORE_S_POINTER]);
+    if (trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE_ERROR)) {
+        rockchip_rknn_trace_regcmd_sample(s);
+    }
     timer_mod(&s->complete_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               ROCKCHIP_RKNN_COMPLETE_DELAY_NS);
@@ -250,6 +300,8 @@ static const VMStateDescription vmstate_rockchip_rknn = {
 };
 
 static const Property rockchip_rknn_properties[] = {
+    DEFINE_PROP_LINK("iommu", RockchipRKNNCoreState, iommu,
+                     TYPE_ROCKCHIP_IOMMU, RockchipIOMMUState *),
     DEFINE_PROP_UINT32("core-index", RockchipRKNNCoreState, core_index, 0),
 };
 

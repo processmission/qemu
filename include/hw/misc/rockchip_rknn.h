@@ -11,6 +11,7 @@
 
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
+#include "hw/misc/rockchip_iommu.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
 
@@ -39,6 +40,7 @@ struct RockchipRKNNCoreState {
 
     QEMUTimer complete_timer;
     qemu_irq irq;
+    RockchipIOMMUState *iommu;
     uint32_t core_index;
     bool busy;
     bool irq_level;
