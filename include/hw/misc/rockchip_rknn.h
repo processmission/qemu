@@ -48,6 +48,8 @@ struct RockchipRKNNCoreState {
     uint32_t regcmd_shadow_core[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_dpu[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_dpu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t regcmd_shadow_ppu[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t regcmd_shadow_ppu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     bool busy;
     bool irq_level;
 };
