@@ -22,6 +22,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(RockchipRKNNCoreState, ROCKCHIP_RKNN_CORE)
 #define ROCKCHIP_RKNN_PC_R_MAX (0x40 / 4)
 #define ROCKCHIP_RKNN_CNA_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_CORE_R_MAX (0x8 / 4)
+#define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 
 struct RockchipRKNNCoreState {
     SysBusDevice parent_obj;
@@ -42,6 +43,11 @@ struct RockchipRKNNCoreState {
     qemu_irq irq;
     RockchipIOMMUState *iommu;
     uint32_t core_index;
+    uint32_t regcmd_shadow_pc[ROCKCHIP_RKNN_PC_R_MAX];
+    uint32_t regcmd_shadow_cna[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t regcmd_shadow_core[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t regcmd_shadow_dpu[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t regcmd_shadow_dpu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     bool busy;
     bool irq_level;
 };

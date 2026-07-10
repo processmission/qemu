@@ -48,6 +48,25 @@ REG32(CORE_S_POINTER, 0x0004)
     (ROCKCHIP_RKNN_REGCMD_SAMPLE_COMMANDS_MAX * sizeof(uint64_t))
 #define ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK 0xfffffff0U
 #define ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK 0x0000ffffU
+#define ROCKCHIP_RKNN_REGCMD_TARGET_PC 0x0101
+#define ROCKCHIP_RKNN_REGCMD_TARGET_CNA 0x0201
+#define ROCKCHIP_RKNN_REGCMD_TARGET_CORE 0x0801
+#define ROCKCHIP_RKNN_REGCMD_TARGET_DPU 0x1001
+#define ROCKCHIP_RKNN_REGCMD_TARGET_DPU_RDMA 0x2001
+#define ROCKCHIP_RKNN_REGCMD_CNA_BASE 0x1000
+#define ROCKCHIP_RKNN_REGCMD_CORE_BASE 0x3000
+#define ROCKCHIP_RKNN_REGCMD_DPU_BASE 0x4000
+#define ROCKCHIP_RKNN_REGCMD_DPU_RDMA_BASE 0x5000
+
+typedef struct RockchipRKNNRegcmdStats {
+    uint32_t pc;
+    uint32_t cna;
+    uint32_t core;
+    uint32_t dpu;
+    uint32_t dpu_rdma;
+    uint32_t raw;
+    uint32_t unknown;
+} RockchipRKNNRegcmdStats;
 
 static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 {
@@ -80,6 +99,127 @@ static void rockchip_rknn_complete(void *opaque)
                                  s->pc_regs[R_PC_INTERRUPT_STATUS]);
 }
 
+static void rockchip_rknn_clear_regcmd_shadow(RockchipRKNNCoreState *s)
+{
+    memset(s->regcmd_shadow_pc, 0, sizeof(s->regcmd_shadow_pc));
+    memset(s->regcmd_shadow_cna, 0, sizeof(s->regcmd_shadow_cna));
+    memset(s->regcmd_shadow_core, 0, sizeof(s->regcmd_shadow_core));
+    memset(s->regcmd_shadow_dpu, 0, sizeof(s->regcmd_shadow_dpu));
+    memset(s->regcmd_shadow_dpu_rdma, 0, sizeof(s->regcmd_shadow_dpu_rdma));
+}
+
+static bool rockchip_rknn_shadow_write_domain(uint32_t reg, uint32_t value,
+                                              uint32_t base,
+                                              uint32_t shadow[],
+                                              const char **domain,
+                                              const char *domain_name,
+                                              uint32_t *rel)
+{
+    if (reg < base || reg >= base + ROCKCHIP_RKNN_WINDOW_SIZE) {
+        return false;
+    }
+
+    *rel = reg - base;
+    shadow[*rel / sizeof(uint32_t)] = value;
+    *domain = domain_name;
+    return true;
+}
+
+static bool rockchip_rknn_regcmd_shadow_write(RockchipRKNNCoreState *s,
+                                              uint32_t target, uint32_t reg,
+                                              uint32_t value,
+                                              const char **domain,
+                                              uint32_t *rel)
+{
+    *domain = NULL;
+    *rel = 0;
+
+    switch (target) {
+    case ROCKCHIP_RKNN_REGCMD_TARGET_PC:
+        if (reg >= sizeof(s->regcmd_shadow_pc)) {
+            return false;
+        }
+        s->regcmd_shadow_pc[reg / sizeof(uint32_t)] = value;
+        *domain = "PC";
+        *rel = reg;
+        return true;
+    case ROCKCHIP_RKNN_REGCMD_TARGET_CNA:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_CNA_BASE,
+            s->regcmd_shadow_cna, domain, "CNA", rel);
+    case ROCKCHIP_RKNN_REGCMD_TARGET_CORE:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_CORE_BASE,
+            s->regcmd_shadow_core, domain, "CORE", rel);
+    case ROCKCHIP_RKNN_REGCMD_TARGET_DPU:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_DPU_BASE,
+            s->regcmd_shadow_dpu, domain, "DPU", rel);
+    case ROCKCHIP_RKNN_REGCMD_TARGET_DPU_RDMA:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_DPU_RDMA_BASE,
+            s->regcmd_shadow_dpu_rdma, domain, "DPU_RDMA", rel);
+    default:
+        return false;
+    }
+}
+
+static void rockchip_rknn_ingest_regcmd(RockchipRKNNCoreState *s,
+                                        unsigned int bank,
+                                        const uint8_t *sample,
+                                        uint32_t sample_commands,
+                                        uint32_t command_count)
+{
+    RockchipRKNNRegcmdStats stats = { 0 };
+    bool trace_shadow_write =
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE);
+
+    rockchip_rknn_clear_regcmd_shadow(s);
+
+    for (uint32_t i = 0; i < sample_commands; i++) {
+        uint64_t raw = ldq_le_p(sample + i * sizeof(uint64_t));
+        uint32_t reg = raw & 0xffff;
+        uint32_t value = (raw >> 16) & 0xffffffff;
+        uint32_t target = (raw >> 48) & 0xffff;
+        const char *domain = NULL;
+        uint32_t rel = 0;
+
+        if (!rockchip_rknn_regcmd_shadow_write(s, target, reg, value,
+                                               &domain, &rel)) {
+            if (raw == 0 || target == 0 ||
+                target == 0x0041 || target == 0x0081) {
+                stats.raw++;
+            } else {
+                stats.unknown++;
+            }
+            continue;
+        }
+
+        if (trace_shadow_write) {
+            trace_rockchip_rknn_regcmd_shadow_write(s->core_index, bank, i,
+                                                    domain, rel, value);
+        }
+
+        if (g_str_equal(domain, "PC")) {
+            stats.pc++;
+        } else if (g_str_equal(domain, "CNA")) {
+            stats.cna++;
+        } else if (g_str_equal(domain, "CORE")) {
+            stats.core++;
+        } else if (g_str_equal(domain, "DPU")) {
+            stats.dpu++;
+        } else if (g_str_equal(domain, "DPU_RDMA")) {
+            stats.dpu_rdma++;
+        }
+    }
+
+    stats.raw += command_count - sample_commands;
+    trace_rockchip_rknn_regcmd_ingest(s->core_index, bank, command_count,
+                                      sample_commands, stats.pc, stats.cna,
+                                      stats.core, stats.dpu + stats.dpu_rdma,
+                                      stats.raw, stats.unknown);
+}
+
 static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
 {
     uint32_t iova = s->pc_regs[R_PC_BASE_ADDRESS] &
@@ -93,6 +233,9 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
     bool trace_sample =
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE);
     bool trace_words = trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD);
+    bool trace_ingest =
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE);
     unsigned int bank = 0;
     const char *reason = NULL;
     hwaddr phys = 0;
@@ -109,15 +252,16 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
         return;
     }
 
-    if (!trace_sample && !trace_words) {
+    if (!trace_sample && !trace_words && !trace_ingest) {
         return;
     }
 
-    sample_bytes = MIN(command_bytes, trace_words ?
+    sample_bytes = MIN(command_bytes, trace_words || trace_ingest ?
                        ROCKCHIP_RKNN_REGCMD_SAMPLE_BYTES_MAX :
                        ROCKCHIP_RKNN_REGCMD_SUMMARY_BYTES);
     sample_bytes = MIN(sample_bytes, 0x1000 - (uint32_t)(phys & 0xfff));
-    sample_commands = trace_words ? sample_bytes / sizeof(uint64_t) : 0;
+    sample_commands = trace_words || trace_ingest ?
+                      sample_bytes / sizeof(uint64_t) : 0;
 
     if (dma_memory_read(&address_space_memory, phys, sample, sample_bytes,
                         MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
@@ -147,6 +291,11 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
         trace_rockchip_rknn_regcmd_word(s->core_index, bank, i, target, reg,
                                         value, raw);
     }
+
+    if (trace_ingest) {
+        rockchip_rknn_ingest_regcmd(s, bank, sample, sample_commands,
+                                    command_count);
+    }
 }
 
 static void rockchip_rknn_start(RockchipRKNNCoreState *s)
@@ -162,6 +311,8 @@ static void rockchip_rknn_start(RockchipRKNNCoreState *s)
                               s->core_regs[R_CORE_S_POINTER]);
     if (trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
+        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE_ERROR)) {
         rockchip_rknn_trace_regcmd_sample(s);
     }
@@ -257,6 +408,7 @@ static void rockchip_rknn_reset(DeviceState *dev)
 
     timer_del(&s->complete_timer);
     s->busy = false;
+    rockchip_rknn_clear_regcmd_shadow(s);
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->pc_regs_info); i++) {
         register_reset(&s->pc_regs_info[i]);
