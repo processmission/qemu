@@ -97,6 +97,9 @@
 #define RK3588_RKNN0_MMU1_BASE 0xfdaba000ULL
 #define RK3588_RKNN1_MMU_BASE 0xfdaca000ULL
 #define RK3588_RKNN2_MMU_BASE 0xfdada000ULL
+#define RK3588_RKNN_TEST_DTE_ADDR (RK3588_RAM_BASE + 0x10000)
+#define RK3588_RKNN_TEST_PTE_ADDR (RK3588_RAM_BASE + 0x11000)
+#define RK3588_RKNN_TEST_REGCMD_ADDR (RK3588_RAM_BASE + 0x12000)
 #define RK3588_SRST_A_RKNN1 250
 #define RK3588_SRST_H_RKNN1 252
 #define RK3588_SRST_A_RKNN2 254
@@ -273,6 +276,61 @@ static QTestState *rk3588_qtest_start_rknpu(void)
 {
     return qtest_init("-machine " RK3588_EVB_MACHINE
                       ",rknpu=on -smp 1 -m 512M");
+}
+
+static QTestState *rk3588_qtest_start_rknpu_trace(const char *trace)
+{
+    return qtest_initf("-machine " RK3588_EVB_MACHINE
+                       ",rknpu=on -smp 1 -m 512M "
+                       "-trace enable=rockchip_rknn_regcmd_*,file=%s",
+                       trace);
+}
+
+static char *rk3588_run_rknpu_trace_regcmd(const uint64_t *regcmd,
+                                           size_t regcmd_count)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *trace = NULL;
+    char *contents = NULL;
+    QTestState *qts;
+    gsize len;
+    int fd;
+
+    g_assert_cmpuint(regcmd_count, >, 0);
+
+    fd = g_file_open_tmp("rk3588-rknn-trace-XXXXXX", &trace, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+
+    qts = rk3588_qtest_start_rknpu_trace(trace);
+
+    qtest_writel(qts, RK3588_RKNN_TEST_DTE_ADDR,
+                 RK3588_RKNN_TEST_PTE_ADDR | 1);
+    qtest_writel(qts, RK3588_RKNN_TEST_PTE_ADDR,
+                 RK3588_RKNN_TEST_REGCMD_ADDR | 1);
+    for (size_t i = 0; i < regcmd_count; i++) {
+        qtest_writeq(qts, RK3588_RKNN_TEST_REGCMD_ADDR +
+                          i * sizeof(uint64_t), regcmd[i]);
+    }
+
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+                 RK3588_RKNN_TEST_DTE_ADDR);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS, 0);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 regcmd_count - 1);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_OPERATION_ENABLE,
+                 RKNN_PC_OPERATION_ENABLE_OP_EN);
+
+    qtest_quit(qts);
+
+    g_assert_true(g_file_get_contents(trace, &contents, &len, &error));
+    g_assert_no_error(error);
+    unlink(trace);
+
+    return contents;
 }
 
 static bool rk3588_qom_has_machine_child(QTestState *qts, const char *name)
@@ -1229,6 +1287,80 @@ static void test_rk3588_rknpu_start_complete_irq(void)
     qtest_quit(qts);
 }
 
+static void test_rk3588_rknpu_regcmd_ingest_trace(void)
+{
+    static const uint64_t regcmd[] = {
+        /* CNA.CBUF_CON0 */
+        0x0201000000001040ULL,
+        /* CNA.DCOMP_REGNUM */
+        0x0201000000001104ULL,
+        /* CNA.DCOMP_CTRL */
+        0x0201000000001100ULL,
+        /* CNA.CONV_CON1 */
+        0x020100000000100cULL,
+        /* DPU.S_POINTER */
+        0x10010000000e4004ULL,
+        /* DPU_RDMA.RDMA_S_POINTER */
+        0x20010000000e5004ULL,
+        /* CNA.CONV_CON2 */
+        0x0201000000341010ULL,
+        /* CNA.CONV_CON3 */
+        0x0201000000001014ULL,
+    };
+    g_autofree char *contents = NULL;
+
+    contents = rk3588_run_rknpu_trace_regcmd(regcmd, ARRAY_SIZE(regcmd));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_ingest core=0 bank=0 "
+                            "commands=8 ingested=8 pc=0 cna=6 "
+                            "core_writes=0 dpu_writes=2 raw=0 unknown=0"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_shadow_write core=0 "
+                            "bank=0 index=4 domain=DPU rel=0x004 "
+                            "value=0x0000000e"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_shadow_write core=0 "
+                            "bank=0 index=5 domain=DPU_RDMA rel=0x004 "
+                            "value=0x0000000e"));
+}
+
+static void test_rk3588_rknpu_regcmd_raw_unknown_trace(void)
+{
+    static const uint64_t regcmd[] = {
+        0x0000000000000000ULL,
+        0x0041000000000000ULL,
+        0x0081000000010008ULL,
+        0x9999123456787777ULL,
+    };
+    g_autofree char *contents = NULL;
+
+    contents = rk3588_run_rknpu_trace_regcmd(regcmd, ARRAY_SIZE(regcmd));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_ingest core=0 bank=0 "
+                            "commands=4 ingested=4 pc=0 cna=0 "
+                            "core_writes=0 dpu_writes=0 raw=3 unknown=1"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_unhandled core=0 "
+                            "bank=0 index=0 kind=zero target=0x0000 "
+                            "reg=0x0000 value=0x00000000 "
+                            "raw=0x0000000000000000"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_unhandled core=0 "
+                            "bank=0 index=1 kind=pre-op-enable "
+                            "target=0x0041 reg=0x0000 value=0x00000000 "
+                            "raw=0x0041000000000000"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_unhandled core=0 "
+                            "bank=0 index=2 kind=block-op-enable "
+                            "target=0x0081 reg=0x0008 value=0x00000001 "
+                            "raw=0x0081000000010008"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_unhandled core=0 "
+                            "bank=0 index=3 kind=unknown target=0x9999 "
+                            "reg=0x7777 value=0x12345678 "
+                            "raw=0x9999123456787777"));
+}
+
 static void test_rk3588_rknpu_reset_state(void)
 {
     QTestState *qts = rk3588_qtest_start_rknpu();
@@ -1344,6 +1476,10 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_iommu_mmio);
     qtest_add_func("/rk3588/rknpu-start-complete-irq",
                    test_rk3588_rknpu_start_complete_irq);
+    qtest_add_func("/rk3588/rknpu-regcmd-ingest-trace",
+                   test_rk3588_rknpu_regcmd_ingest_trace);
+    qtest_add_func("/rk3588/rknpu-regcmd-raw-unknown-trace",
+                   test_rk3588_rknpu_regcmd_raw_unknown_trace);
     qtest_add_func("/rk3588/rknpu-reset-state",
                    test_rk3588_rknpu_reset_state);
     qtest_add_func("/rk3588-evb/zvm-ram", test_rk3588_zvm_ram);
