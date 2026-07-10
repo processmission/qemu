@@ -53,10 +53,14 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_REGCMD_TARGET_CORE 0x0801
 #define ROCKCHIP_RKNN_REGCMD_TARGET_DPU 0x1001
 #define ROCKCHIP_RKNN_REGCMD_TARGET_DPU_RDMA 0x2001
+#define ROCKCHIP_RKNN_REGCMD_TARGET_PPU 0x4001
+#define ROCKCHIP_RKNN_REGCMD_TARGET_PPU_RDMA 0x8001
 #define ROCKCHIP_RKNN_REGCMD_CNA_BASE 0x1000
 #define ROCKCHIP_RKNN_REGCMD_CORE_BASE 0x3000
 #define ROCKCHIP_RKNN_REGCMD_DPU_BASE 0x4000
 #define ROCKCHIP_RKNN_REGCMD_DPU_RDMA_BASE 0x5000
+#define ROCKCHIP_RKNN_REGCMD_PPU_BASE 0x6000
+#define ROCKCHIP_RKNN_REGCMD_PPU_RDMA_BASE 0x7000
 #define ROCKCHIP_RKNN_CNA_DATA_SIZE0 0x020
 #define ROCKCHIP_RKNN_CNA_DATA_SIZE1 0x024
 #define ROCKCHIP_RKNN_CNA_FEATURE_DATA_ADDR 0x070
@@ -93,6 +97,8 @@ typedef struct RockchipRKNNRegcmdStats {
     uint32_t core;
     uint32_t dpu;
     uint32_t dpu_rdma;
+    uint32_t ppu;
+    uint32_t ppu_rdma;
     uint32_t raw;
     uint32_t unknown;
 } RockchipRKNNRegcmdStats;
@@ -154,6 +160,9 @@ static void rockchip_rknn_clear_regcmd_shadow(RockchipRKNNCoreState *s)
     memset(s->regcmd_shadow_core, 0, sizeof(s->regcmd_shadow_core));
     memset(s->regcmd_shadow_dpu, 0, sizeof(s->regcmd_shadow_dpu));
     memset(s->regcmd_shadow_dpu_rdma, 0, sizeof(s->regcmd_shadow_dpu_rdma));
+    memset(s->regcmd_shadow_ppu, 0, sizeof(s->regcmd_shadow_ppu));
+    memset(s->regcmd_shadow_ppu_rdma, 0,
+           sizeof(s->regcmd_shadow_ppu_rdma));
 }
 
 static uint32_t rockchip_rknn_regcmd_shadow_read(const uint32_t shadow[],
@@ -175,6 +184,7 @@ static bool rockchip_rknn_regcmd_trace_summary_enabled(void)
 static bool rockchip_rknn_regcmd_trace_ingest_enabled(void)
 {
     return trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
+           trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST_PPU) ||
            trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE) ||
            trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_UNHANDLED) ||
            rockchip_rknn_regcmd_trace_summary_enabled();
@@ -231,6 +241,14 @@ static bool rockchip_rknn_regcmd_shadow_write(RockchipRKNNCoreState *s,
         return rockchip_rknn_shadow_write_domain(
             reg, value, ROCKCHIP_RKNN_REGCMD_DPU_RDMA_BASE,
             s->regcmd_shadow_dpu_rdma, domain, "DPU_RDMA", rel);
+    case ROCKCHIP_RKNN_REGCMD_TARGET_PPU:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_PPU_BASE,
+            s->regcmd_shadow_ppu, domain, "PPU", rel);
+    case ROCKCHIP_RKNN_REGCMD_TARGET_PPU_RDMA:
+        return rockchip_rknn_shadow_write_domain(
+            reg, value, ROCKCHIP_RKNN_REGCMD_PPU_RDMA_BASE,
+            s->regcmd_shadow_ppu_rdma, domain, "PPU_RDMA", rel);
     default:
         return false;
     }
@@ -410,6 +428,10 @@ static void rockchip_rknn_ingest_regcmd(RockchipRKNNCoreState *s,
             stats.dpu++;
         } else if (g_str_equal(domain, "DPU_RDMA")) {
             stats.dpu_rdma++;
+        } else if (g_str_equal(domain, "PPU")) {
+            stats.ppu++;
+        } else if (g_str_equal(domain, "PPU_RDMA")) {
+            stats.ppu_rdma++;
         }
     }
 
@@ -418,6 +440,8 @@ static void rockchip_rknn_ingest_regcmd(RockchipRKNNCoreState *s,
                                       sample_commands, stats.pc, stats.cna,
                                       stats.core, stats.dpu + stats.dpu_rdma,
                                       stats.raw, stats.unknown);
+    trace_rockchip_rknn_regcmd_ingest_ppu(s->core_index, bank, stats.ppu,
+                                          stats.ppu_rdma);
     rockchip_rknn_trace_regcmd_summary(s, bank);
 }
 
@@ -510,10 +534,7 @@ static void rockchip_rknn_start(RockchipRKNNCoreState *s)
                               s->core_regs[R_CORE_S_POINTER]);
     if (trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE) ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD) ||
-        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_INGEST) ||
-        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SHADOW_WRITE) ||
-        trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_UNHANDLED) ||
-        rockchip_rknn_regcmd_trace_summary_enabled() ||
+        rockchip_rknn_regcmd_trace_ingest_enabled() ||
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE_ERROR)) {
         rockchip_rknn_trace_regcmd_sample(s);
     }
