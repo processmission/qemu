@@ -1324,6 +1324,26 @@ static void test_rk3588_rknpu_regcmd_ingest_trace(void)
                             "value=0x0000000e"));
 }
 
+static void test_rk3588_rknpu_regcmd_sample_window_trace(void)
+{
+    uint64_t regcmd[20];
+    g_autofree char *contents = NULL;
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(regcmd); i++) {
+        regcmd[i] = (0x0201ULL << 48) | ((uint64_t)i << 16) | 0x1040;
+    }
+
+    contents = rk3588_run_rknpu_trace_regcmd(regcmd, ARRAY_SIZE(regcmd));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_ingest core=0 bank=0 "
+                            "commands=20 ingested=20 pc=0 cna=20 "
+                            "core_writes=0 dpu_writes=0 raw=0 unknown=0"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_shadow_write core=0 "
+                            "bank=0 index=19 domain=CNA rel=0x040 "
+                            "value=0x00000013"));
+}
+
 static void test_rk3588_rknpu_regcmd_raw_unknown_trace(void)
 {
     static const uint64_t regcmd[] = {
@@ -1478,6 +1498,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_start_complete_irq);
     qtest_add_func("/rk3588/rknpu-regcmd-ingest-trace",
                    test_rk3588_rknpu_regcmd_ingest_trace);
+    qtest_add_func("/rk3588/rknpu-regcmd-sample-window-trace",
+                   test_rk3588_rknpu_regcmd_sample_window_trace);
     qtest_add_func("/rk3588/rknpu-regcmd-raw-unknown-trace",
                    test_rk3588_rknpu_regcmd_raw_unknown_trace);
     qtest_add_func("/rk3588/rknpu-reset-state",
