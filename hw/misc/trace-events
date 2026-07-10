@@ -520,6 +520,12 @@ rockchip_rknn_regcmd_ingest(uint32_t core, uint32_t bank, uint32_t command_count
 rockchip_rknn_regcmd_shadow_write(uint32_t core, uint32_t bank, uint32_t index, const char *domain, uint32_t rel, uint32_t value) "core=%u bank=%u index=%u domain=%s rel=0x%03x value=0x%08x"
 rockchip_rknn_regcmd_unhandled(uint32_t core, uint32_t bank, uint32_t index, const char *kind, uint32_t target, uint32_t reg, uint32_t value, uint64_t raw) "core=%u bank=%u index=%u kind=%s target=0x%04x reg=0x%04x value=0x%08x raw=0x%016" PRIx64
 rockchip_rknn_regcmd_sample_error(uint32_t core, uint32_t iova, const char *reason) "core=%u iova=0x%08x reason=%s"
+rockchip_rknn_regcmd_summary_cna_io(uint32_t core, uint32_t bank, uint32_t feature_addr, uint32_t input_width, uint32_t input_height, uint32_t input_channels, uint32_t line_stride, uint32_t surf_stride, uint32_t dcomp_addr) "core=%u bank=%u feature_addr=0x%08x input=%ux%ux%u line_stride=%u surf_stride=%u dcomp_addr=0x%08x"
+rockchip_rknn_regcmd_summary_cna_fc(uint32_t core, uint32_t bank, uint32_t fc_width, uint32_t fc_height, uint32_t fc_channels) "core=%u bank=%u fc=%ux%ux%u"
+rockchip_rknn_regcmd_summary_core(uint32_t core, uint32_t bank, uint32_t misc_cfg, uint32_t out_width, uint32_t out_height, uint32_t out_channels, uint32_t clip_truncate) "core=%u bank=%u misc_cfg=0x%08x out=%ux%ux%u clip_truncate=%u"
+rockchip_rknn_regcmd_summary_dpu(uint32_t core, uint32_t bank, uint32_t dst_addr, uint32_t surf_stride, uint32_t width, uint32_t height, uint32_t channels, uint32_t orig_channels, uint32_t feature_mode, uint32_t data_format) "core=%u bank=%u dst_addr=0x%08x surf_stride=%u cube=%ux%ux%u orig_channels=%u feature_mode=0x%08x data_format=0x%08x"
+rockchip_rknn_regcmd_summary_rdma_io(uint32_t core, uint32_t bank, uint32_t src_addr, uint32_t bs_addr, uint32_t bn_addr, uint32_t ew_addr) "core=%u bank=%u src_addr=0x%08x bs_addr=0x%08x bn_addr=0x%08x ew_addr=0x%08x"
+rockchip_rknn_regcmd_summary_rdma_shape(uint32_t core, uint32_t bank, uint32_t width, uint32_t height, uint32_t channels, uint32_t ew_surf_stride, uint32_t feature_mode, uint32_t erdma_cfg) "core=%u bank=%u cube=%ux%ux%u ew_surf_stride=%u feature_mode=0x%08x erdma_cfg=0x%08x"
 rockchip_rknn_complete(uint32_t core, uint32_t raw_status, uint32_t status) "core=%u raw=0x%08x status=0x%08x"
 rockchip_rknn_irq(uint32_t core, bool level, uint32_t raw_status, uint32_t mask, uint32_t status) "core=%u level=%d raw=0x%08x mask=0x%08x status=0x%08x"
 
