@@ -85,12 +85,20 @@ The first validated backend
 profile is a signed INT8 1x1 CNA/MAC pipeline with signed INT32 DPU output.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
-converter's multiply-before-add signed offset, scale, shift, rounding, and
-signed INT32 saturation path.  BS, BN, and EW stage results also saturate to
-signed INT32, and EW immediate multiplication uses a signed 16-bit operand.
-These stages can be composed in hardware order.  Their external/RDMA operands,
-PRELU/RELUX/LUT modes, nonzero BS/BN multiply shifts, and the other output
-converter modes are not functionally executed yet.
+converter's two add/multiply orderings, signed offset, scale, shift, rounding,
+and signed INT32 saturation path.  BS and BN multiplication use independent
+nonnegative and negative-result shifts with round-to-nearest-even.  BS, BN,
+and EW stage results also saturate to signed INT32, and EW immediate
+multiplication uses a signed 16-bit operand.  EW add and multiply apply
+independent nonnegative and negative-result truncate fields with
+round-to-nearest-even; EW bypass ignores those fields.  The OUT_CVT
+``minus_exp`` field is accepted and has no
+effect in the hardware-validated INT32 output mode.  These stages can be
+composed in hardware order.  ``MC_SURF_OUT`` scatters at most eight 32-value
+output blocks using the hardware-observed ``SURFACE_ADD`` layout; unwritten
+holes remain untouched and overlapping block addresses are written in task
+order.  External/RDMA operands, PRELU/RELUX/LUT modes, and floating-point
+output converter modes are not functionally executed yet.
 Independent hardware scans establish the current functional coverage range:
 ``M <= 64``, and storage/output dimensions of ``K=32,64,96,128`` and
 ``N=32,64,96``.  This is a temporary capture-coverage gate, not a global
