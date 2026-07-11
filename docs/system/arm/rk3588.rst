@@ -103,7 +103,9 @@ operand converter's signed offset, unsigned scale, six-bit shift, and both
 round-to-nearest-even and ties-away-from-zero modes.  Operand conversion runs
 before EW arithmetic; the existing EW truncate and output-conversion stages
 follow it.  Hardware-observed 16-channel source and EW surfaces, including
-32-channel-group notch progression, are read through the modeled IOMMU.
+32-channel-group notch progression, are read through the modeled IOMMU.  The
+validated BRDMA profile reads one signed INT32 BS add operand per output
+channel and broadcasts it across spatial positions before BN and EW.
 PRELU/RELUX/LUT modes, other external operand formats, and floating-point
 output converter modes are not generally functionally executed yet.
 Independent hardware scans establish the current functional coverage range:
