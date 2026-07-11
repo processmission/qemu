@@ -26,6 +26,7 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 #define ROCKCHIP_RKNN_CORE_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
+#define ROCKCHIP_RKNN_TASKS_MAX 16
 
 typedef struct RockchipRKNNDomainRuntimeState {
     uint32_t pointer_value;
@@ -65,10 +66,18 @@ struct RockchipRKNNCoreState {
     RockchipRKNNDomainRuntimeState domain_runtime[
         ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
     RockchipRKNNDomainRuntimeState pending_domain_runtime[
+        ROCKCHIP_RKNN_TASKS_MAX][ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
+    RockchipRKNNDomainRuntimeState pending_domain_runtime_compat[
         ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
     RockchipRKNNPipelineTask *pending_pipeline;
-    bool pending_domain_runtime_valid;
-    bool pending_pipeline_valid;
+    uint32_t pending_next_iova;
+    uint32_t pending_next_command_count;
+    uint16_t pending_task_count;
+    uint16_t pending_task_index;
+    bool pending_pipeline_valid[ROCKCHIP_RKNN_TASKS_MAX];
+    bool pending_domain_runtime_valid[ROCKCHIP_RKNN_TASKS_MAX];
+    bool pending_pipeline_valid_compat;
+    bool pending_domain_runtime_valid_compat;
     bool functional;
     bool busy;
     bool irq_level;
