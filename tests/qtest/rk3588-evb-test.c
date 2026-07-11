@@ -2038,6 +2038,412 @@ static void test_rk3588_rknpu_matmul_functional_shape(void)
     qtest_quit(qts);
 }
 
+static void test_rk3588_rknpu_core_clip_truncate(void)
+{
+    static const int32_t hardware_first16[] = {
+        102, -66, -102, -22, -102, 209, -74, -82,
+        143, -53, -176, 150, 40, -184, 228, 32,
+    };
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+    size_t clip;
+
+    rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+    rk3588_rknn_make_matmul_regcmd(commands, true);
+    clip = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                   0x0801, 0x301c);
+    commands[clip] = rk3588_rknn_regcmd(0x0801, 0x301c, 1);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+
+    for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+        for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+            int32_t accumulator = 0;
+            size_t output_index = rk3588_rknn_feature_index(
+                RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                out, row);
+            unsigned int logical = row * RK3588_RKNN_MATMUL_N + out;
+
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_MATMUL_K; channel++) {
+                int8_t input =
+                    ((row * 37 + channel * 11 + 3) % 31) - 15;
+                int8_t weight =
+                    ((out * 19 + channel * 7 + 5) % 29) - 14;
+
+                accumulator += input * weight;
+            }
+            {
+                uint32_t magnitude = accumulator < 0 ?
+                    -(int64_t)accumulator : accumulator;
+                uint32_t quotient = magnitude >> 1;
+                uint32_t remainder = magnitude & 1;
+                int32_t expected;
+
+                if (remainder && (quotient & 1)) {
+                    quotient++;
+                }
+                expected = accumulator < 0 ? -(int64_t)quotient : quotient;
+                if (logical < ARRAY_SIZE(hardware_first16)) {
+                    g_assert_cmpint(
+                        (int32_t)le32_to_cpu(output[output_index]), ==,
+                        hardware_first16[logical]);
+                }
+                g_assert_cmpint(
+                    (int32_t)le32_to_cpu(output[output_index]), ==,
+                    expected);
+            }
+        }
+    }
+    qtest_quit(qts);
+
+    qts = rk3588_qtest_start_rknpu_matmul();
+    rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+    rk3588_rknn_make_matmul_regcmd(commands, true);
+    commands[clip] = rk3588_rknn_regcmd(0x0801, 0x301c, 31);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+    for (unsigned int i = 0; i < ARRAY_SIZE(output); i++) {
+        g_assert_cmphex(le32_to_cpu(output[i]), ==, 0);
+    }
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_dpu_out_cvt(void)
+{
+    static const struct {
+        int32_t offset;
+        uint16_t scale;
+        uint32_t shift;
+    } cases[] = {
+        {5, 1, 0},
+        {-7, 2, 0},
+        {0, 3, 1},
+        {0, 3, (1U << 30) | 1},
+        {INT32_MAX, 2, 0},
+        {INT32_MIN, 2, 0},
+    };
+    static const int32_t hardware_scale3_shift1_first16[] = {
+        304, -196, -306, -68, -308, 627, -222, -244,
+        429, -159, -530, 448, 122, -554, 686, 98,
+    };
+    static const int32_t hardware_round_away_first16[] = {
+        305, -197, -306, -68, -308, 627, -222, -245,
+        429, -159, -530, 449, 122, -554, 686, 98,
+    };
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+
+    for (unsigned int c = 0; c < ARRAY_SIZE(cases); c++) {
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+        size_t offset;
+        size_t scale;
+        size_t shift;
+
+        rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+        rk3588_rknn_make_matmul_regcmd(commands, true);
+        offset = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                         0x1001, 0x4080);
+        scale = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                        0x1001, 0x4084);
+        shift = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                        0x1001, 0x4088);
+        commands[offset] = rk3588_rknn_regcmd(0x1001, 0x4080,
+                                               cases[c].offset);
+        commands[scale] = rk3588_rknn_regcmd(0x1001, 0x4084,
+                                              cases[c].scale);
+        commands[shift] = rk3588_rknn_regcmd(0x1001, 0x4088,
+                                              cases[c].shift);
+        qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                       sizeof(commands));
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+
+        for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+            for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+                int32_t accumulator = 0;
+                size_t output_index = rk3588_rknn_feature_index(
+                    RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                    out, row);
+                unsigned int logical = row * RK3588_RKNN_MATMUL_N + out;
+                int64_t converted;
+                uint64_t magnitude;
+                uint64_t quotient;
+                uint64_t remainder;
+                uint32_t shift_value = cases[c].shift & 0xfff;
+                bool ties_away = cases[c].shift & (1U << 30);
+
+                for (unsigned int channel = 0;
+                     channel < RK3588_RKNN_MATMUL_K; channel++) {
+                    int8_t input =
+                        ((row * 37 + channel * 11 + 3) % 31) - 15;
+                    int8_t weight =
+                        ((out * 19 + channel * 7 + 5) % 29) - 14;
+
+                    accumulator += input * weight;
+                }
+                converted = (int64_t)accumulator * cases[c].scale +
+                            cases[c].offset;
+                magnitude = converted < 0 ? -converted : converted;
+                quotient = magnitude >> shift_value;
+                remainder = 0;
+                if (shift_value) {
+                    remainder = magnitude &
+                        ((UINT64_C(1) << shift_value) - 1);
+                }
+                if (shift_value &&
+                    (remainder > (UINT64_C(1) << (shift_value - 1)) ||
+                     (remainder == (UINT64_C(1) << (shift_value - 1)) &&
+                      (ties_away || (quotient & 1))))) {
+                    quotient++;
+                }
+                converted = converted < 0 ? -(int64_t)quotient : quotient;
+                converted = CLAMP(converted, INT32_MIN, INT32_MAX);
+                if (c == 2 &&
+                    logical < ARRAY_SIZE(hardware_scale3_shift1_first16)) {
+                    g_assert_cmpint(
+                        (int32_t)le32_to_cpu(output[output_index]), ==,
+                        hardware_scale3_shift1_first16[logical]);
+                }
+                if (c == 3 &&
+                    logical < ARRAY_SIZE(hardware_round_away_first16)) {
+                    g_assert_cmpint(
+                        (int32_t)le32_to_cpu(output[output_index]), ==,
+                        hardware_round_away_first16[logical]);
+                }
+                g_assert_cmpint(
+                    (int32_t)le32_to_cpu(output[output_index]), ==,
+                    converted);
+            }
+        }
+        qtest_quit(qts);
+    }
+}
+
+static void test_rk3588_rknpu_dpu_stages(void)
+{
+    static const struct {
+        uint32_t bs_cfg;
+        int32_t bs_alu;
+        uint32_t bs_mul;
+        uint32_t bn_cfg;
+        int32_t bn_alu;
+        uint32_t bn_mul;
+        uint32_t ew_cfg;
+        int32_t ew_operand;
+    } cases[] = {
+        {0x20050, 5, 0, 0x53, 0, 0, 0x383, 0},
+        {0x40050, 5, 0, 0x53, 0, 0, 0x383, 0},
+        {0x42, 0, 2u << 16, 0x53, 0, 0, 0x383, 0},
+        {0x12, 0, 0, 0x53, 0, 0, 0x383, 0},
+        {0x53, 0, 0, 0x20050, 5, 0, 0x383, 0},
+        {0x53, 0, 0, 0x42, 0, 2u << 16, 0x383, 0},
+        {0x53, 0, 0, 0x53, 0, 0, 0x20380, 5},
+        {0x53, 0, 0, 0x53, 0, 0, 0x384, 2},
+    };
+    static const int32_t hardware_first8[][8] = {
+        {208, -126, -199, -40, -200, 423, -143, -158},
+        {198, -136, -209, -50, -210, 413, -153, -168},
+        {406, -262, -408, -90, -410, 836, -296, -326},
+        {203, 0, 0, 0, 0, 418, 0, 0},
+        {208, -126, -199, -40, -200, 423, -143, -158},
+        {406, -262, -408, -90, -410, 836, -296, -326},
+        {208, -126, -199, -40, -200, 423, -143, -158},
+        {406, -262, -408, -90, -410, 836, -296, -326},
+    };
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+
+    for (unsigned int c = 0; c < ARRAY_SIZE(cases); c++) {
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+        rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+        rk3588_rknn_make_matmul_regcmd(commands, true);
+#define SET_DPU_REG(_reg, _value) do { \
+        size_t index = rk3588_rknn_find_regcmd( \
+            commands, ARRAY_SIZE(commands), 0x1001, (_reg)); \
+        commands[index] = rk3588_rknn_regcmd(0x1001, (_reg), (_value)); \
+    } while (0)
+        SET_DPU_REG(0x4040, cases[c].bs_cfg);
+        SET_DPU_REG(0x4044, cases[c].bs_alu);
+        SET_DPU_REG(0x4048, cases[c].bs_mul);
+        SET_DPU_REG(0x4060, cases[c].bn_cfg);
+        SET_DPU_REG(0x4064, cases[c].bn_alu);
+        SET_DPU_REG(0x4068, cases[c].bn_mul);
+        SET_DPU_REG(0x4070, cases[c].ew_cfg);
+        for (uint32_t reg = 0x4090; reg <= 0x40ac; reg += 4) {
+            SET_DPU_REG(reg, cases[c].ew_operand);
+        }
+#undef SET_DPU_REG
+        {
+            size_t ew = rk3588_rknn_find_regcmd(
+                commands, ARRAY_SIZE(commands), 0x1001, 0x4070);
+
+            g_assert_cmphex((le64_to_cpu(commands[ew]) >> 16) & UINT32_MAX,
+                            ==, cases[c].ew_cfg);
+        }
+        qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                       sizeof(commands));
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+
+        for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+            for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+                int32_t accumulator = 0;
+                size_t output_index = rk3588_rknn_feature_index(
+                    RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                    out, row);
+                unsigned int logical = row * RK3588_RKNN_MATMUL_N + out;
+                int32_t expected;
+
+                for (unsigned int channel = 0;
+                     channel < RK3588_RKNN_MATMUL_K; channel++) {
+                    int8_t input =
+                        ((row * 37 + channel * 11 + 3) % 31) - 15;
+                    int8_t weight =
+                        ((out * 19 + channel * 7 + 5) % 29) - 14;
+
+                    accumulator += input * weight;
+                }
+                switch (c) {
+                case 0:
+                case 4:
+                case 6:
+                    expected = accumulator + 5;
+                    break;
+                case 1:
+                    expected = accumulator - 5;
+                    break;
+                case 2:
+                case 5:
+                case 7:
+                    expected = accumulator * 2;
+                    break;
+                case 3:
+                    expected = MAX(accumulator, 0);
+                    break;
+                default:
+                    g_assert_not_reached();
+                }
+                if (logical < 8) {
+                    g_assert_cmpint(
+                        (int32_t)le32_to_cpu(output[output_index]), ==,
+                        hardware_first8[c][logical]);
+                }
+                g_assert_cmpint(
+                    (int32_t)le32_to_cpu(output[output_index]), ==,
+                    expected);
+            }
+        }
+        qtest_quit(qts);
+    }
+}
+
+static void test_rk3588_rknpu_dpu_stage_wide_combination(void)
+{
+    static const struct {
+        uint32_t ew_cfg;
+        int32_t ew_operand;
+        uint32_t shift;
+    } cases[] = {
+        {0x383, 0, 24},
+        {0x383, 0, 32},
+        {0x383, 0, 40},
+        {0x384, INT32_MAX, 40},
+    };
+    static const int32_t hardware_shift24_first16[] = {
+        128, -128, -128, -128, -128, 128, -128, -128,
+        128, -128, -128, 128, 128, -128, 128, 128,
+    };
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+
+    for (unsigned int c = 0; c < ARRAY_SIZE(cases); c++) {
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+        rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+        rk3588_rknn_make_matmul_regcmd(commands, true);
+#define SET_WIDE_DPU_REG(_reg, _value) do { \
+        size_t index = rk3588_rknn_find_regcmd( \
+            commands, ARRAY_SIZE(commands), 0x1001, (_reg)); \
+        commands[index] = rk3588_rknn_regcmd(0x1001, (_reg), (_value)); \
+    } while (0)
+        SET_WIDE_DPU_REG(0x4040, 0x42);
+        SET_WIDE_DPU_REG(0x4048, 0x7fff0000);
+        SET_WIDE_DPU_REG(0x4060, 0x42);
+        SET_WIDE_DPU_REG(0x4068, 0x7fff0000);
+        SET_WIDE_DPU_REG(0x4070, cases[c].ew_cfg);
+        SET_WIDE_DPU_REG(0x4084, 1);
+        SET_WIDE_DPU_REG(0x4088, cases[c].shift);
+        for (uint32_t reg = 0x4090; reg <= 0x40ac; reg += 4) {
+            SET_WIDE_DPU_REG(reg, cases[c].ew_operand);
+        }
+#undef SET_WIDE_DPU_REG
+        qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                       sizeof(commands));
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+
+        for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+            for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+                int32_t accumulator = 0;
+                size_t output_index = rk3588_rknn_feature_index(
+                    RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                    out, row);
+                unsigned int logical = row * RK3588_RKNN_MATMUL_N + out;
+                int32_t expected = 0;
+
+                for (unsigned int channel = 0;
+                     channel < RK3588_RKNN_MATMUL_K; channel++) {
+                    int8_t input =
+                        ((row * 37 + channel * 11 + 3) % 31) - 15;
+                    int8_t weight =
+                        ((out * 19 + channel * 7 + 5) % 29) - 14;
+
+                    accumulator += input * weight;
+                }
+                if (c == 0) {
+                    int64_t value = (int64_t)accumulator * 32767;
+                    uint64_t magnitude;
+                    uint64_t quotient;
+                    uint64_t remainder;
+
+                    value = CLAMP(value, INT32_MIN, INT32_MAX);
+                    value *= 32767;
+                    value = CLAMP(value, INT32_MIN, INT32_MAX);
+                    magnitude = value < 0 ? -value : value;
+                    quotient = magnitude >> 24;
+                    remainder = magnitude & ((UINT64_C(1) << 24) - 1);
+                    if (remainder > (UINT64_C(1) << 23) ||
+                        (remainder == (UINT64_C(1) << 23) &&
+                         (quotient & 1))) {
+                        quotient++;
+                    }
+                    expected = value < 0 ? -(int64_t)quotient : quotient;
+                    if (logical < ARRAY_SIZE(hardware_shift24_first16)) {
+                        g_assert_cmpint(
+                            (int32_t)le32_to_cpu(output[output_index]), ==,
+                            hardware_shift24_first16[logical]);
+                    }
+                }
+                g_assert_cmpint(
+                    (int32_t)le32_to_cpu(output[output_index]), ==, expected);
+            }
+        }
+        qtest_quit(qts);
+    }
+}
+
 static void test_rk3588_rknpu_matmul_partial_channels_unmodeled(void)
 {
     enum {
@@ -2689,6 +3095,68 @@ static void test_rk3588_rknpu_slave_migration_snapshot(void)
     qtest_quit(source);
     qtest_quit(destination);
 }
+
+static void test_rk3588_rknpu_dpu_stage_migration_snapshot(void)
+{
+    static const int32_t hardware_first8[] = {
+        208, -126, -199, -40, -200, 423, -143, -158,
+    };
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+    g_autofree char *migration_socket = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *source;
+    QTestState *destination;
+    size_t bs_cfg;
+    size_t bs_alu;
+    int fd;
+
+    fd = g_file_open_tmp("rk3588-rknpu-stage-migration-XXXXXX",
+                         &migration_socket, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    unlink(migration_socket);
+    uri = g_strdup_printf("unix:%s", migration_socket);
+
+    source = rk3588_qtest_start_rknpu_matmul();
+    rk3588_rknn_prepare_matmul(source, true, 0xa5);
+    rk3588_rknn_make_matmul_regcmd(commands, true);
+    bs_cfg = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                     0x1001, 0x4040);
+    bs_alu = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                     0x1001, 0x4044);
+    commands[bs_cfg] = rk3588_rknn_regcmd(0x1001, 0x4040, 0x20050);
+    commands[bs_alu] = rk3588_rknn_regcmd(0x1001, 0x4044, 5);
+    qtest_memwrite(source, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(source);
+    qtest_writeq(source, RK3588_RKNN_MATMUL_REGCMD_ADDR +
+                         bs_alu * sizeof(uint64_t),
+                 le64_to_cpu(rk3588_rknn_regcmd(0x1001, 0x4044, 100)));
+
+    destination = rk3588_qtest_start_rknpu_matmul_incoming();
+    qtest_qmp_assert_success(destination,
+                             "{ 'execute': 'migrate-incoming',"
+                             "  'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_assert_success(source,
+                             "{ 'execute': 'migrate',"
+                             "  'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(destination, "RESUME");
+    qtest_clock_step(destination, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_matmul_output(destination, output, sizeof(output));
+    for (unsigned int logical = 0; logical < ARRAY_SIZE(hardware_first8);
+         logical++) {
+        unsigned int row = logical / RK3588_RKNN_MATMUL_N;
+        unsigned int out = logical % RK3588_RKNN_MATMUL_N;
+        size_t output_index = rk3588_rknn_feature_index(
+            RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4, out, row);
+
+        g_assert_cmpint((int32_t)le32_to_cpu(output[output_index]), ==,
+                        hardware_first8[logical]);
+    }
+    qtest_quit(source);
+    qtest_quit(destination);
+}
 #endif
 
 static void test_rk3588_rknpu_matmul_unsupported(void)
@@ -3101,6 +3569,14 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_matmul_iommu_access);
     qtest_add_func("/rk3588/rknpu-matmul-functional-shape",
                    test_rk3588_rknpu_matmul_functional_shape);
+    qtest_add_func("/rk3588/rknpu-core-clip-truncate",
+                   test_rk3588_rknpu_core_clip_truncate);
+    qtest_add_func("/rk3588/rknpu-dpu-out-cvt",
+                   test_rk3588_rknpu_dpu_out_cvt);
+    qtest_add_func("/rk3588/rknpu-dpu-stages",
+                   test_rk3588_rknpu_dpu_stages);
+    qtest_add_func("/rk3588/rknpu-dpu-stage-wide-combination",
+                   test_rk3588_rknpu_dpu_stage_wide_combination);
     qtest_add_func("/rk3588/rknpu-matmul-partial-channels-unmodeled",
                    test_rk3588_rknpu_matmul_partial_channels_unmodeled);
     qtest_add_func("/rk3588/rknpu-pipeline-semantic-regcmd",
@@ -3140,6 +3616,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_pipeline_migration_snapshot);
     qtest_add_func("/rk3588/rknpu-slave-migration-snapshot",
                    test_rk3588_rknpu_slave_migration_snapshot);
+    qtest_add_func("/rk3588/rknpu-dpu-stage-migration-snapshot",
+                   test_rk3588_rknpu_dpu_stage_migration_snapshot);
 #endif
     qtest_add_func("/rk3588/rknpu-matmul-unsupported",
                    test_rk3588_rknpu_matmul_unsupported);
