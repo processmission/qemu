@@ -77,9 +77,11 @@ report raw or unknown command words, and update internal non-migrated shadow
 register state for trace analysis.
 
 An experimental functional mode is available with
-``-machine ...,rknpu=on,rknpu-functional=on``.  It routes PC-fetched register
-commands into banked CNA, CORE, DPU, DPU-RDMA, PPU, and PPU-RDMA register files,
-then decodes an immutable hardware-pipeline task.  The first validated backend
+``-machine ...,rknpu=on,rknpu-functional=on``.  It routes PC-fetched commands
+or slave-mode CNA/CORE/DPU MMIO writes into banked register files, then decodes
+an immutable hardware-pipeline task.  Slave mode is selected with
+``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
+The first validated backend
 profile is a signed INT8 1x1 CNA/MAC pipeline with signed INT32 DPU output.
 Independent hardware scans establish the current functional coverage range:
 ``M <= 64``, and storage/output dimensions of ``K=32,64,96,128`` and
@@ -89,10 +91,12 @@ modeled RK3588 IOMMU page tables, including paging state and PTE read/write
 permissions, to read commands, input, and weights and writes the NPU-layout
 output before raising
 the normal completion interrupt.  Unsupported configurations and mapping
-failures retain fake-completion behavior without writing tensor output.  The
-property is off by default; when it is off the model performs no functional
-DMA reads or writes.  Other pipeline configurations, PPU execution, multi-task
-scheduling, and cycle timing remain unimplemented.
+failures retain fake-completion behavior without writing tensor output.  PC
+mode supports bounded sequential task chains; slave mode supports one directly
+configured task and reports its hardware-observed task status.  The property
+is off by default; when it is off the model performs no functional DMA reads or
+writes.  Other pipeline configurations, DPU-RDMA/PPU execution, and cycle
+timing remain unimplemented.
 
 The decoder keeps software-visible valid and storage dimensions separate.
 For this INT8 profile, CNA ``DATA_SIZE1`` supplies valid and storage input

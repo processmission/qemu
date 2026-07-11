@@ -21,12 +21,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(RockchipRKNNCoreState, ROCKCHIP_RKNN_CORE)
 typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 
 #define ROCKCHIP_RKNN_WINDOW_SIZE 0x1000
+#define ROCKCHIP_RKNN_DPU_OFFSET 0x4000
+#define ROCKCHIP_RKNN_GLOBAL_OFFSET 0xf000
 #define ROCKCHIP_RKNN_PC_R_MAX (0x40 / 4)
 #define ROCKCHIP_RKNN_CNA_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_CORE_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
 #define ROCKCHIP_RKNN_TASKS_MAX 16
+#define ROCKCHIP_RKNN_PRESENT_R_MAX 32
 
 typedef struct RockchipRKNNDomainRuntimeState {
     uint32_t pointer_value;
@@ -36,6 +39,25 @@ typedef struct RockchipRKNNDomainRuntimeState {
     bool executor_pingpong;
     bool pingpong_mode;
 } RockchipRKNNDomainRuntimeState;
+
+typedef struct RockchipRKNNRegisterBank {
+    uint32_t regs[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    uint32_t present[ROCKCHIP_RKNN_PRESENT_R_MAX];
+} RockchipRKNNRegisterBank;
+
+typedef struct RockchipRKNNDomainState {
+    RockchipRKNNRegisterBank bank[2];
+    uint8_t write_bank;
+} RockchipRKNNDomainState;
+
+typedef struct RockchipRKNNRegisterFile {
+    RockchipRKNNDomainState domain[ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
+    RockchipRKNNDomainRuntimeState runtime[
+        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
+    uint32_t enabled_blocks;
+    bool pre_enable;
+    bool block_enable;
+} RockchipRKNNRegisterFile;
 
 struct RockchipRKNNCoreState {
     SysBusDevice parent_obj;
@@ -51,6 +73,10 @@ struct RockchipRKNNCoreState {
     RegisterInfoArray *core_reg_array;
     RegisterInfo core_regs_info[ROCKCHIP_RKNN_CORE_R_MAX];
     uint32_t core_regs[ROCKCHIP_RKNN_CORE_R_MAX];
+
+    MemoryRegion dpu_reg_array;
+    MemoryRegion global_reg_array;
+    RockchipRKNNRegisterFile slave_file;
 
     QEMUTimer complete_timer;
     qemu_irq irq;
@@ -78,6 +104,7 @@ struct RockchipRKNNCoreState {
     bool pending_domain_runtime_valid[ROCKCHIP_RKNN_TASKS_MAX];
     bool pending_pipeline_valid_compat;
     bool pending_domain_runtime_valid_compat;
+    bool pending_slave;
     bool functional;
     bool busy;
     bool irq_level;
