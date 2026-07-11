@@ -64,6 +64,7 @@ typedef struct RockchipRKNNDPUStageSnapshot {
     uint32_t bs_mul_cfg;
     int32_t bn_alu_operand;
     uint32_t bn_mul_cfg;
+    int32_t ew_cvt_offset;
     uint32_t ew_cvt_scale;
     int32_t ew_operand[8];
     bool out_cvt_round;

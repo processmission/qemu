@@ -97,8 +97,15 @@ effect in the hardware-validated INT32 output mode.  These stages can be
 composed in hardware order.  ``MC_SURF_OUT`` scatters at most eight 32-value
 output blocks using the hardware-observed ``SURFACE_ADD`` layout; unwritten
 holes remain untouched and overlapping block addresses are written in task
-order.  External/RDMA operands, PRELU/RELUX/LUT modes, and floating-point
-output converter modes are not functionally executed yet.
+order.  External/RDMA operands are functionally executed for the first
+per-pixel signed INT8 profile.  It supports EW add and multiply, plus the EW
+operand converter's signed offset, unsigned scale, six-bit shift, and both
+round-to-nearest-even and ties-away-from-zero modes.  Operand conversion runs
+before EW arithmetic; the existing EW truncate and output-conversion stages
+follow it.  Hardware-observed 16-channel source and EW surfaces, including
+32-channel-group notch progression, are read through the modeled IOMMU.
+PRELU/RELUX/LUT modes, other external operand formats, and floating-point
+output converter modes are not generally functionally executed yet.
 Independent hardware scans establish the current functional coverage range:
 ``M <= 64``, and storage/output dimensions of ``K=32,64,96,128`` and
 ``N=32,64,96``.  This is a temporary capture-coverage gate, not a global
@@ -111,8 +118,8 @@ failures retain fake-completion behavior without writing tensor output.  PC
 mode supports bounded sequential task chains; slave mode supports one directly
 configured task and reports its hardware-observed task status.  The property
 is off by default; when it is off the model performs no functional DMA reads or
-writes.  Other pipeline configurations, DPU-RDMA/PPU execution, and cycle
-timing remain unimplemented.
+writes.  Other DPU-RDMA data modes, precisions, and notch layouts, as well as
+PPU execution and cycle timing, remain unimplemented.
 
 The decoder keeps software-visible valid and storage dimensions separate.
 For this INT8 profile, CNA ``DATA_SIZE1`` supplies valid and storage input
