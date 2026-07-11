@@ -25,6 +25,16 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 #define ROCKCHIP_RKNN_CNA_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_CORE_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
+#define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
+
+typedef struct RockchipRKNNDomainRuntimeState {
+    uint32_t pointer_value;
+    uint8_t pointer_bank;
+    uint8_t executor_bank;
+    bool pointer_pingpong;
+    bool executor_pingpong;
+    bool pingpong_mode;
+} RockchipRKNNDomainRuntimeState;
 
 struct RockchipRKNNCoreState {
     SysBusDevice parent_obj;
@@ -52,7 +62,12 @@ struct RockchipRKNNCoreState {
     uint32_t regcmd_shadow_dpu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_ppu[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_ppu_rdma[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
+    RockchipRKNNDomainRuntimeState domain_runtime[
+        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
+    RockchipRKNNDomainRuntimeState pending_domain_runtime[
+        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
     RockchipRKNNPipelineTask *pending_pipeline;
+    bool pending_domain_runtime_valid;
     bool pending_pipeline_valid;
     bool functional;
     bool busy;
