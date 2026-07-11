@@ -42,6 +42,8 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_PC_VERSION 0x00000100
 #define ROCKCHIP_RKNN_PC_VERSION_NUM 0x00003588
 #define ROCKCHIP_RKNN_DPU_INTERRUPT_BITS 0x00000300
+#define ROCKCHIP_RKNN_TASK_STATUS_SUCCESS 0x0000f000
+#define ROCKCHIP_RKNN_TASK_STATUS_FETCH_ERROR 0x0000a000
 #define ROCKCHIP_RKNN_COMPLETE_DELAY_NS (100 * 1000)
 #define ROCKCHIP_RKNN_REGCMD_SUMMARY_BYTES 16
 #define ROCKCHIP_RKNN_REGCMD_SAMPLE_COMMANDS_MAX 256
@@ -93,6 +95,7 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_RDMA_EW_SURF_STRIDE 0x040
 #define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_MODE_CFG 0x044
 #define ROCKCHIP_RKNN_REGCMD_COMMANDS_MAX 4096
+#define ROCKCHIP_RKNN_TASK_NUMBER_MASK 0x00000fffU
 #define ROCKCHIP_RKNN_REGISTER_WORDS (ROCKCHIP_RKNN_WINDOW_SIZE / 4)
 #define ROCKCHIP_RKNN_PRESENT_WORDS \
     DIV_ROUND_UP(ROCKCHIP_RKNN_REGISTER_WORDS, 32)
@@ -174,6 +177,9 @@ typedef struct RockchipRKNNRegisterFile {
     bool pre_enable;
     bool block_enable;
 } RockchipRKNNRegisterFile;
+
+static void rockchip_rknn_commit_domain_runtime(
+    RockchipRKNNDomainRuntimeState *state);
 
 typedef struct RockchipRKNNTensorView {
     uint32_t iova;
@@ -406,24 +412,22 @@ static bool rockchip_rknn_register_write(RockchipRKNNRegisterFile *file,
     return true;
 }
 
-static void rockchip_rknn_register_file_init(RockchipRKNNCoreState *s,
-                                             RockchipRKNNRegisterFile *file)
+static void rockchip_rknn_register_file_init(
+    RockchipRKNNRegisterFile *file,
+    const RockchipRKNNDomainRuntimeState runtime[ROCKCHIP_RKNN_DOMAIN_COUNT])
 {
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
-        file->runtime[i] = s->domain_runtime[i];
+        file->runtime[i] = runtime[i];
         file->domain[i].write_bank = i == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
                                      file->runtime[i].pointer_bank;
     }
 }
 
 static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
-                                              RockchipRKNNRegisterFile *file)
+                                              RockchipRKNNRegisterFile *file,
+                                              uint32_t iova,
+                                              uint32_t command_count)
 {
-    uint32_t command_count =
-        (s->pc_regs[R_PC_REGISTER_AMOUNTS] &
-         ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1;
-    uint32_t iova = s->pc_regs[R_PC_BASE_ADDRESS] &
-                    ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
     g_autofree uint64_t *commands = NULL;
 
     if (!s->iommu || command_count > ROCKCHIP_RKNN_REGCMD_COMMANDS_MAX) {
@@ -444,13 +448,15 @@ static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
         if (!command) {
             continue;
         }
+        if (file->block_enable) {
+            return false;
+        }
         if (target == ROCKCHIP_RKNN_REGCMD_PRE_ENABLE) {
             file->pre_enable = true;
             continue;
         }
         if (target == ROCKCHIP_RKNN_REGCMD_BLOCK_ENABLE) {
-            if (!file->pre_enable || reg != A_PC_OPERATION_ENABLE ||
-                i != command_count - 1) {
+            if (!file->pre_enable || reg != A_PC_OPERATION_ENABLE) {
                 return false;
             }
             file->enabled_blocks = value & 0x7f;
@@ -802,26 +808,80 @@ static size_t rockchip_rknn_weight_index(unsigned int channels,
            (output % 32) * 32;
 }
 
-static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
+static bool rockchip_rknn_fetch_pipeline_task(
+    RockchipRKNNCoreState *s, uint32_t index, uint32_t iova,
+    uint32_t command_count,
+    const RockchipRKNNDomainRuntimeState runtime[
+        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT])
 {
     g_autofree RockchipRKNNRegisterFile *file =
         g_new0(RockchipRKNNRegisterFile, 1);
     RockchipRKNNPipelineTask task = {};
+    uint32_t next_iova;
+    uint32_t next_amount;
 
-    s->pending_pipeline_valid = false;
-    s->pending_domain_runtime_valid = false;
-    rockchip_rknn_register_file_init(s, file);
-    if (!rockchip_rknn_fetch_register_file(s, file)) {
-        return;
+    trace_rockchip_rknn_task_fetch(s->core_index, index, iova,
+                                   command_count);
+    rockchip_rknn_register_file_init(file, runtime);
+    if (!rockchip_rknn_fetch_register_file(s, file, iova, command_count)) {
+        trace_rockchip_rknn_task_fetch_error(s->core_index, index,
+                                              "regcmd-fetch");
+        return false;
     }
-    memcpy(s->pending_domain_runtime, file->runtime,
-           sizeof(s->pending_domain_runtime));
-    s->pending_domain_runtime_valid = true;
-
+    memcpy(s->pending_domain_runtime[index], file->runtime,
+           sizeof(file->runtime));
+    s->pending_domain_runtime_valid[index] = true;
+    s->pending_pipeline_valid[index] = false;
     if (rockchip_rknn_decode_pipeline(s, &task, file) &&
         rockchip_rknn_pipeline_is_captured_profile(&task)) {
-        *s->pending_pipeline = task;
-        s->pending_pipeline_valid = true;
+        s->pending_pipeline[index] = task;
+        s->pending_pipeline_valid[index] = true;
+    }
+
+    if (index + 1 < s->pending_task_count) {
+        if (!rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_PC,
+                                         A_PC_BASE_ADDRESS, &next_iova) ||
+            !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_PC,
+                                         A_PC_REGISTER_AMOUNTS,
+                                         &next_amount)) {
+            trace_rockchip_rknn_task_fetch_error(s->core_index, index,
+                                                  "missing-next-task");
+            return false;
+        }
+        s->pending_next_iova =
+            next_iova & ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
+        s->pending_next_command_count =
+            ((next_amount & ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) * 2;
+    }
+
+    return true;
+}
+
+static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
+{
+    uint32_t task_count = s->pc_regs[R_PC_TASK_CON] &
+                          ROCKCHIP_RKNN_TASK_NUMBER_MASK;
+    uint32_t iova = s->pc_regs[R_PC_BASE_ADDRESS] &
+                    ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
+    uint32_t command_count =
+        ((s->pc_regs[R_PC_REGISTER_AMOUNTS] &
+          ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) * 2;
+
+    s->pending_task_count = 0;
+    s->pending_task_index = 0;
+    s->pending_next_iova = 0;
+    s->pending_next_command_count = 0;
+    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
+    memset(s->pending_domain_runtime_valid, 0,
+           sizeof(s->pending_domain_runtime_valid));
+    if (!task_count || task_count > ROCKCHIP_RKNN_TASKS_MAX) {
+        return;
+    }
+
+    s->pending_task_count = task_count;
+    if (!rockchip_rknn_fetch_pipeline_task(s, 0, iova, command_count,
+                                            s->domain_runtime)) {
+        s->pending_task_count = 0;
     }
 }
 
@@ -900,9 +960,10 @@ static void rockchip_rknn_commit_domain_runtime(
     state->pointer_value = rockchip_rknn_encode_pointer_state(state);
 }
 
-static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s)
+static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s,
+                                         unsigned int task_index)
 {
-    memcpy(s->domain_runtime, s->pending_domain_runtime,
+    memcpy(s->domain_runtime, s->pending_domain_runtime[task_index],
            sizeof(s->domain_runtime));
 
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
@@ -956,19 +1017,63 @@ static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 static void rockchip_rknn_complete(void *opaque)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(opaque);
+    bool fetch_error = false;
+    uint16_t completed_tasks;
 
-    if (s->functional && s->pending_pipeline_valid) {
-        rockchip_rknn_execute_pipeline(s, s->pending_pipeline);
+    if (s->functional) {
+        while (s->pending_task_index < s->pending_task_count) {
+            unsigned int task_index = s->pending_task_index;
+
+            if (s->pending_pipeline_valid[task_index]) {
+                rockchip_rknn_execute_pipeline(
+                    s, &s->pending_pipeline[task_index]);
+            }
+            if (s->pending_domain_runtime_valid[task_index]) {
+                rockchip_rknn_commit_runtime(s, task_index);
+            }
+            s->pending_task_index++;
+            if (s->pending_task_index < s->pending_task_count &&
+                !rockchip_rknn_fetch_pipeline_task(
+                    s, s->pending_task_index, s->pending_next_iova,
+                    s->pending_next_command_count, s->domain_runtime)) {
+                fetch_error = true;
+                break;
+            }
+        }
+        if (fetch_error) {
+            s->pc_regs[R_PC_TASK_STATUS] =
+                ROCKCHIP_RKNN_TASK_STATUS_FETCH_ERROR |
+                s->pending_task_index;
+        } else if (s->pending_task_count) {
+            s->pc_regs[R_PC_TASK_STATUS] =
+                ROCKCHIP_RKNN_TASK_STATUS_SUCCESS;
+        } else {
+            s->pc_regs[R_PC_TASK_STATUS] = 0;
+        }
+    } else {
+        s->pc_regs[R_PC_TASK_STATUS] =
+            s->pc_regs[R_PC_TASK_CON] & ROCKCHIP_RKNN_TASK_NUMBER_MASK;
     }
-    if (s->functional && s->pending_domain_runtime_valid) {
-        rockchip_rknn_commit_runtime(s);
-    }
-    s->pending_domain_runtime_valid = false;
-    s->pending_pipeline_valid = false;
+    completed_tasks = s->pending_task_index;
+    s->pending_task_count = 0;
+    s->pending_task_index = 0;
+    s->pending_next_iova = 0;
+    s->pending_next_command_count = 0;
+    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
+    memset(s->pending_domain_runtime_valid, 0,
+           sizeof(s->pending_domain_runtime_valid));
     s->busy = false;
     s->pc_regs[R_PC_OPERATION_ENABLE] &= ~R_PC_OPERATION_ENABLE_OP_EN_MASK;
-    s->pc_regs[R_PC_TASK_STATUS] = 1;
-    s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= ROCKCHIP_RKNN_DPU_INTERRUPT_BITS;
+    if (!fetch_error) {
+        uint32_t interrupt_bits = ROCKCHIP_RKNN_DPU_INTERRUPT_BITS;
+
+        if (s->functional && completed_tasks) {
+            interrupt_bits =
+                s->domain_runtime[ROCKCHIP_RKNN_DOMAIN_DPU].executor_bank ?
+                0x00000100 : 0x00000200;
+        }
+        s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= interrupt_bits;
+    }
     rockchip_rknn_update_irq(s);
     trace_rockchip_rknn_complete(s->core_index,
                                  s->pc_regs[R_PC_INTERRUPT_RAW_STATUS],
@@ -1273,7 +1378,7 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
                     ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
     uint32_t amounts = s->pc_regs[R_PC_REGISTER_AMOUNTS] &
                        ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK;
-    uint32_t command_count = amounts + 1;
+    uint32_t command_count = (amounts + 1) * 2;
     uint32_t command_bytes = command_count * sizeof(uint64_t);
     uint32_t sample_bytes;
     uint32_t sample_commands;
@@ -1375,11 +1480,6 @@ static void rockchip_rknn_operation_enable_postw(RegisterInfo *reg,
 
     if (val & R_PC_OPERATION_ENABLE_OP_EN_MASK) {
         rockchip_rknn_start(s);
-    } else if (s->busy) {
-        timer_del(&s->complete_timer);
-        s->pending_domain_runtime_valid = false;
-        s->pending_pipeline_valid = false;
-        s->busy = false;
     }
 }
 
@@ -1489,8 +1589,13 @@ static void rockchip_rknn_reset(DeviceState *dev)
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
 
     timer_del(&s->complete_timer);
-    s->pending_domain_runtime_valid = false;
-    s->pending_pipeline_valid = false;
+    s->pending_task_count = 0;
+    s->pending_task_index = 0;
+    s->pending_next_iova = 0;
+    s->pending_next_command_count = 0;
+    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
+    memset(s->pending_domain_runtime_valid, 0,
+           sizeof(s->pending_domain_runtime_valid));
     s->busy = false;
     rockchip_rknn_clear_regcmd_shadow(s);
     memset(s->domain_runtime, 0, sizeof(s->domain_runtime));
@@ -1513,11 +1618,28 @@ static int rockchip_rknn_post_load(void *opaque, int version_id)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(opaque);
 
-    if (version_id < 2) {
-        s->pending_pipeline_valid = false;
+    if (version_id < 4) {
+        bool pipeline_valid = s->pending_pipeline_valid_compat;
+        bool runtime_valid = version_id >= 3 &&
+                             s->pending_domain_runtime_valid_compat;
+
+        s->pending_task_count = pipeline_valid || runtime_valid ? 1 : 0;
+        s->pending_task_index = 0;
+        s->pending_next_iova = 0;
+        s->pending_next_command_count = 0;
+        memset(s->pending_pipeline_valid, 0,
+               sizeof(s->pending_pipeline_valid));
+        memset(s->pending_domain_runtime_valid, 0,
+               sizeof(s->pending_domain_runtime_valid));
+        s->pending_pipeline_valid[0] = pipeline_valid;
+        s->pending_domain_runtime_valid[0] = runtime_valid;
+        if (runtime_valid) {
+            memcpy(s->pending_domain_runtime[0],
+                   s->pending_domain_runtime_compat,
+                   sizeof(s->pending_domain_runtime[0]));
+        }
     }
     if (version_id < 3) {
-        s->pending_domain_runtime_valid = false;
         memset(s->domain_runtime, 0, sizeof(s->domain_runtime));
         memset(s->pending_domain_runtime, 0, sizeof(s->pending_domain_runtime));
         rockchip_rknn_set_pointer_state(
@@ -1557,7 +1679,8 @@ static void rockchip_rknn_init(Object *obj)
 
     timer_init_ns(&s->complete_timer, QEMU_CLOCK_VIRTUAL,
                   rockchip_rknn_complete, s);
-    s->pending_pipeline = g_new0(RockchipRKNNPipelineTask, 1);
+    s->pending_pipeline = g_new0(RockchipRKNNPipelineTask,
+                                 ROCKCHIP_RKNN_TASKS_MAX);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->pc_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->cna_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->core_reg_array->mem);
@@ -1695,9 +1818,14 @@ static const VMStateDescription vmstate_rockchip_rknn_domain_runtime = {
     },
 };
 
+static bool rockchip_rknn_vmstate_before_v4(void *opaque, int version_id)
+{
+    return version_id < 4;
+}
+
 static const VMStateDescription vmstate_rockchip_rknn = {
     .name = TYPE_ROCKCHIP_RKNN_CORE,
-    .version_id = 3,
+    .version_id = 4,
     .minimum_version_id = 1,
     .post_load = rockchip_rknn_post_load,
     .fields = (const VMStateField[]) {
@@ -1711,20 +1839,47 @@ static const VMStateDescription vmstate_rockchip_rknn = {
         VMSTATE_UINT32(core_index, RockchipRKNNCoreState),
         VMSTATE_BOOL(busy, RockchipRKNNCoreState),
         VMSTATE_BOOL(irq_level, RockchipRKNNCoreState),
-        VMSTATE_BOOL_V(pending_pipeline_valid, RockchipRKNNCoreState, 2),
-        VMSTATE_STRUCT_POINTER_V(pending_pipeline, RockchipRKNNCoreState, 2,
-                                 vmstate_rockchip_rknn_pipeline,
-                                 RockchipRKNNPipelineTask),
+        VMSTATE_SINGLE_TEST(pending_pipeline_valid_compat,
+                            RockchipRKNNCoreState,
+                            rockchip_rknn_vmstate_before_v4, 2,
+                            vmstate_info_bool, bool),
+        VMSTATE_STRUCT_POINTER_TEST_V(
+            pending_pipeline, RockchipRKNNCoreState,
+            rockchip_rknn_vmstate_before_v4, 2,
+            vmstate_rockchip_rknn_pipeline, RockchipRKNNPipelineTask),
         VMSTATE_STRUCT_ARRAY(domain_runtime, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT, 3,
                              vmstate_rockchip_rknn_domain_runtime,
                              RockchipRKNNDomainRuntimeState),
-        VMSTATE_STRUCT_ARRAY(pending_domain_runtime, RockchipRKNNCoreState,
-                             ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT, 3,
+        VMSTATE_STRUCT_ARRAY_TEST(
+            pending_domain_runtime_compat, RockchipRKNNCoreState,
+            ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT,
+            rockchip_rknn_vmstate_before_v4, 3,
+            vmstate_rockchip_rknn_domain_runtime,
+            RockchipRKNNDomainRuntimeState),
+        VMSTATE_SINGLE_TEST(pending_domain_runtime_valid_compat,
+                            RockchipRKNNCoreState,
+                            rockchip_rknn_vmstate_before_v4, 3,
+                            vmstate_info_bool, bool),
+        VMSTATE_STRUCT_VARRAY_POINTER_KNOWN(
+            pending_pipeline, RockchipRKNNCoreState,
+            ROCKCHIP_RKNN_TASKS_MAX, 4,
+            vmstate_rockchip_rknn_pipeline, RockchipRKNNPipelineTask),
+        VMSTATE_STRUCT_2DARRAY(pending_domain_runtime, RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_TASKS_MAX,
+                             ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT, 4,
                              vmstate_rockchip_rknn_domain_runtime,
                              RockchipRKNNDomainRuntimeState),
-        VMSTATE_BOOL_V(pending_domain_runtime_valid,
-                       RockchipRKNNCoreState, 3),
+        VMSTATE_BOOL_ARRAY_V(pending_pipeline_valid, RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_TASKS_MAX, 4),
+        VMSTATE_BOOL_ARRAY_V(pending_domain_runtime_valid,
+                             RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_TASKS_MAX, 4),
+        VMSTATE_UINT32_V(pending_next_iova, RockchipRKNNCoreState, 4),
+        VMSTATE_UINT32_V(pending_next_command_count,
+                         RockchipRKNNCoreState, 4),
+        VMSTATE_UINT16_V(pending_task_count, RockchipRKNNCoreState, 4),
+        VMSTATE_UINT16_V(pending_task_index, RockchipRKNNCoreState, 4),
         VMSTATE_END_OF_LIST()
     },
 };
