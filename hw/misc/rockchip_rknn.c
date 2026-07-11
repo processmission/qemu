@@ -42,6 +42,10 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_PC_VERSION 0x00000100
 #define ROCKCHIP_RKNN_PC_VERSION_NUM 0x00003588
 #define ROCKCHIP_RKNN_DPU_INTERRUPT_BITS 0x00000300
+#define ROCKCHIP_RKNN_PIPELINE_BANK0_INTERRUPT 0x000002aa
+#define ROCKCHIP_RKNN_PIPELINE_BANK1_INTERRUPT 0x00000155
+#define ROCKCHIP_RKNN_DMA_READ_ERROR 0x00001000
+#define ROCKCHIP_RKNN_DMA_WRITE_ERROR 0x00002000
 #define ROCKCHIP_RKNN_TASK_STATUS_SUCCESS 0x0000f000
 #define ROCKCHIP_RKNN_TASK_STATUS_FETCH_ERROR 0x0000a000
 #define ROCKCHIP_RKNN_COMPLETE_DELAY_NS (100 * 1000)
@@ -885,7 +889,7 @@ static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
     }
 }
 
-static void rockchip_rknn_execute_pipeline(
+static uint32_t rockchip_rknn_execute_pipeline(
     RockchipRKNNCoreState *s, const RockchipRKNNPipelineTask *task)
 {
     g_autofree int8_t *input = NULL;
@@ -894,6 +898,8 @@ static void rockchip_rknn_execute_pipeline(
     size_t input_bytes;
     size_t weight_bytes;
     size_t output_values;
+    size_t output_bytes;
+    bool output_write_ok;
     uint32_t weight_channels;
 
     input_bytes = task->cna.input.width * task->cna.input.height *
@@ -905,11 +911,13 @@ static void rockchip_rknn_execute_pipeline(
     input = g_new(int8_t, input_bytes);
     weights = g_new(int8_t, weight_bytes);
     output = g_new0(uint32_t, output_values);
+    output_bytes = output_values;
+    output_bytes *= sizeof(*output);
     if (!rockchip_rknn_iommu_dma(s, task->cna.input.iova, input,
                                  input_bytes, false) ||
         !rockchip_rknn_iommu_dma(s, task->cna.weight_iova, weights,
                                  weight_bytes, false)) {
-        return;
+        return ROCKCHIP_RKNN_DMA_READ_ERROR;
     }
 
     for (unsigned int row = 0; row < task->core.height; row++) {
@@ -936,8 +944,13 @@ static void rockchip_rknn_execute_pipeline(
         }
     }
 
-    rockchip_rknn_iommu_dma(s, task->dpu.output.iova, output,
-                            output_values * sizeof(*output), true);
+    output_write_ok = rockchip_rknn_iommu_dma(s, task->dpu.output.iova,
+                                               output, output_bytes, true);
+    if (!output_write_ok) {
+        return ROCKCHIP_RKNN_DMA_WRITE_ERROR;
+    }
+
+    return 0;
 }
 
 static uint32_t rockchip_rknn_encode_pointer_state(
@@ -1018,14 +1031,17 @@ static void rockchip_rknn_complete(void *opaque)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(opaque);
     bool fetch_error = false;
-    uint16_t completed_tasks;
+    bool final_pipeline_attempted = false;
+    uint32_t dma_error_bits = 0;
 
     if (s->functional) {
         while (s->pending_task_index < s->pending_task_count) {
             unsigned int task_index = s->pending_task_index;
 
+            final_pipeline_attempted =
+                s->pending_pipeline_valid[task_index];
             if (s->pending_pipeline_valid[task_index]) {
-                rockchip_rknn_execute_pipeline(
+                dma_error_bits |= rockchip_rknn_execute_pipeline(
                     s, &s->pending_pipeline[task_index]);
             }
             if (s->pending_domain_runtime_valid[task_index]) {
@@ -1054,7 +1070,6 @@ static void rockchip_rknn_complete(void *opaque)
         s->pc_regs[R_PC_TASK_STATUS] =
             s->pc_regs[R_PC_TASK_CON] & ROCKCHIP_RKNN_TASK_NUMBER_MASK;
     }
-    completed_tasks = s->pending_task_index;
     s->pending_task_count = 0;
     s->pending_task_index = 0;
     s->pending_next_iova = 0;
@@ -1067,13 +1082,15 @@ static void rockchip_rknn_complete(void *opaque)
     if (!fetch_error) {
         uint32_t interrupt_bits = ROCKCHIP_RKNN_DPU_INTERRUPT_BITS;
 
-        if (s->functional && completed_tasks) {
+        if (final_pipeline_attempted) {
             interrupt_bits =
                 s->domain_runtime[ROCKCHIP_RKNN_DOMAIN_DPU].executor_bank ?
-                0x00000100 : 0x00000200;
+                ROCKCHIP_RKNN_PIPELINE_BANK1_INTERRUPT :
+                ROCKCHIP_RKNN_PIPELINE_BANK0_INTERRUPT;
         }
         s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= interrupt_bits;
     }
+    s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= dma_error_bits;
     rockchip_rknn_update_irq(s);
     trace_rockchip_rknn_complete(s->core_index,
                                  s->pc_regs[R_PC_INTERRUPT_RAW_STATUS],
