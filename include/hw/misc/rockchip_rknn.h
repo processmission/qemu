@@ -59,6 +59,15 @@ typedef struct RockchipRKNNRegisterFile {
     bool block_enable;
 } RockchipRKNNRegisterFile;
 
+typedef struct RockchipRKNNDPUStageSnapshot {
+    int32_t bs_alu_operand;
+    uint32_t bs_mul_cfg;
+    int32_t bn_alu_operand;
+    uint32_t bn_mul_cfg;
+    int32_t ew_operand[8];
+    bool out_cvt_round;
+} RockchipRKNNDPUStageSnapshot;
+
 struct RockchipRKNNCoreState {
     SysBusDevice parent_obj;
 
@@ -93,17 +102,14 @@ struct RockchipRKNNCoreState {
         ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
     RockchipRKNNDomainRuntimeState pending_domain_runtime[
         ROCKCHIP_RKNN_TASKS_MAX][ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
-    RockchipRKNNDomainRuntimeState pending_domain_runtime_compat[
-        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT];
     RockchipRKNNPipelineTask *pending_pipeline;
+    RockchipRKNNDPUStageSnapshot pending_dpu_stage[ROCKCHIP_RKNN_TASKS_MAX];
     uint32_t pending_next_iova;
     uint32_t pending_next_command_count;
     uint16_t pending_task_count;
     uint16_t pending_task_index;
     bool pending_pipeline_valid[ROCKCHIP_RKNN_TASKS_MAX];
     bool pending_domain_runtime_valid[ROCKCHIP_RKNN_TASKS_MAX];
-    bool pending_pipeline_valid_compat;
-    bool pending_domain_runtime_valid_compat;
     bool pending_slave;
     bool functional;
     bool busy;
