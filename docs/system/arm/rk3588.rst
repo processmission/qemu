@@ -118,8 +118,13 @@ bit is set, using the signed INT32 clamp interval ``[0, *_RELUX_CMP_VALUE]``.
 EW RELUX is modeled for the validated ``0x20580`` immediate-add configuration
 with a zero operand and the operand converter bypassed; the EW stage itself is
 enabled.
-PRELU/LUT modes, other external operand formats, and floating-point output
-converter modes are not generally functionally executed yet.
+BS/BN PRELU are modeled for their validated immediate multiply configurations:
+the positive path is unchanged while the negative path uses the stage factor
+and shift.  EW PRELU is modeled for the validated ``0x3a4`` immediate
+multiply configuration, using the EW operand as the negative factor.  LUT
+modes, other external operand formats, and
+floating-point output converter modes are not generally functionally executed
+yet.
 Independent hardware scans establish the current functional coverage range:
 at most 64 spatial positions, and storage/output dimensions of
 ``K=32,64,96,128`` and ``N=32,64,96``.  Two-dimensional 1x1 covers the same

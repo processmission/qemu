@@ -995,16 +995,19 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
         (task->dpu.bs_cfg != 0x53 && task->dpu.bs_cfg != 0x20050 &&
          task->dpu.bs_cfg != 0x20150 &&
          task->dpu.bs_cfg != 0x40050 && task->dpu.bs_cfg != 0x42 &&
-         task->dpu.bs_cfg != 0x12 && task->dpu.bs_cfg != 0x92) ||
-        (task->dpu.bs_cfg == 0x42 &&
+         task->dpu.bs_cfg != 0x12 && task->dpu.bs_cfg != 0x62 &&
+         task->dpu.bs_cfg != 0x92) ||
+        ((task->dpu.bs_cfg == 0x42 || task->dpu.bs_cfg == 0x62) &&
          (stage->bs_mul_cfg & ~(0xffff0000U | 0x3f00U))) ||
         task->dpu.dst_dma_cfg != 0x7fe ||
         (task->dpu.bn_cfg != 0x53 && task->dpu.bn_cfg != 0x20050 &&
-         task->dpu.bn_cfg != 0x42 && task->dpu.bn_cfg != 0x92) ||
-        (task->dpu.bn_cfg == 0x42 &&
+         task->dpu.bn_cfg != 0x42 && task->dpu.bn_cfg != 0x62 &&
+         task->dpu.bn_cfg != 0x92) ||
+        ((task->dpu.bn_cfg == 0x42 || task->dpu.bn_cfg == 0x62) &&
          (stage->bn_mul_cfg & ~(0xffff0000U | 0x3f00U))) ||
         (task->dpu.ew_cfg != 0x383 && task->dpu.ew_cfg != 0x20380 &&
          task->dpu.ew_cfg != 0x384 && task->dpu.ew_cfg != 0x104203c0 &&
+         task->dpu.ew_cfg != 0x3a4 &&
          task->dpu.ew_cfg != 0x104003c4 &&
          task->dpu.ew_cfg != 0x104202c0 &&
          task->dpu.ew_cfg != 0x504202c0 &&
@@ -1462,6 +1465,14 @@ static uint32_t rockchip_rknn_execute_pipeline(
                         extract32(stage->bs_mul_cfg, 8, 6),
                         extract32(task->dpu.data_format, 4, 6));
                     break;
+                case 0x62:
+                    if (!int128_nonneg(value)) {
+                        value = rockchip_rknn_dpu_mul(
+                            value, (int16_t)(stage->bs_mul_cfg >> 16),
+                            extract32(stage->bs_mul_cfg, 8, 6),
+                            extract32(task->dpu.data_format, 4, 6));
+                    }
+                    break;
                 case 0x12:
                 case 0x92:
                     if (!int128_nonneg(value)) {
@@ -1484,6 +1495,14 @@ static uint32_t rockchip_rknn_execute_pipeline(
                         value, (int16_t)(stage->bn_mul_cfg >> 16),
                         extract32(stage->bn_mul_cfg, 8, 6),
                         extract32(task->dpu.data_format, 10, 6));
+                    break;
+                case 0x62:
+                    if (!int128_nonneg(value)) {
+                        value = rockchip_rknn_dpu_mul(
+                            value, (int16_t)(stage->bn_mul_cfg >> 16),
+                            extract32(stage->bn_mul_cfg, 8, 6),
+                            extract32(task->dpu.data_format, 10, 6));
+                    }
                     break;
                 case 0x92:
                     if (!int128_nonneg(value)) {
@@ -1524,6 +1543,11 @@ static uint32_t rockchip_rknn_execute_pipeline(
                         value, int128_makes64(stage->ew_operand[
                             out % ARRAY_SIZE(stage->ew_operand)]));
                 } else if (task->dpu.ew_cfg == 0x384) {
+                    value = rockchip_rknn_mul_s32(
+                        value, (int16_t)stage->ew_operand[
+                            out % ARRAY_SIZE(stage->ew_operand)]);
+                } else if (task->dpu.ew_cfg == 0x3a4 &&
+                           !int128_nonneg(value)) {
                     value = rockchip_rknn_mul_s32(
                         value, (int16_t)stage->ew_operand[
                             out % ARRAY_SIZE(stage->ew_operand)]);
