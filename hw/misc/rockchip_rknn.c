@@ -149,6 +149,19 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_OUT_CVT_SHIFT 0x088
 #define ROCKCHIP_RKNN_DPU_EW_OP_VALUE_0 0x090
 #define ROCKCHIP_RKNN_DPU_SURFACE_ADD 0x0c0
+#define ROCKCHIP_RKNN_DPU_LUT_ACCESS_CFG 0x100
+#define ROCKCHIP_RKNN_DPU_LUT_ACCESS_DATA 0x104
+#define ROCKCHIP_RKNN_DPU_LUT_CFG 0x108
+#define ROCKCHIP_RKNN_DPU_LUT_INFO 0x10c
+#define ROCKCHIP_RKNN_DPU_LUT_LE_START 0x110
+#define ROCKCHIP_RKNN_DPU_LUT_LE_END 0x114
+#define ROCKCHIP_RKNN_DPU_LUT_LO_START 0x118
+#define ROCKCHIP_RKNN_DPU_LUT_LO_END 0x11c
+#define ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SCALE 0x120
+#define ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SHIFT 0x124
+#define ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SCALE 0x128
+#define ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SHIFT 0x12c
+#define ROCKCHIP_RKNN_LUT_ENTRIES 513
 #define ROCKCHIP_RKNN_POINTER_BANK BIT(0)
 #define ROCKCHIP_RKNN_POINTER_PP_EN BIT(1)
 #define ROCKCHIP_RKNN_EXECUTOR_PP_EN BIT(2)
@@ -258,6 +271,12 @@ typedef struct RockchipRKNNDPUConfig {
     uint8_t input_precision;
     uint8_t process_precision;
     uint8_t output_precision;
+    uint32_t lut_cfg;
+    uint32_t lut_info;
+    uint32_t lut_le_start, lut_le_end;
+    uint32_t lut_lo_start, lut_lo_end;
+    uint32_t lut_le_slope_scale, lut_le_slope_shift;
+    uint32_t lut_lo_slope_scale, lut_lo_slope_shift;
 } RockchipRKNNDPUConfig;
 
 typedef struct RockchipRKNNDpuRdmaConfig {
@@ -455,6 +474,55 @@ static void rockchip_rknn_register_file_init(
     }
 }
 
+static void rockchip_rknn_lut_write(RockchipRKNNCoreState *s,
+                                    uint32_t rel, uint32_t value)
+{
+    switch (rel) {
+    case ROCKCHIP_RKNN_DPU_LUT_ACCESS_CFG:
+        s->lut_access_cfg = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_ACCESS_DATA: {
+        unsigned int table = extract32(s->lut_access_cfg, 16, 1);
+        unsigned int addr = extract32(s->lut_access_cfg, 0, 10);
+        if (extract32(s->lut_access_cfg, 17, 1) && table < 2 &&
+            addr < ROCKCHIP_RKNN_LUT_ENTRIES) {
+            s->lut[table][addr] = value & 0xffff;
+            s->lut_access_cfg = deposit32(s->lut_access_cfg, 0, 10,
+                                           addr + 1);
+        }
+        break;
+    }
+    case ROCKCHIP_RKNN_DPU_LUT_CFG:
+        s->lut_cfg = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_INFO:
+        s->lut_info = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_LE_START:
+        s->lut_le_start = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_LE_END:
+        s->lut_le_end = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_LO_START:
+        s->lut_lo_start = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_LO_END:
+        s->lut_lo_end = value;
+        break;
+    case ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SCALE:
+        s->lut_le_slope_scale = value; break;
+    case ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SHIFT:
+        s->lut_le_slope_shift = value; break;
+    case ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SCALE:
+        s->lut_lo_slope_scale = value; break;
+    case ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SHIFT:
+        s->lut_lo_slope_shift = value; break;
+    default:
+        break;
+    }
+}
+
 static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
                                               RockchipRKNNRegisterFile *file,
                                               uint32_t iova,
@@ -497,6 +565,11 @@ static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
         }
         if (!rockchip_rknn_register_write(file, target, reg, value)) {
             return false;
+        }
+        if (target == ROCKCHIP_RKNN_REGCMD_TARGET_DPU &&
+            reg >= ROCKCHIP_RKNN_REGCMD_DPU_BASE) {
+            rockchip_rknn_lut_write(s,
+                reg - ROCKCHIP_RKNN_REGCMD_DPU_BASE, value);
         }
     }
 
@@ -553,6 +626,10 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
     uint32_t dpu_ew_cvt_offset, dpu_ew_cvt_scale;
     uint32_t dpu_bs_alu, dpu_bs_mul, dpu_bn_alu, dpu_bn_mul;
     uint32_t dpu_cvt_offset, dpu_cvt_scale, dpu_cvt_shift, dpu_surface_add;
+    uint32_t lut_cfg = 0, lut_info = 0, lut_le_start = 0, lut_le_end = 0;
+    uint32_t lut_lo_start = 0, lut_lo_end = 0, lut_le_slope_scale = 0;
+    uint32_t lut_le_slope_shift = 0, lut_lo_slope_scale = 0;
+    uint32_t lut_lo_slope_shift = 0;
     uint32_t rdma_width = 0, rdma_height = 0, rdma_channels = 0;
     uint32_t rdma_src = 0, rdma_brdma = 0, rdma_bs = 0, rdma_erdma = 0;
     uint32_t rdma_ew = 0, rdma_ew_stride = 0;
@@ -695,6 +772,38 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
         return false;
     }
 
+    if (dpu_ew == 0x302 &&
+        (!rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_CFG, &lut_cfg) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_INFO, &lut_info) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LE_START,
+                                     &lut_le_start) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LE_END,
+                                     &lut_le_end) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LO_START,
+                                     &lut_lo_start) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LO_END,
+                                     &lut_lo_end) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SCALE,
+                                     &lut_le_slope_scale) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LE_SLOPE_SHIFT,
+                                     &lut_le_slope_shift) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SCALE,
+                                     &lut_lo_slope_scale) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SHIFT,
+                                     &lut_lo_slope_shift))) {
+        return false;
+    }
+
     if (file->enabled_blocks & ROCKCHIP_RKNN_BLOCK_DPU_RDMA) {
         if (!rockchip_rknn_register_read(
                 file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
@@ -817,6 +926,16 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
     task->dpu.out_cvt_shift = extract32(dpu_cvt_shift, 0, 12);
     task->dpu.out_cvt_type = extract32(dpu_cvt_shift, 31, 1);
     task->dpu.surface_add = dpu_surface_add;
+    task->dpu.lut_cfg = lut_cfg;
+    task->dpu.lut_info = lut_info;
+    task->dpu.lut_le_start = lut_le_start;
+    task->dpu.lut_le_end = lut_le_end;
+    task->dpu.lut_lo_start = lut_lo_start;
+    task->dpu.lut_lo_end = lut_lo_end;
+    task->dpu.lut_le_slope_scale = lut_le_slope_scale;
+    task->dpu.lut_le_slope_shift = lut_le_slope_shift;
+    task->dpu.lut_lo_slope_scale = lut_lo_slope_scale;
+    task->dpu.lut_lo_slope_shift = lut_lo_slope_shift;
     task->dpu_rdma.width = extract32(rdma_width, 0, 13) + 1;
     task->dpu_rdma.height = extract32(rdma_height, 0, 13) + 1;
     task->dpu_rdma.channels = extract32(rdma_channels, 0, 13) + 1;
@@ -1005,13 +1124,24 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
          task->dpu.bn_cfg != 0x92) ||
         ((task->dpu.bn_cfg == 0x42 || task->dpu.bn_cfg == 0x62) &&
          (stage->bn_mul_cfg & ~(0xffff0000U | 0x3f00U))) ||
-        (task->dpu.ew_cfg != 0x383 && task->dpu.ew_cfg != 0x20380 &&
+        (task->dpu.ew_cfg != 0x383 && task->dpu.ew_cfg != 0x302 &&
+         task->dpu.ew_cfg != 0x20380 &&
          task->dpu.ew_cfg != 0x384 && task->dpu.ew_cfg != 0x104203c0 &&
          task->dpu.ew_cfg != 0x3a4 &&
          task->dpu.ew_cfg != 0x104003c4 &&
          task->dpu.ew_cfg != 0x104202c0 &&
          task->dpu.ew_cfg != 0x504202c0 &&
          task->dpu.ew_cfg != 0x20580) ||
+        (task->dpu.ew_cfg == 0x302 &&
+         (task->dpu.lut_cfg != 0x68 ||
+          task->dpu.lut_info != 0x00050500 ||
+          task->dpu.lut_le_start != 0xffffc000 ||
+          task->dpu.lut_le_end != 0 || task->dpu.lut_lo_start != 0 ||
+          task->dpu.lut_lo_end != 0x00004000 ||
+          task->dpu.lut_le_slope_scale ||
+          task->dpu.lut_le_slope_shift ||
+          task->dpu.lut_lo_slope_scale ||
+          task->dpu.lut_lo_slope_shift)) ||
         ((task->dpu.ew_cfg & BIT(8)) &&
          extract32(stage->ew_cvt_scale, 0, 22) != 1) ||
         (ew_rdma &&
@@ -1317,6 +1447,36 @@ static void rockchip_rknn_prepare_slave_pipeline(RockchipRKNNCoreState *s,
     }
 }
 
+static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
+                                       const RockchipRKNNDPUConfig *dpu,
+                                       Int128 value)
+{
+    int64_t input = int128_getlo(rockchip_rknn_saturate_i32(value));
+    int64_t start, end, offset, span;
+    unsigned int table;
+    unsigned int index;
+
+    if (input < 0) {
+        table = 0;
+        start = (int32_t)dpu->lut_le_start;
+        end = (int32_t)dpu->lut_le_end;
+    } else {
+        table = 1;
+        start = (int32_t)dpu->lut_lo_start;
+        end = (int32_t)dpu->lut_lo_end;
+    }
+    if (input <= start) {
+        index = 0;
+    } else if (input >= end) {
+        index = ROCKCHIP_RKNN_LUT_ENTRIES - 1;
+    } else {
+        offset = input - start;
+        span = end - start;
+        index = offset * (ROCKCHIP_RKNN_LUT_ENTRIES - 1) / span;
+    }
+    return int128_makes64((int16_t)s->lut[table][index]);
+}
+
 static uint32_t rockchip_rknn_execute_pipeline(
     RockchipRKNNCoreState *s, const RockchipRKNNPipelineTask *task,
     const RockchipRKNNDPUStageSnapshot *stage)
@@ -1559,6 +1719,9 @@ static uint32_t rockchip_rknn_execute_pipeline(
                     if (int128_getlo(value) > task->dpu.ew_relux_cmp) {
                         value = int128_makes64(task->dpu.ew_relux_cmp);
                     }
+                }
+                if (task->dpu.ew_cfg == 0x302) {
+                    value = rockchip_rknn_lut_lookup(s, &task->dpu, value);
                 }
                 ew_shift = 0;
                 if (task->dpu.ew_cfg != 0x383) {
@@ -2332,6 +2495,9 @@ static void rockchip_rknn_slave_domain_write(
             ROCKCHIP_RKNN_REGCMD_PPU_RDMA_BASE,
     };
 
+    if (domain == ROCKCHIP_RKNN_DOMAIN_DPU) {
+        rockchip_rknn_lut_write(s, rel, value);
+    }
     rockchip_rknn_register_write(&s->slave_file, targets[domain],
                                  bases[domain] + rel, value);
 }
@@ -2491,6 +2657,18 @@ static void rockchip_rknn_reset(DeviceState *dev)
     memset(s->domain_runtime, 0, sizeof(s->domain_runtime));
     memset(s->pending_domain_runtime, 0, sizeof(s->pending_domain_runtime));
     memset(&s->slave_file, 0, sizeof(s->slave_file));
+    memset(s->lut, 0, sizeof(s->lut));
+    s->lut_access_cfg = 0;
+    s->lut_cfg = 0;
+    s->lut_info = 0;
+    s->lut_le_start = 0;
+    s->lut_le_end = 0;
+    s->lut_lo_start = 0;
+    s->lut_lo_end = 0;
+    s->lut_le_slope_scale = 0;
+    s->lut_le_slope_shift = 0;
+    s->lut_lo_slope_scale = 0;
+    s->lut_lo_slope_shift = 0;
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->pc_regs_info); i++) {
         register_reset(&s->pc_regs_info[i]);
@@ -2658,6 +2836,16 @@ static const VMStateDescription vmstate_rockchip_rknn_dpu = {
         VMSTATE_UINT8(input_precision, RockchipRKNNDPUConfig),
         VMSTATE_UINT8(process_precision, RockchipRKNNDPUConfig),
         VMSTATE_UINT8(output_precision, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_cfg, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_info, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_le_start, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_le_end, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_lo_start, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_lo_end, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_le_slope_scale, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_le_slope_shift, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_lo_slope_scale, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(lut_lo_slope_shift, RockchipRKNNDPUConfig),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -2825,6 +3013,19 @@ static const VMStateDescription vmstate_rockchip_rknn = {
                        vmstate_rockchip_rknn_register_file,
                        RockchipRKNNRegisterFile),
         VMSTATE_BOOL(pending_slave, RockchipRKNNCoreState),
+        VMSTATE_UINT16_2DARRAY(lut, RockchipRKNNCoreState, 2,
+                               ROCKCHIP_RKNN_LUT_ENTRIES),
+        VMSTATE_UINT32(lut_access_cfg, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_cfg, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_info, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_le_start, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_le_end, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_lo_start, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_lo_end, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_le_slope_scale, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_le_slope_shift, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_lo_slope_scale, RockchipRKNNCoreState),
+        VMSTATE_UINT32(lut_lo_slope_shift, RockchipRKNNCoreState),
         VMSTATE_STRUCT_ARRAY(pending_dpu_stage, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_TASKS_MAX, 0,
                              vmstate_rockchip_rknn_dpu_stage,

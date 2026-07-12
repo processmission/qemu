@@ -116,6 +116,18 @@ struct RockchipRKNNCoreState {
     bool functional;
     bool busy;
     bool irq_level;
+    uint16_t lut[2][513];
+    uint32_t lut_access_cfg;
+    uint32_t lut_cfg;
+    uint32_t lut_info;
+    uint32_t lut_le_start;
+    uint32_t lut_le_end;
+    uint32_t lut_lo_start;
+    uint32_t lut_lo_end;
+    uint32_t lut_le_slope_scale;
+    uint32_t lut_le_slope_shift;
+    uint32_t lut_lo_slope_scale;
+    uint32_t lut_lo_slope_shift;
 };
 
 #endif /* HW_MISC_ROCKCHIP_RKNN_H */
