@@ -162,6 +162,8 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SCALE 0x128
 #define ROCKCHIP_RKNN_DPU_LUT_LO_SLOPE_SHIFT 0x12c
 #define ROCKCHIP_RKNN_LUT_ENTRIES 513
+#define ROCKCHIP_RKNN_LUT_VENDOR_LO_OFLOW_SCALE 0x40320000
+#define ROCKCHIP_RKNN_LUT_VENDOR_LO_OFLOW_SHIFT 0x000001a0
 #define ROCKCHIP_RKNN_POINTER_BANK BIT(0)
 #define ROCKCHIP_RKNN_POINTER_PP_EN BIT(1)
 #define ROCKCHIP_RKNN_EXECUTOR_PP_EN BIT(2)
@@ -1140,8 +1142,14 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
           task->dpu.lut_lo_end != 0x00004000 ||
           task->dpu.lut_le_slope_scale ||
           task->dpu.lut_le_slope_shift ||
-          task->dpu.lut_lo_slope_scale ||
-          task->dpu.lut_lo_slope_shift)) ||
+          (task->dpu.lut_lo_slope_scale != 0 &&
+           task->dpu.lut_lo_slope_scale !=
+           ROCKCHIP_RKNN_LUT_VENDOR_LO_OFLOW_SCALE) ||
+          (task->dpu.lut_lo_slope_shift != 0 &&
+           task->dpu.lut_lo_slope_shift !=
+           ROCKCHIP_RKNN_LUT_VENDOR_LO_OFLOW_SHIFT) ||
+          (!!task->dpu.lut_lo_slope_scale !=
+           !!task->dpu.lut_lo_slope_shift))) ||
         ((task->dpu.ew_cfg & BIT(8)) &&
          extract32(stage->ew_cvt_scale, 0, 22) != 1) ||
         (ew_rdma &&
@@ -1473,6 +1481,14 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
         offset = input - start;
         span = end - start;
         index = offset * (ROCKCHIP_RKNN_LUT_ENTRIES - 1) / span;
+    }
+    if (table == 1 && input > end && dpu->lut_lo_slope_scale) {
+        int64_t delta = input - end;
+        int64_t endpoint = (int16_t)s->lut[table][index];
+        unsigned int scale = extract32(dpu->lut_lo_slope_scale, 16, 16);
+        unsigned int shift = extract32(dpu->lut_lo_slope_shift, 5, 5);
+
+        return int128_makes64(endpoint + ((delta * scale) >> shift));
     }
     return int128_makes64((int16_t)s->lut[table][index]);
 }

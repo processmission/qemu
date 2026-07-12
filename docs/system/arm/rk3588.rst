@@ -131,8 +131,12 @@ case and unique-entry positive/negative cases are differential-tested against
 RK3588 hardware.  Negative inputs select LE (table 0) and nonnegative inputs
 select LO (table 1); within the observed endpoints, the index is the
 floor-divided input offset at 32 units per entry, with out-of-range values
-clamped to entry 0 or 512.  Slope-based endpoint extrapolation and general
-Sigmoid/Tanh profiles are not modeled yet.  Other
+clamped to entry 0 or 512 when the corresponding slope is zero.  The vendor
+LO overflow profile is also modeled: ``LO_SLOPE_SCALE=0x40320000`` encodes
+overflow scale ``0x4032``, and ``LO_SLOPE_SHIFT=0x1a0`` encodes shift 13.
+Values above ``LO_END`` add the truncated product
+``((input - LO_END) * 0x4032) >> 13`` to table 1 entry 512.  Other slope
+profiles and general Sigmoid/Tanh profiles are not modeled yet.  Other
 external operand formats and
 floating-point output converter modes are not generally functionally executed
 yet.
