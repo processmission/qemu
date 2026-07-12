@@ -122,7 +122,18 @@ BS/BN PRELU are modeled for their validated immediate multiply configurations:
 the positive path is unchanged while the negative path uses the stage factor
 and shift.  EW PRELU is modeled for the validated ``0x3a4`` immediate
 multiply configuration, using the EW operand as the negative factor.  LUT
-modes, other external operand formats, and
+storage models the two hardware-observed 513-entry tables.  Writes with
+``LUT_ACCESS_TYPE=1`` select a table through ``LUT_TABLE_ID`` and
+auto-increment the 10-bit entry address.  Functional execution covers the
+board-validated ``EW_CFG=0x302``, ``LUT_CFG=0x68``, ``LUT_INFO=0x50500``
+profile with LE/LO endpoints and direct table interpolation; a constant-table
+case and unique-entry positive/negative cases are differential-tested against
+RK3588 hardware.  Negative inputs select LE (table 0) and nonnegative inputs
+select LO (table 1); within the observed endpoints, the index is the
+floor-divided input offset at 32 units per entry, with out-of-range values
+clamped to entry 0 or 512.  Slope-based endpoint extrapolation and general
+Sigmoid/Tanh profiles are not modeled yet.  Other
+external operand formats and
 floating-point output converter modes are not generally functionally executed
 yet.
 Independent hardware scans establish the current functional coverage range:

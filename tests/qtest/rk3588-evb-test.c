@@ -3685,10 +3685,11 @@ static void test_rk3588_rknpu_dpu_bs_relux(void)
 
             for (unsigned int channel = 0;
                  channel < RK3588_RKNN_MATMUL_K; channel++) {
-                int8_t input = ((row * 37 + channel * 11 + 3) % 31) - 15;
+                int8_t input_value =
+                    ((row * 37 + channel * 11 + 3) % 31) - 15;
                 int8_t weight = ((out * 19 + channel * 7 + 5) % 29) - 14;
 
-                accumulator += input * weight;
+                accumulator += input_value * weight;
             }
             accumulator = CLAMP(accumulator, 0, 20);
             g_assert_cmpint((int32_t)le32_to_cpu(output[output_index]), ==,
@@ -3834,6 +3835,117 @@ static void test_rk3588_rknpu_dpu_ew_prelu(void)
             }
             g_assert_cmpint((int32_t)le32_to_cpu(output[output_index]), ==,
                             accumulator);
+        }
+    }
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_dpu_lut_unique(void)
+{
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    uint32_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N];
+    int8_t input[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_K];
+    int8_t weights[RK3588_RKNN_MATMUL_N * RK3588_RKNN_MATMUL_K];
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+    size_t index;
+
+    qtest_writel(qts, RK3588_RKNN0_DPU_BASE + 0x100, 0x00020000);
+    for (unsigned int i = 0; i < 513; i++) {
+        qtest_writel(qts, RK3588_RKNN0_DPU_BASE + 0x104, 0x1000 + i);
+    }
+    qtest_writel(qts, RK3588_RKNN0_DPU_BASE + 0x100, 0x00030000);
+    for (unsigned int i = 0; i < 513; i++) {
+        qtest_writel(qts, RK3588_RKNN0_DPU_BASE + 0x104, 0x2000 + i);
+    }
+
+    rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+    rk3588_rknn_make_matmul_regcmd(commands, true);
+#define SET_LUT_REG(_reg, _value) do {                              \
+    index = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),  \
+                                    0x1001, (_reg));                 \
+    commands[index] = rk3588_rknn_regcmd(0x1001, (_reg), (_value)); \
+} while (0)
+    SET_LUT_REG(0x4070, 0x302);
+    SET_LUT_REG(0x4108, 0x68);
+    SET_LUT_REG(0x410c, 0x00050500);
+    SET_LUT_REG(0x4110, 0xffffc000);
+    SET_LUT_REG(0x4114, 0);
+    SET_LUT_REG(0x4118, 0);
+    SET_LUT_REG(0x411c, 0x00004000);
+    SET_LUT_REG(0x4120, 0);
+    SET_LUT_REG(0x4124, 0);
+    SET_LUT_REG(0x4128, 0);
+    SET_LUT_REG(0x412c, 0);
+#undef SET_LUT_REG
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+    for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+        for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+            int32_t accumulator = 0;
+            unsigned int lut_index;
+            uint32_t expected;
+            size_t output_index = rk3588_rknn_feature_index(
+                RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                out, row);
+
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_MATMUL_K; channel++) {
+                int8_t input = ((row * 37 + channel * 11 + 3) % 31) - 15;
+                int8_t weight = ((out * 19 + channel * 7 + 5) % 29) - 14;
+
+                accumulator += input * weight;
+            }
+            if (accumulator < -16384) {
+                lut_index = 0;
+            } else if (accumulator < 0) {
+                lut_index = (accumulator + 16384) / 32;
+            } else if (accumulator >= 16384) {
+                lut_index = 512;
+            } else {
+                lut_index = accumulator / 32;
+            }
+            expected = (accumulator < 0 ? 0x1000 : 0x2000) + lut_index;
+            g_assert_cmphex(le32_to_cpu(output[output_index]), ==, expected);
+        }
+    }
+
+    memset(input, 0, sizeof(input));
+    memset(weights, 0, sizeof(weights));
+    for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+        for (unsigned int channel = 0;
+             channel < RK3588_RKNN_MATMUL_K; channel++) {
+            input[rk3588_rknn_feature_index(RK3588_RKNN_MATMUL_K,
+                                            RK3588_RKNN_MATMUL_M, 16,
+                                            channel, row)] = 127;
+        }
+    }
+    for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+        for (unsigned int channel = 0;
+             channel < RK3588_RKNN_MATMUL_K; channel++) {
+            weights[rk3588_rknn_weight_index(out, channel)] =
+                out < RK3588_RKNN_MATMUL_N / 2 ? -128 : 127;
+        }
+    }
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_INPUT_ADDR, input, sizeof(input));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_WEIGHT_ADDR, weights,
+                   sizeof(weights));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+    for (unsigned int row = 0; row < RK3588_RKNN_MATMUL_M; row++) {
+        for (unsigned int out = 0; out < RK3588_RKNN_MATMUL_N; out++) {
+            size_t output_index = rk3588_rknn_feature_index(
+                RK3588_RKNN_MATMUL_N, RK3588_RKNN_MATMUL_M, 4,
+                out, row);
+            uint32_t expected = out < RK3588_RKNN_MATMUL_N / 2 ?
+                                0x1000 : 0x2200;
+
+            g_assert_cmphex(le32_to_cpu(output[output_index]), ==, expected);
         }
     }
     qtest_quit(qts);
@@ -5393,6 +5505,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_dpu_prelu_rejects_mul_controls);
     qtest_add_func("/rk3588/rknpu-dpu-ew-prelu",
                    test_rk3588_rknpu_dpu_ew_prelu);
+    qtest_add_func("/rk3588/rknpu-dpu-lut-unique",
+                   test_rk3588_rknpu_dpu_lut_unique);
     qtest_add_func("/rk3588/rknpu-dpu-bn-ew-relux",
                    test_rk3588_rknpu_dpu_bn_ew_relux);
     qtest_add_func("/rk3588/rknpu-dpu-mul-shifts",
