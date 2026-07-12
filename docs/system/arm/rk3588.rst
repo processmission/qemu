@@ -81,8 +81,12 @@ An experimental functional mode is available with
 or slave-mode CNA/CORE/DPU MMIO writes into banked register files, then decodes
 an immutable hardware-pipeline task.  Slave mode is selected with
 ``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
-The first validated backend
-profile is a signed INT8 1x1 CNA/MAC pipeline with signed INT32 DPU output.
+The first validated backend profile is a signed INT8 CNA/MAC pipeline with
+signed INT32 DPU output.  It covers width-one Matmul-style surfaces,
+two-dimensional 1x1 direct convolution with stride one and no padding, and
+3x3 direct convolution with stride one or two and one-cell top/left padding.
+The stride-one profile also covers the hardware-observed asymmetric case with
+left/bottom padding but no top/right padding.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
@@ -95,9 +99,10 @@ round-to-nearest-even; EW bypass ignores those fields.  The OUT_CVT
 ``minus_exp`` field is accepted and has no
 effect in the hardware-validated INT32 output mode.  These stages can be
 composed in hardware order.  ``MC_SURF_OUT`` scatters at most eight 32-value
-output blocks using the hardware-observed ``SURFACE_ADD`` layout; unwritten
-holes remain untouched and overlapping block addresses are written in task
-order.  External/RDMA operands are functionally executed for the first
+output blocks using the hardware-observed ``SURFACE_ADD`` layout.  Blocks
+advance through flattened two-dimensional spatial positions before the next
+32-channel group; unwritten holes remain untouched and overlapping block
+addresses are written in task order.  External/RDMA operands are functionally executed for the first
 per-pixel signed INT8 profile.  It supports EW add and multiply, plus the EW
 operand converter's signed offset, unsigned scale, six-bit shift, and both
 round-to-nearest-even and ties-away-from-zero modes.  Operand conversion runs
@@ -109,9 +114,15 @@ channel and broadcasts it across spatial positions before BN and EW.
 PRELU/RELUX/LUT modes, other external operand formats, and floating-point
 output converter modes are not generally functionally executed yet.
 Independent hardware scans establish the current functional coverage range:
-``M <= 64``, and storage/output dimensions of ``K=32,64,96,128`` and
-``N=32,64,96``.  This is a temporary capture-coverage gate, not a global
-hardware shape restriction or guest-visible rejection path.  The mode uses the
+at most 64 spatial positions, and storage/output dimensions of
+``K=32,64,96,128`` and ``N=32,64,96``.  Two-dimensional 1x1 covers the same
+ranges; the 3x3 profile currently covers ``K,N <= 64``.  This is a
+temporary capture-coverage gate,
+not a global hardware shape restriction or guest-visible rejection path.
+The validated spatial EW DPU-RDMA profile uses the same 16-channel operand
+planes with output-space surface stride/notch.  Spatial BRDMA reads one
+signed INT32 bias per channel and broadcasts it across the output surface.
+The mode uses the
 modeled RK3588 IOMMU page tables, including paging state and PTE read/write
 permissions, to read commands, input, and weights and writes the NPU-layout
 output before raising
