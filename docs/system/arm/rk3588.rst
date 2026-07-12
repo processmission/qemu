@@ -111,9 +111,15 @@ follow it.  Hardware-observed 16-channel source and EW surfaces across
 multiple 32-channel groups, including notch progression, are read through
 the modeled IOMMU.  The
 validated BRDMA profile reads one signed INT32 BS add operand per output
-channel and broadcasts it across spatial positions before BN and EW.
-PRELU/RELUX/LUT modes, other external operand formats, and floating-point
-output converter modes are not generally functionally executed yet.
+channel across multiple 32-channel groups and broadcasts it across spatial
+positions before BN and EW.
+BS/BN RELUX are functionally modeled when their respective ``*_RELUX_EN``
+bit is set, using the signed INT32 clamp interval ``[0, *_RELUX_CMP_VALUE]``.
+EW RELUX is modeled for the validated ``0x20580`` immediate-add configuration
+with a zero operand and the operand converter bypassed; the EW stage itself is
+enabled.
+PRELU/LUT modes, other external operand formats, and floating-point output
+converter modes are not generally functionally executed yet.
 Independent hardware scans establish the current functional coverage range:
 at most 64 spatial positions, and storage/output dimensions of
 ``K=32,64,96,128`` and ``N=32,64,96``.  Two-dimensional 1x1 covers the same
