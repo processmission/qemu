@@ -134,13 +134,16 @@ REG32(CORE_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_BS_CFG 0x040
 #define ROCKCHIP_RKNN_DPU_BS_ALU_CFG 0x044
 #define ROCKCHIP_RKNN_DPU_BS_MUL_CFG 0x048
+#define ROCKCHIP_RKNN_DPU_BS_RELUX_CMP_VALUE 0x04c
 #define ROCKCHIP_RKNN_DPU_DST_DMA_CFG 0x050
 #define ROCKCHIP_RKNN_DPU_BN_CFG 0x060
 #define ROCKCHIP_RKNN_DPU_BN_ALU_CFG 0x064
 #define ROCKCHIP_RKNN_DPU_BN_MUL_CFG 0x068
+#define ROCKCHIP_RKNN_DPU_BN_RELUX_CMP_VALUE 0x06c
 #define ROCKCHIP_RKNN_DPU_EW_CFG 0x070
 #define ROCKCHIP_RKNN_DPU_EW_CVT_OFFSET_VALUE 0x074
 #define ROCKCHIP_RKNN_DPU_EW_CVT_SCALE_VALUE 0x078
+#define ROCKCHIP_RKNN_DPU_EW_RELUX_CMP_VALUE 0x07c
 #define ROCKCHIP_RKNN_DPU_OUT_CVT_OFFSET 0x080
 #define ROCKCHIP_RKNN_DPU_OUT_CVT_SCALE 0x084
 #define ROCKCHIP_RKNN_DPU_OUT_CVT_SHIFT 0x088
@@ -239,9 +242,12 @@ typedef struct RockchipRKNNDPUConfig {
     uint32_t feature_mode;
     uint32_t data_format;
     uint32_t bs_cfg;
+    uint32_t bs_relux_cmp;
     uint32_t dst_dma_cfg;
     uint32_t bn_cfg;
+    uint32_t bn_relux_cmp;
     uint32_t ew_cfg;
+    uint32_t ew_relux_cmp;
     int32_t out_cvt_offset;
     uint16_t out_cvt_scale;
     uint16_t out_cvt_shift;
@@ -542,7 +548,8 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
     uint32_t weight0, weight1, weight2, cna_cvt, cna_pad, cna_dma1, cna_dma2;
     uint32_t cna_fc0, cna_fc1, core_misc, core_size0, core_size1, core_clip;
     uint32_t dpu_feature, dpu_format, dpu_stride, dpu_width, dpu_height;
-    uint32_t dpu_channel, dpu_bs, dpu_dma, dpu_wdma0, dpu_bn, dpu_ew;
+    uint32_t dpu_channel, dpu_bs, dpu_bs_relux_cmp, dpu_dma, dpu_wdma0;
+    uint32_t dpu_bn, dpu_bn_relux_cmp, dpu_ew, dpu_ew_relux_cmp;
     uint32_t dpu_ew_cvt_offset, dpu_ew_cvt_scale;
     uint32_t dpu_bs_alu, dpu_bs_mul, dpu_bn_alu, dpu_bn_mul;
     uint32_t dpu_cvt_offset, dpu_cvt_scale, dpu_cvt_shift, dpu_surface_add;
@@ -643,6 +650,9 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
                                      ROCKCHIP_RKNN_DPU_BS_MUL_CFG,
                                      &dpu_bs_mul) ||
         !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_BS_RELUX_CMP_VALUE,
+                                     &dpu_bs_relux_cmp) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
                                      ROCKCHIP_RKNN_DPU_DST_DMA_CFG,
                                      &dpu_dma) ||
         !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
@@ -657,6 +667,9 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
                                      ROCKCHIP_RKNN_DPU_BN_MUL_CFG,
                                      &dpu_bn_mul) ||
         !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_BN_RELUX_CMP_VALUE,
+                                     &dpu_bn_relux_cmp) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
                                      ROCKCHIP_RKNN_DPU_EW_CFG, &dpu_ew) ||
         !rockchip_rknn_register_read(
             file, ROCKCHIP_RKNN_DOMAIN_DPU,
@@ -664,6 +677,9 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
         !rockchip_rknn_register_read(
             file, ROCKCHIP_RKNN_DOMAIN_DPU,
             ROCKCHIP_RKNN_DPU_EW_CVT_SCALE_VALUE, &dpu_ew_cvt_scale) ||
+        !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
+                                     ROCKCHIP_RKNN_DPU_EW_RELUX_CMP_VALUE,
+                                     &dpu_ew_relux_cmp) ||
         !rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_DPU,
                                      ROCKCHIP_RKNN_DPU_OUT_CVT_OFFSET,
                                      &dpu_cvt_offset) ||
@@ -789,10 +805,13 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
     task->dpu.output.atom = 4;
     task->dpu.output.surface_stride = extract32(dpu_stride, 4, 28);
     task->dpu.bs_cfg = dpu_bs;
+    task->dpu.bs_relux_cmp = dpu_bs_relux_cmp;
     task->dpu.dst_dma_cfg = dpu_dma;
     task->dpu.wdma_channels = extract32(dpu_wdma0, 0, 13) + 1;
     task->dpu.bn_cfg = dpu_bn;
+    task->dpu.bn_relux_cmp = dpu_bn_relux_cmp;
     task->dpu.ew_cfg = dpu_ew;
+    task->dpu.ew_relux_cmp = dpu_ew_relux_cmp;
     task->dpu.out_cvt_offset = dpu_cvt_offset;
     task->dpu.out_cvt_scale = extract32(dpu_cvt_scale, 0, 16);
     task->dpu.out_cvt_shift = extract32(dpu_cvt_shift, 0, 12);
@@ -976,19 +995,20 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
         (task->dpu.bs_cfg != 0x53 && task->dpu.bs_cfg != 0x20050 &&
          task->dpu.bs_cfg != 0x20150 &&
          task->dpu.bs_cfg != 0x40050 && task->dpu.bs_cfg != 0x42 &&
-         task->dpu.bs_cfg != 0x12) ||
+         task->dpu.bs_cfg != 0x12 && task->dpu.bs_cfg != 0x92) ||
         (task->dpu.bs_cfg == 0x42 &&
          (stage->bs_mul_cfg & ~(0xffff0000U | 0x3f00U))) ||
         task->dpu.dst_dma_cfg != 0x7fe ||
         (task->dpu.bn_cfg != 0x53 && task->dpu.bn_cfg != 0x20050 &&
-         task->dpu.bn_cfg != 0x42) ||
+         task->dpu.bn_cfg != 0x42 && task->dpu.bn_cfg != 0x92) ||
         (task->dpu.bn_cfg == 0x42 &&
          (stage->bn_mul_cfg & ~(0xffff0000U | 0x3f00U))) ||
         (task->dpu.ew_cfg != 0x383 && task->dpu.ew_cfg != 0x20380 &&
          task->dpu.ew_cfg != 0x384 && task->dpu.ew_cfg != 0x104203c0 &&
          task->dpu.ew_cfg != 0x104003c4 &&
          task->dpu.ew_cfg != 0x104202c0 &&
-         task->dpu.ew_cfg != 0x504202c0) ||
+         task->dpu.ew_cfg != 0x504202c0 &&
+         task->dpu.ew_cfg != 0x20580) ||
         ((task->dpu.ew_cfg & BIT(8)) &&
          extract32(stage->ew_cvt_scale, 0, 22) != 1) ||
         (ew_rdma &&
@@ -1443,8 +1463,13 @@ static uint32_t rockchip_rknn_execute_pipeline(
                         extract32(task->dpu.data_format, 4, 6));
                     break;
                 case 0x12:
+                case 0x92:
                     if (!int128_nonneg(value)) {
                         value = int128_zero();
+                    }
+                    if ((task->dpu.bs_cfg & BIT(7)) &&
+                        int128_getlo(value) > task->dpu.bs_relux_cmp) {
+                        value = int128_makes64(task->dpu.bs_relux_cmp);
                     }
                     break;
                 }
@@ -1459,6 +1484,14 @@ static uint32_t rockchip_rknn_execute_pipeline(
                         value, (int16_t)(stage->bn_mul_cfg >> 16),
                         extract32(stage->bn_mul_cfg, 8, 6),
                         extract32(task->dpu.data_format, 10, 6));
+                    break;
+                case 0x92:
+                    if (!int128_nonneg(value)) {
+                        value = int128_zero();
+                    }
+                    if (int128_getlo(value) > task->dpu.bn_relux_cmp) {
+                        value = int128_makes64(task->dpu.bn_relux_cmp);
+                    }
                     break;
                 }
                 value = rockchip_rknn_saturate_i32(value);
@@ -1485,7 +1518,8 @@ static uint32_t rockchip_rknn_execute_pipeline(
                     } else {
                         value = int128_add(value, ew_operand);
                     }
-                } else if (task->dpu.ew_cfg == 0x20380) {
+                } else if (task->dpu.ew_cfg == 0x20380 ||
+                           task->dpu.ew_cfg == 0x20580) {
                     value = int128_add(
                         value, int128_makes64(stage->ew_operand[
                             out % ARRAY_SIZE(stage->ew_operand)]));
@@ -1493,6 +1527,14 @@ static uint32_t rockchip_rknn_execute_pipeline(
                     value = rockchip_rknn_mul_s32(
                         value, (int16_t)stage->ew_operand[
                             out % ARRAY_SIZE(stage->ew_operand)]);
+                }
+                if (task->dpu.ew_cfg == 0x20580) {
+                    if (!int128_nonneg(value)) {
+                        value = int128_zero();
+                    }
+                    if (int128_getlo(value) > task->dpu.ew_relux_cmp) {
+                        value = int128_makes64(task->dpu.ew_relux_cmp);
+                    }
                 }
                 ew_shift = 0;
                 if (task->dpu.ew_cfg != 0x383) {
@@ -2576,9 +2618,12 @@ static const VMStateDescription vmstate_rockchip_rknn_dpu = {
         VMSTATE_UINT32(feature_mode, RockchipRKNNDPUConfig),
         VMSTATE_UINT32(data_format, RockchipRKNNDPUConfig),
         VMSTATE_UINT32(bs_cfg, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(bs_relux_cmp, RockchipRKNNDPUConfig),
         VMSTATE_UINT32(dst_dma_cfg, RockchipRKNNDPUConfig),
         VMSTATE_UINT32(bn_cfg, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(bn_relux_cmp, RockchipRKNNDPUConfig),
         VMSTATE_UINT32(ew_cfg, RockchipRKNNDPUConfig),
+        VMSTATE_UINT32(ew_relux_cmp, RockchipRKNNDPUConfig),
         VMSTATE_INT32(out_cvt_offset, RockchipRKNNDPUConfig),
         VMSTATE_UINT16(out_cvt_scale, RockchipRKNNDPUConfig),
         VMSTATE_UINT16(out_cvt_shift, RockchipRKNNDPUConfig),
