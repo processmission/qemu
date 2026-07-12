@@ -997,8 +997,7 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
           task->dpu.ew_cfg != 0x104202c0 &&
           task->dpu.ew_cfg != 0x504202c0)) ||
         (dpu_rdma && input_width > 1 &&
-         ((!ew_rdma && !bs_rdma) || task->cna.kernel_width != 1 ||
-          k_storage != 32 || n_cube != 32)) ||
+         ((!ew_rdma && !bs_rdma) || task->cna.kernel_width != 1)) ||
         (ew_rdma &&
          (task->dpu_rdma.width != output_width ||
           task->dpu_rdma.height != output_height ||
