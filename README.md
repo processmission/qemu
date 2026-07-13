@@ -12,6 +12,7 @@ for new machine requests or bug reports.
 | arch | machine | direct | firmware | src |
 | --- | --- | --- | --- | --- |
 | RISC-V | [`k230-canmv`](docs/system/riscv/k230-canmv.rst) | ✅ | ✅ | PM |
+| RISC-V | [`k3-pico-itx`](docs/system/riscv/spacemit-k3.rst) | ✅ | ✅ | PM |
 | RISC-V | [`milkv-duo`](docs/system/riscv/milkv-duo.rst) | ✅ | ✅ | UP |
 | RISC-V | [`riscv-server-ref`](docs/system/riscv/riscv-server-ref.rst) | ✅ | ✅ | UP |
 | ARM | [`phytium-pi`](docs/system/arm/phytium-pi.rst) | ✅ | ✅ | PM |
