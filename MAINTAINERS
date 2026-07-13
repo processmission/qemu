@@ -1851,6 +1851,13 @@ F: tests/functional/riscv64/test_k230.py
 F: tests/qtest/k230-sysctl-test.c
 F: tests/qtest/k230-wdt-test.c
 
+SpacemiT K3 Pico-ITX
+M: Chao Liu <chao.liu@processmission.com>
+L: qemu-riscv@nongnu.org
+S: Maintained
+F: hw/riscv/spacemit-k3.c
+F: include/hw/riscv/spacemit-k3.h
+
 Milk-V Duo
 M: Kuan-Wei Chiu <visitorckw@gmail.com>
 S: Maintained
