@@ -3483,6 +3483,18 @@ static const TypeInfo riscv_cpu_type_infos[] = {
     DEFINE_PROFILE_CPU(TYPE_RISCV_CPU_RVA22S64,  TYPE_RISCV_CPU_RV64I,  RVA22S64),
     DEFINE_PROFILE_CPU(TYPE_RISCV_CPU_RVA23U64,  TYPE_RISCV_CPU_RV64I,  RVA23U64),
     DEFINE_PROFILE_CPU(TYPE_RISCV_CPU_RVA23S64,  TYPE_RISCV_CPU_RV64I,  RVA23S64),
+
+    DEFINE_RISCV_CPU(TYPE_RISCV_CPU_SPACEMIT_X100,
+                     TYPE_RISCV_VENDOR_CPU,
+        .profile = &RVA23S64,
+        .misa_mxl_max = MXL_RV64,
+        .misa_ext = RVH,
+        .cfg.mmu = true,
+        .cfg.vlenb = 256 >> 3,
+        .cfg.ext_smaia = true,
+        .cfg.ext_ssaia = true,
+        .cfg.max_satp_mode = VM_1_10_SV39,
+    ),
 #endif /* TARGET_RISCV64 */
 };
 
