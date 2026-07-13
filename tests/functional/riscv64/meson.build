@@ -3,6 +3,7 @@
 test_riscv64_timeouts = {
   'boston' : 120,
   'server_ref' : 120,
+  'spacemit_k3' : 180,
   'tuxrun' : 120,
 }
 
@@ -16,5 +17,6 @@ tests_riscv64_system_thorough = [
   'boston',
   'server_ref',
   'sifive_u',
+  'spacemit_k3',
   'tuxrun',
 ]
