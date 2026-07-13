@@ -159,7 +159,12 @@ mode supports bounded sequential task chains; slave mode supports one directly
 configured task and reports its hardware-observed task status.  The property
 is off by default; when it is off the model performs no functional DMA reads or
 writes.  Other DPU-RDMA data modes, precisions, and notch layouts, as well as
-PPU execution and cycle timing, remain unimplemented.
+other PPU execution modes and cycle timing, remain unimplemented.  The
+experimental PPU/RDMA profile is limited to the board-validated signed INT4
+5x5 max-pooling path with eight 16-channel surfaces.  Its standalone completion
+reports task status ``0xf000`` and raw status ``0xc0000000`` without raising
+the final PC job interrupt.  IOMMU translation or permission faults abort this
+profile without adding the generic PC DMA read/write status bits.
 
 The decoder keeps software-visible valid and storage dimensions separate.
 For this INT8 profile, CNA ``DATA_SIZE1`` supplies valid and storage input
