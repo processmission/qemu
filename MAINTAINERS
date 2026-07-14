@@ -1857,8 +1857,10 @@ L: qemu-riscv@nongnu.org
 S: Maintained
 F: hw/misc/spacemit-k3.c
 F: hw/riscv/spacemit-k3.c
+F: hw/sd/spacemit-k3-sdhci.c
 F: include/hw/misc/spacemit-k3.h
 F: include/hw/riscv/spacemit-k3.h
+F: include/hw/sd/spacemit-k3-sdhci.h
 F: tests/functional/riscv64/test_spacemit_k3.py
 F: tests/qtest/spacemit-k3-test.c
 
