@@ -1560,6 +1560,7 @@ static bool rockchip_rknn_fetch_pipeline_task(
     RockchipRKNNDPUStageSnapshot stage = {};
     uint32_t next_iova;
     uint32_t next_amount;
+    bool decoded;
 
     trace_rockchip_rknn_task_fetch(s->core_index, index, iova,
                                    command_count);
@@ -1578,9 +1579,14 @@ static bool rockchip_rknn_fetch_pipeline_task(
     memcpy(s->pending_domain_runtime[index], file->runtime,
            sizeof(file->runtime));
     s->pending_domain_runtime_valid[index] = true;
-    if (rockchip_rknn_decode_pipeline(s, &task, &stage, file)) {
+    decoded = rockchip_rknn_decode_pipeline(s, &task, &stage, file);
+    if (decoded ||
+        task.enabled_blocks == (ROCKCHIP_RKNN_BLOCK_PPU |
+                                ROCKCHIP_RKNN_BLOCK_PPU_RDMA)) {
         s->pending_pipeline[index] = task;
         s->pending_dpu_stage[index] = stage;
+    }
+    if (decoded) {
         s->pending_pipeline_valid[index] =
             rockchip_rknn_pipeline_is_captured_profile(&task, &stage);
     }
