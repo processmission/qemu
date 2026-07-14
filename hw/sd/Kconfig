@@ -39,3 +39,7 @@ config CADENCE_SDHCI
 config K230_SDHCI
     bool
     select SDHCI
+
+config SPACEMIT_K3_SDHCI
+    bool
+    select SDHCI

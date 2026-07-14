@@ -96,6 +96,7 @@ config SPACEMIT_K3
     select RISCV_IMSIC
     select SERIAL_MM
     select SPACEMIT_K3_CTRL
+    select SPACEMIT_K3_SDHCI
 
 config SHAKTI_C
     bool
