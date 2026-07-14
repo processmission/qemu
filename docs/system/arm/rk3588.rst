@@ -156,8 +156,10 @@ output before raising
 the normal completion interrupt.  Unsupported configurations and mapping
 failures retain fake-completion behavior without writing tensor output.  PC
 mode streams sequential task chains through one pending task snapshot and
-currently applies a 256-task implementation budget, which covers the captured
-120-task MobileNet control chain but is not a hardware limit.  Slave mode
+currently applies a 256-task implementation budget.  The captured MobileNet
+submission contains 120 logical descriptors that reuse 107 immutable command
+payloads behind three PC roots of 50, 34, and 23 payloads; all three roots fit
+within this implementation budget, which is not a hardware limit.  Slave mode
 supports one directly configured task and reports its hardware-observed task
 status.  The property is off by default; when it is off the model performs no
 functional DMA reads or writes.  Other DPU-RDMA data modes, precisions, and
