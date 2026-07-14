@@ -17,10 +17,15 @@
 #define K3_HARTS_PER_CLUSTER          4
 #define K3_TIMEBASE_FREQ              24000000
 
-#define K3_RESET_BASE                 UINT64_C(0xc0800000)
-#define K3_RESET_SIZE                 UINT64_C(0x1000)
+#define K3_SRAM_BASE                  UINT64_C(0xc0800000)
+#define K3_SRAM_SIZE                  UINT64_C(0x80000)
+#define K3_DDR_TRAINING_BASE          UINT64_C(0xc08d0000)
+#define K3_DDR_TRAINING_SIZE          UINT64_C(0x100)
 #define K3_UART0_BASE                 UINT64_C(0xd4017000)
 #define K3_UART0_SIZE                 UINT64_C(0x100)
+#define K3_SDHCI0_BASE                UINT64_C(0xd4280000)
+#define K3_APMU_BASE                  UINT64_C(0xd4282800)
+#define K3_CIU_BASE                   UINT64_C(0xd4282c00)
 #define K3_S_IMSIC_BASE               UINT64_C(0xe0400000)
 #define K3_S_IMSIC_HART_STRIDE        UINT64_C(0x40000)
 #define K3_S_APLIC_BASE               UINT64_C(0xe0804000)
@@ -53,6 +58,7 @@
 #define APLIC_LHXW_SHIFT              12
 
 #define K3_UART0_IRQ                  42
+#define K3_SDHCI0_IRQ                 99
 #define UART_RBR                      0x00
 #define UART_IER                      0x04
 #define UART_LSR                      0x14
@@ -60,6 +66,70 @@
 #define UART_LSR_DR                   0x01
 
 #define K3_FDT_MAX_SIZE               (64 * KiB)
+#define K3_APMU_SDH0_CTRL             0x54
+#define K3_APMU_SDH0_RESET            0x119
+#define K3_CIU_BOOT_FLAG              0x110
+#define K3_CIU_BOOT_FROM_SD           0xb10
+
+#define SDHCI_BLKSIZE                 0x04
+#define SDHCI_BLKCNT                  0x06
+#define SDHCI_ARGUMENT                0x08
+#define SDHCI_TRNMOD                  0x0c
+#define SDHCI_CMDREG                  0x0e
+#define SDHCI_RSPREG0                 0x10
+#define SDHCI_PRNSTS                  0x24
+#define SDHCI_HOSTCTL                 0x28
+#define SDHCI_PWRCON                  0x29
+#define SDHCI_CLKCON                  0x2c
+#define SDHCI_SWRST                   0x2f
+#define SDHCI_NORINTSTS               0x30
+#define SDHCI_NORINTSTSEN             0x34
+#define SDHCI_NORINTSIGEN             0x38
+#define SDHCI_ERRINTSIGEN             0x3a
+#define SDHCI_HOSTCTL2                0x3e
+#define SDHCI_CAPAB                   0x40
+#define SDHCI_ADMAERR                 0x54
+#define SDHCI_ADMASYSADDR             0x58
+#define SDHCI_HCVER                   0xfe
+#define K3_SDHCI_MMC_CTRL             0x114
+#define K3_SDHCI_TX_CFG               0x11c
+
+#define K3_SDHCI_CAPAB                UINT64_C(0x112834b4)
+#define K3_SDHCI_MMC_CTRL_MASK        0x1700
+#define K3_SDHCI_TX_CFG_MASK          0xc0000000
+
+#define SDHCI_CARD_PRESENT            (1U << 16)
+#define SDHCI_CTRL_ADMA2_64           0x18
+#define SDHCI_POWER_330               0x0f
+#define SDHCI_CLOCK_INT_EN            0x01
+#define SDHCI_CLOCK_INT_STABLE        0x02
+#define SDHCI_CLOCK_SDCLK_EN          0x04
+#define SDHCI_RESET_ALL               0x01
+
+#define SDHCI_TRNS_DMA                0x0001
+#define SDHCI_TRNS_BLK_CNT_EN         0x0002
+#define SDHCI_TRNS_READ               0x0010
+
+#define SDHCI_CMD_RESP_NONE           0x00
+#define SDHCI_CMD_RESP_LONG           0x01
+#define SDHCI_CMD_RESP_SHORT          0x02
+#define SDHCI_CMD_RESP_SHORT_BUSY     0x03
+#define SDHCI_CMD_CRC                 0x08
+#define SDHCI_CMD_INDEX               0x10
+#define SDHCI_CMD_DATA                0x20
+
+#define SDHCI_NIS_CMDCMP              0x0001
+#define SDHCI_NIS_TRSCMP              0x0002
+#define SDHCI_NIS_ERR                 0x8000
+
+#define SDHCI_ADMA_VALID              0x01
+#define SDHCI_ADMA_END                0x02
+#define SDHCI_ADMA_TRAN               0x20
+
+#define K3_SD_SECTOR_SIZE             512
+#define K3_SD_IMAGE_SIZE              (1 * MiB)
+#define K3_ADMA_DESC_ADDR             UINT64_C(0x102010000)
+#define K3_ADMA_BUFFER_ADDR           UINT64_C(0x102020000)
 
 #define CSR_MIP                       0x344
 #define CSR_MENVCFG                   0x30a
@@ -269,6 +339,32 @@ static void k3_imsic_claim(QTestState *qts, unsigned int hartid, bool mmode,
     k3_csr_set(qts, hartid, topei_csr, topei);
 }
 
+static void k3_route_s_aplic_irq(QTestState *qts, unsigned int irq,
+                                 unsigned int eiid)
+{
+    const uint64_t sourcecfg = APLIC_SOURCECFG_BASE + (irq - 1) * 4;
+    const uint64_t target = APLIC_TARGET_BASE + (irq - 1) * 4;
+
+    k3_imsic_enable(qts, 0, false, eiid);
+
+    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_MMSICFGADDR,
+                 K3_M_IMSIC_BASE >> 12);
+    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_MMSICFGADDRH,
+                 3U << APLIC_LHXW_SHIFT);
+    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_SMSICFGADDR,
+                 K3_S_IMSIC_BASE >> 12);
+    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_SMSICFGADDRH,
+                 6U << APLIC_LHXS_SHIFT);
+
+    qtest_writel(qts, K3_M_APLIC_BASE + sourcecfg, APLIC_SOURCECFG_D);
+    qtest_writel(qts, K3_S_APLIC_BASE + sourcecfg,
+                 APLIC_SOURCECFG_LEVEL_HIGH);
+    qtest_writel(qts, K3_S_APLIC_BASE + target, eiid);
+    qtest_writel(qts, K3_S_APLIC_BASE + APLIC_SETIENUM, irq);
+    qtest_writel(qts, K3_S_APLIC_BASE + APLIC_DOMAINCFG,
+                 APLIC_DOMAINCFG_IE);
+}
+
 static void test_topology(void)
 {
     QTestState *qts = k3_qtest_init();
@@ -318,8 +414,26 @@ static void test_address_map(void)
     static const uint64_t last_pattern = UINT64_C(0xfedcba9876543210);
     QTestState *qts = k3_qtest_init();
 
-    g_assert_cmphex(qtest_readl(qts, K3_RESET_BASE), ==, 0x00000297);
-    g_assert_cmphex(qtest_readl(qts, K3_RESET_BASE + K3_RESET_SIZE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, K3_SRAM_BASE), ==, 0x00000297);
+    qtest_writeq(qts, K3_SRAM_BASE, first_pattern);
+    qtest_writeq(qts, K3_SRAM_BASE + K3_SRAM_SIZE - 8, last_pattern);
+    g_assert_cmphex(qtest_readq(qts, K3_SRAM_BASE), ==, first_pattern);
+    g_assert_cmphex(qtest_readq(qts, K3_SRAM_BASE + K3_SRAM_SIZE - 8), ==,
+                    last_pattern);
+    g_assert_cmphex(qtest_readl(qts, K3_SRAM_BASE + K3_SRAM_SIZE), ==, 0);
+
+    qtest_writel(qts, K3_DDR_TRAINING_BASE, 0xa5a5a5a5);
+    qtest_writel(qts, K3_DDR_TRAINING_BASE + K3_DDR_TRAINING_SIZE - 4,
+                 0x5a5a5a5a);
+    g_assert_cmphex(qtest_readl(qts, K3_DDR_TRAINING_BASE), ==, 0xa5a5a5a5);
+    g_assert_cmphex(qtest_readl(qts, K3_DDR_TRAINING_BASE +
+                                K3_DDR_TRAINING_SIZE - 4), ==, 0x5a5a5a5a);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, K3_SRAM_BASE), ==, 0x00000297);
+    g_assert_cmphex(qtest_readl(qts, K3_DDR_TRAINING_BASE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, K3_DDR_TRAINING_BASE +
+                                K3_DDR_TRAINING_SIZE - 4), ==, 0);
 
     qtest_writeq(qts, K3_FIRMWARE_BASE, first_pattern);
     qtest_writeq(qts, K3_FIRMWARE_BASE + K3_FIRMWARE_SIZE - 8,
@@ -428,10 +542,6 @@ static bool k3_wait_for_uart_rx(QTestState *qts)
 static void test_uart_aplic_imsic(void)
 {
     const unsigned int eiid = K3_UART0_IRQ;
-    const uint64_t sourcecfg = APLIC_SOURCECFG_BASE +
-                               (K3_UART0_IRQ - 1) * 4;
-    const uint64_t target = APLIC_TARGET_BASE +
-                            (K3_UART0_IRQ - 1) * 4;
     const uint64_t input_word = APLIC_CLRIP_BASE +
                                 (K3_UART0_IRQ / 32) * 4;
     const uint32_t input_mask = 1U << (K3_UART0_IRQ % 32);
@@ -439,24 +549,7 @@ static void test_uart_aplic_imsic(void)
     QTestState *qts = qtest_init_with_serial(
         "-M k3-pico-itx -bios none -display none -nodefaults", &sock_fd);
 
-    k3_imsic_enable(qts, 0, false, eiid);
-
-    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_MMSICFGADDR,
-                 K3_M_IMSIC_BASE >> 12);
-    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_MMSICFGADDRH,
-                 3U << APLIC_LHXW_SHIFT);
-    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_SMSICFGADDR,
-                 K3_S_IMSIC_BASE >> 12);
-    qtest_writel(qts, K3_M_APLIC_BASE + APLIC_SMSICFGADDRH,
-                 6U << APLIC_LHXS_SHIFT);
-
-    qtest_writel(qts, K3_M_APLIC_BASE + sourcecfg, APLIC_SOURCECFG_D);
-    qtest_writel(qts, K3_S_APLIC_BASE + sourcecfg,
-                 APLIC_SOURCECFG_LEVEL_HIGH);
-    qtest_writel(qts, K3_S_APLIC_BASE + target, eiid);
-    qtest_writel(qts, K3_S_APLIC_BASE + APLIC_SETIENUM, K3_UART0_IRQ);
-    qtest_writel(qts, K3_S_APLIC_BASE + APLIC_DOMAINCFG,
-                 APLIC_DOMAINCFG_IE);
+    k3_route_s_aplic_irq(qts, K3_UART0_IRQ, eiid);
 
     qtest_writel(qts, K3_UART0_BASE + UART_IER, UART_IER_RDI);
     g_assert_cmpint(send(sock_fd, "K", 1, 0), ==, 1);
@@ -479,6 +572,189 @@ static void test_uart_aplic_imsic(void)
     qtest_quit(qts);
 }
 
+static uint32_t k3_sdhci_cmd(QTestState *qts, unsigned int index,
+                             uint32_t argument, uint16_t flags)
+{
+    uint32_t status;
+
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_ARGUMENT, argument);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_CMDREG,
+                 index << 8 | flags);
+
+    status = qtest_readl(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTS);
+    g_assert_cmphex(status & (SDHCI_NIS_ERR | 0xffff0000U), ==, 0);
+    g_assert_cmphex(status & SDHCI_NIS_CMDCMP, ==, SDHCI_NIS_CMDCMP);
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTS, status);
+
+    return qtest_readl(qts, K3_SDHCI0_BASE + SDHCI_RSPREG0);
+}
+
+static void k3_sdhci_init_card(QTestState *qts)
+{
+    uint16_t rca;
+
+    k3_sdhci_cmd(qts, 0, 0, SDHCI_CMD_RESP_NONE);
+    k3_sdhci_cmd(qts, 55, 0,
+                 SDHCI_CMD_RESP_SHORT | SDHCI_CMD_CRC | SDHCI_CMD_INDEX);
+    k3_sdhci_cmd(qts, 41, 0x00ff8000, SDHCI_CMD_RESP_SHORT);
+    k3_sdhci_cmd(qts, 2, 0, SDHCI_CMD_RESP_LONG | SDHCI_CMD_CRC);
+    rca = k3_sdhci_cmd(qts, 3, 0,
+                       SDHCI_CMD_RESP_SHORT | SDHCI_CMD_CRC |
+                       SDHCI_CMD_INDEX) >> 16;
+    g_assert_cmpuint(rca, !=, 0);
+    k3_sdhci_cmd(qts, 7, (uint32_t)rca << 16,
+                 SDHCI_CMD_RESP_SHORT_BUSY | SDHCI_CMD_CRC |
+                 SDHCI_CMD_INDEX);
+}
+
+static char *k3_create_sd_image(uint8_t *sector)
+{
+    g_autofree uint8_t *image = g_malloc0(K3_SD_IMAGE_SIZE);
+    g_autoptr(GError) error = NULL;
+    char *path = NULL;
+    int fd;
+
+    for (unsigned int i = 0; i < K3_SD_SECTOR_SIZE; i++) {
+        sector[i] = (i * 37 + 11) & 0xff;
+    }
+    memcpy(image, sector, K3_SD_SECTOR_SIZE);
+
+    fd = g_file_open_tmp("spacemit-k3-sd-XXXXXX.img", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    g_assert_true(g_file_set_contents(path, (const char *)image,
+                                      K3_SD_IMAGE_SIZE, &error));
+    g_assert_no_error(error);
+
+    return path;
+}
+
+static void test_sd_boot_registers(void)
+{
+    QTestState *qts = k3_qtest_init();
+
+    g_assert_cmphex(qtest_readl(qts, K3_APMU_BASE + K3_APMU_SDH0_CTRL), ==,
+                    K3_APMU_SDH0_RESET);
+    qtest_writel(qts, K3_APMU_BASE + K3_APMU_SDH0_CTRL, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, K3_APMU_BASE + K3_APMU_SDH0_CTRL), ==,
+                    0x7fb);
+
+    g_assert_cmphex(qtest_readl(qts, K3_CIU_BASE + K3_CIU_BOOT_FLAG), ==,
+                    K3_CIU_BOOT_FROM_SD);
+    qtest_writel(qts, K3_CIU_BASE + K3_CIU_BOOT_FLAG, 0);
+    g_assert_cmphex(qtest_readl(qts, K3_CIU_BASE + K3_CIU_BOOT_FLAG), ==,
+                    K3_CIU_BOOT_FROM_SD);
+
+    g_assert_cmphex(qtest_readq(qts, K3_SDHCI0_BASE + SDHCI_CAPAB), ==,
+                    K3_SDHCI_CAPAB);
+    g_assert_cmphex(qtest_readw(qts, K3_SDHCI0_BASE + SDHCI_HCVER) & 0xff,
+                    ==, 2);
+
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_HOSTCTL2, 1);
+    g_assert_cmphex(qtest_readw(qts, K3_SDHCI0_BASE + SDHCI_HOSTCTL2), ==, 1);
+    qtest_writel(qts, K3_SDHCI0_BASE + K3_SDHCI_MMC_CTRL, UINT32_MAX);
+    qtest_writel(qts, K3_SDHCI0_BASE + K3_SDHCI_TX_CFG, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, K3_SDHCI0_BASE + K3_SDHCI_MMC_CTRL), ==,
+                    K3_SDHCI_MMC_CTRL_MASK);
+    g_assert_cmphex(qtest_readl(qts, K3_SDHCI0_BASE + K3_SDHCI_TX_CFG), ==,
+                    K3_SDHCI_TX_CFG_MASK);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, K3_APMU_BASE + K3_APMU_SDH0_CTRL), ==,
+                    K3_APMU_SDH0_RESET);
+    g_assert_cmphex(qtest_readw(qts, K3_SDHCI0_BASE + SDHCI_HOSTCTL2), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, K3_SDHCI0_BASE + K3_SDHCI_MMC_CTRL), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts, K3_SDHCI0_BASE + K3_SDHCI_TX_CFG), ==,
+                    0);
+
+    qtest_quit(qts);
+}
+
+static void test_sd_adma_aplic_imsic(void)
+{
+    const unsigned int eiid = 11;
+    const uint64_t input_word = APLIC_CLRIP_BASE +
+                                (K3_SDHCI0_IRQ / 32) * 4;
+    const uint32_t input_mask = 1U << (K3_SDHCI0_IRQ % 32);
+    const uint16_t trnmod = SDHCI_TRNS_DMA | SDHCI_TRNS_BLK_CNT_EN |
+                            SDHCI_TRNS_READ;
+    uint8_t expected[K3_SD_SECTOR_SIZE];
+    uint8_t actual[K3_SD_SECTOR_SIZE];
+    uint8_t poison[K3_SD_SECTOR_SIZE];
+    uint8_t descriptor[12] = {};
+    g_autofree char *sd_path = k3_create_sd_image(expected);
+    QTestState *qts = qtest_initf(
+        "-M k3-pico-itx -bios none -display none -nodefaults "
+        "-drive file=%s,if=sd,format=raw,snapshot=on", sd_path);
+    uint32_t status;
+
+    g_assert_cmphex(qtest_readl(qts, K3_SDHCI0_BASE + SDHCI_PRNSTS) &
+                    SDHCI_CARD_PRESENT, ==, SDHCI_CARD_PRESENT);
+    qtest_writeb(qts, K3_SDHCI0_BASE + SDHCI_SWRST, SDHCI_RESET_ALL);
+    qtest_writeb(qts, K3_SDHCI0_BASE + SDHCI_PWRCON, SDHCI_POWER_330);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_CLKCON,
+                 SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_SDCLK_EN);
+    g_assert_cmphex(qtest_readw(qts, K3_SDHCI0_BASE + SDHCI_CLKCON), ==,
+                    SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE |
+                    SDHCI_CLOCK_SDCLK_EN);
+
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTSEN, 0xffff0003U);
+    k3_sdhci_init_card(qts);
+    k3_route_s_aplic_irq(qts, K3_SDHCI0_IRQ, eiid);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_NORINTSIGEN,
+                 SDHCI_NIS_TRSCMP | SDHCI_NIS_ERR);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_ERRINTSIGEN, UINT16_MAX);
+
+    descriptor[0] = SDHCI_ADMA_VALID | SDHCI_ADMA_END | SDHCI_ADMA_TRAN;
+    stw_le_p(descriptor + 2, K3_SD_SECTOR_SIZE);
+    stq_le_p(descriptor + 4, K3_ADMA_BUFFER_ADDR);
+    qtest_memwrite(qts, K3_ADMA_DESC_ADDR, descriptor, sizeof(descriptor));
+    memset(poison, 0xa5, sizeof(poison));
+    qtest_memwrite(qts, K3_ADMA_BUFFER_ADDR, poison, sizeof(poison));
+
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_ADMASYSADDR,
+                 (uint32_t)K3_ADMA_DESC_ADDR);
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_ADMASYSADDR + 4,
+                 (uint32_t)(K3_ADMA_DESC_ADDR >> 32));
+    qtest_writeb(qts, K3_SDHCI0_BASE + SDHCI_HOSTCTL,
+                 SDHCI_CTRL_ADMA2_64);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_BLKSIZE, K3_SD_SECTOR_SIZE);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_BLKCNT, 1);
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_ARGUMENT, 0);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_TRNMOD, trnmod);
+    g_assert_cmphex(qtest_readw(qts, K3_SDHCI0_BASE + SDHCI_TRNMOD), ==,
+                    trnmod);
+    qtest_writew(qts, K3_SDHCI0_BASE + SDHCI_CMDREG,
+                 17 << 8 | SDHCI_CMD_RESP_SHORT | SDHCI_CMD_CRC |
+                 SDHCI_CMD_INDEX | SDHCI_CMD_DATA);
+
+    status = qtest_readl(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTS);
+    g_assert_cmphex(status & (SDHCI_NIS_CMDCMP | SDHCI_NIS_TRSCMP), ==,
+                    SDHCI_NIS_CMDCMP | SDHCI_NIS_TRSCMP);
+    g_assert_cmphex(status & (SDHCI_NIS_ERR | 0xffff0000U), ==, 0);
+    g_assert_cmphex(qtest_readb(qts, K3_SDHCI0_BASE + SDHCI_ADMAERR), ==, 0);
+    qtest_memread(qts, K3_ADMA_BUFFER_ADDR, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+
+    g_assert_cmphex(qtest_readl(qts, K3_S_APLIC_BASE + input_word) &
+                    input_mask, ==, input_mask);
+    g_assert_cmphex(k3_imsic_indirect_read(qts, 0, false,
+                                           ISELECT_IMSIC_EIP0), ==,
+                    UINT64_C(1) << eiid);
+    g_assert_cmphex(k3_csr_get(qts, 0, CSR_MIP) & MIP_SEIP, ==, MIP_SEIP);
+
+    qtest_writel(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTS, status);
+    g_assert_cmphex(qtest_readl(qts, K3_S_APLIC_BASE + input_word) &
+                    input_mask, ==, 0);
+    k3_imsic_claim(qts, 0, false, eiid);
+    g_assert_cmphex(k3_csr_get(qts, 0, CSR_MIP) & MIP_SEIP, ==, 0);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(sd_path), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -496,6 +772,10 @@ int main(int argc, char **argv)
         qtest_add_func("spacemit-k3/imsic-routing", test_imsic_hart_routing);
         qtest_add_func("spacemit-k3/uart-aplic-imsic",
                        test_uart_aplic_imsic);
+        qtest_add_func("spacemit-k3/sd-boot-registers",
+                       test_sd_boot_registers);
+        qtest_add_func("spacemit-k3/sd-adma-aplic-imsic",
+                       test_sd_adma_aplic_imsic);
     }
 
     return g_test_run();
