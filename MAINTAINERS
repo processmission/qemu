@@ -1855,7 +1855,9 @@ SpacemiT K3 Pico-ITX
 M: Chao Liu <chao.liu@processmission.com>
 L: qemu-riscv@nongnu.org
 S: Maintained
+F: hw/misc/spacemit-k3.c
 F: hw/riscv/spacemit-k3.c
+F: include/hw/misc/spacemit-k3.h
 F: include/hw/riscv/spacemit-k3.h
 F: tests/functional/riscv64/test_spacemit_k3.py
 F: tests/qtest/spacemit-k3-test.c
