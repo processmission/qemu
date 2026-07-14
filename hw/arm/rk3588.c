@@ -2661,6 +2661,12 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         sysbus_mmio_map(sbd, 4,
                         rk3588_memmap[pc_memmap[i]].base +
                         ROCKCHIP_RKNN_GLOBAL_OFFSET);
+        sysbus_mmio_map(sbd, 5,
+                        rk3588_memmap[pc_memmap[i]].base +
+                        ROCKCHIP_RKNN_PPU_OFFSET);
+        sysbus_mmio_map(sbd, 6,
+                        rk3588_memmap[pc_memmap[i]].base +
+                        ROCKCHIP_RKNN_PPU_RDMA_OFFSET);
         sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, irq[i]));
     }
 }

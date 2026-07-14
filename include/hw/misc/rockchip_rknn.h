@@ -22,10 +22,14 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 
 #define ROCKCHIP_RKNN_WINDOW_SIZE 0x1000
 #define ROCKCHIP_RKNN_DPU_OFFSET 0x4000
+#define ROCKCHIP_RKNN_PPU_OFFSET 0x6000
+#define ROCKCHIP_RKNN_PPU_RDMA_OFFSET 0x7000
 #define ROCKCHIP_RKNN_GLOBAL_OFFSET 0xf000
 #define ROCKCHIP_RKNN_PC_R_MAX (0x40 / 4)
 #define ROCKCHIP_RKNN_CNA_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_CORE_R_MAX (0x8 / 4)
+#define ROCKCHIP_RKNN_PPU_R_MAX (0x8 / 4)
+#define ROCKCHIP_RKNN_PPU_RDMA_R_MAX (0x8 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
 #define ROCKCHIP_RKNN_TASKS_MAX 16
@@ -84,6 +88,14 @@ struct RockchipRKNNCoreState {
     RegisterInfoArray *core_reg_array;
     RegisterInfo core_regs_info[ROCKCHIP_RKNN_CORE_R_MAX];
     uint32_t core_regs[ROCKCHIP_RKNN_CORE_R_MAX];
+
+    RegisterInfoArray *ppu_reg_array;
+    RegisterInfo ppu_regs_info[ROCKCHIP_RKNN_PPU_R_MAX];
+    uint32_t ppu_regs[ROCKCHIP_RKNN_PPU_R_MAX];
+
+    RegisterInfoArray *ppu_rdma_reg_array;
+    RegisterInfo ppu_rdma_regs_info[ROCKCHIP_RKNN_PPU_RDMA_R_MAX];
+    uint32_t ppu_rdma_regs[ROCKCHIP_RKNN_PPU_RDMA_R_MAX];
 
     MemoryRegion dpu_reg_array;
     MemoryRegion global_reg_array;

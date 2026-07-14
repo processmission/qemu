@@ -160,11 +160,20 @@ configured task and reports its hardware-observed task status.  The property
 is off by default; when it is off the model performs no functional DMA reads or
 writes.  Other DPU-RDMA data modes, precisions, and notch layouts, as well as
 other PPU execution modes and cycle timing, remain unimplemented.  The
-experimental PPU/RDMA profile is limited to the board-validated signed INT4
-5x5 max-pooling path with eight 16-channel surfaces.  Its standalone completion
-reports task status ``0xf000`` and raw status ``0xc0000000`` without raising
-the final PC job interrupt.  IOMMU translation or permission faults abort this
-profile without adding the generic PC DMA read/write status bits.
+experimental PPU/RDMA profiles are limited to the board-validated signed INT4
+5x5 max-pooling path with eight 16-channel surfaces and the exact ``1x1x32``
+identity path with two 16-byte surfaces.  Max pooling compares the signed high
+nibble and copies the first winning packed byte, so the low nibble is not an
+independently pooled channel.  Identity execution copies all 32 bytes without
+interpreting either nibble.  The PPU and PPU-RDMA windows expose their
+``S_STATUS`` and ``S_POINTER`` registers.  Successful standalone completion
+reports task status ``0xf000``, raw stage status ``0xc0000000``, and the
+pointer-selected ``0x400`` or ``0x800`` low completion bit; those low bits are
+independently cleared through PC ``INT_CLEAR``.  PPU-to-DPU chains retain the
+PPU stage status while the final DPU owns the normal job completion interrupt.
+Successful execution reports PPU/PPU-RDMA status ``0xc`` on the captured bank;
+the tested IOMMU translation or permission faults report ``0x5``, abort DMA,
+and do not add generic PC DMA read/write status bits.
 
 The decoder keeps software-visible valid and storage dimensions separate.
 For this INT8 profile, CNA ``DATA_SIZE1`` supplies valid and storage input
