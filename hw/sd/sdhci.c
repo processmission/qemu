@@ -950,6 +950,11 @@ static void sdhci_data_transfer(void *opaque)
     if (s->trnmod & SDHC_TRNS_DMA) {
         switch (SDHC_DMA_TYPE(s->hostctl1)) {
         case SDHC_CTRL_SDMA:
+            if (!(s->capareg & R_SDHC_CAPAB_SDMA_MASK)) {
+                trace_sdhci_error("SDMA not supported");
+                break;
+            }
+
             sdhci_sdma_transfer(s);
             break;
         case SDHC_CTRL_ADMA1_32:
@@ -1248,7 +1253,9 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
          * DMA can be enabled only if it is supported as indicated by
          * capabilities register
          */
-        if (!(s->capareg & R_SDHC_CAPAB_SDMA_MASK)) {
+        if (!(s->capareg & (R_SDHC_CAPAB_SDMA_MASK |
+                            R_SDHC_CAPAB_ADMA1_MASK |
+                            R_SDHC_CAPAB_ADMA2_MASK))) {
             value &= ~SDHC_TRNS_DMA;
         }
 
