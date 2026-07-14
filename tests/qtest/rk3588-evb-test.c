@@ -6906,6 +6906,9 @@ static void test_rk3588_rknpu_reset_state(void)
                                 RKNN_PC_VERSION), ==,
                     RKNN_PC_VERSION_VALUE);
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_VERSION_NUM), ==,
+                    RKNN_PC_VERSION_NUM_VALUE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                 RKNN_PC_INTERRUPT_MASK), ==, 0);
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                 RKNN_PC_INTERRUPT_RAW_STATUS), ==, 0);
