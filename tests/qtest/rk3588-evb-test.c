@@ -161,6 +161,12 @@
 #define RK3588_SRST_H_RKNN2 256
 #define RK3588_SRST_A_RKNN0 272
 #define RK3588_SRST_H_RKNN0 274
+#define RK3588_VENDOR_SRST_A_RKNN0 486
+#define RK3588_VENDOR_SRST_A_RKNN1 432
+#define RK3588_VENDOR_SRST_A_RKNN2 448
+#define RK3588_VENDOR_SRST_H_RKNN0 488
+#define RK3588_VENDOR_SRST_H_RKNN1 434
+#define RK3588_VENDOR_SRST_H_RKNN2 450
 #define RK3588_GIC_QOM "/machine/gic"
 #define RK3588_GPIO0_BASE 0xfd8a0000ULL
 #define RK3588_UART2_BASE 0xfeb50000ULL
@@ -776,6 +782,66 @@ static char *rk3588_fdtget(const char *fdtget, const char *dtb,
     return stdout_text;
 }
 
+static char *rk3588_dump_rknpu_dtb(const char *extra_machine_options)
+{
+    const char *qemu = g_getenv("QTEST_QEMU_BINARY");
+    g_autofree char *kernel = rk3588_create_dummy_kernel();
+    g_autofree char *dtb = NULL;
+    g_autofree char *machine = NULL;
+    g_autoptr(GError) error = NULL;
+    int fd;
+    int status;
+    char *argv[12];
+
+    g_assert_nonnull(qemu);
+    fd = g_file_open_tmp("rk3588-dtb-XXXXXX", &dtb, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+
+    machine = g_strdup_printf(RK3588_EVB_MACHINE
+                              ",rknpu=on%s,dumpdtb=%s",
+                              extra_machine_options, dtb);
+    argv[0] = (char *)qemu;
+    argv[1] = (char *)"-machine";
+    argv[2] = machine;
+    argv[3] = (char *)"-smp";
+    argv[4] = (char *)"1";
+    argv[5] = (char *)"-m";
+    argv[6] = (char *)"512M";
+    argv[7] = (char *)"-kernel";
+    argv[8] = kernel;
+    argv[9] = (char *)"-display";
+    argv[10] = (char *)"none";
+    argv[11] = NULL;
+
+    g_spawn_sync(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL,
+                 &status, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(status, ==, 0);
+    unlink(kernel);
+
+    return g_steal_pointer(&dtb);
+}
+
+static bool rk3588_fdt_has_node(const char *fdtget, const char *dtb,
+                                const char *node)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *stdout_text = NULL;
+    g_autofree char *stderr_text = NULL;
+    int status;
+    char *argv[] = {
+        (char *)fdtget, (char *)"-l", (char *)dtb, (char *)node, NULL,
+    };
+
+    g_spawn_sync(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL,
+                 &stdout_text, &stderr_text, &status, &error);
+    g_assert_no_error(error);
+
+    return status == 0;
+}
+
 static void rk3588_assert_fdt_cells_consumed(const char *cells, int consumed)
 {
     g_assert_cmpint(consumed, >, 0);
@@ -783,6 +849,32 @@ static void rk3588_assert_fdt_cells_consumed(const char *cells, int consumed)
     for (const char *p = cells + consumed; *p; p++) {
         g_assert_true(g_ascii_isspace(*p));
     }
+}
+
+static GArray *rk3588_parse_fdt_cells(const char *cells)
+{
+    g_auto(GStrv) tokens = g_strsplit_set(cells, " \t\r\n", -1);
+    GArray *values = g_array_new(false, false, sizeof(uint32_t));
+
+    for (unsigned int i = 0; tokens[i]; i++) {
+        char *end = NULL;
+        uint64_t value;
+        uint32_t cell;
+
+        if (!tokens[i][0]) {
+            continue;
+        }
+        errno = 0;
+        value = g_ascii_strtoull(tokens[i], &end, 10);
+        g_assert_cmpint(errno, ==, 0);
+        g_assert_true(end != tokens[i] && !*end);
+        g_assert_cmpuint(value, <=, UINT32_MAX);
+        cell = value;
+
+        g_array_append_val(values, cell);
+    }
+
+    return values;
 }
 static void test_rk3588_machine_creation(void)
 {
@@ -1441,17 +1533,10 @@ static void test_rk3588_rknpu_fdt(void)
             .reset_h = RK3588_SRST_H_RKNN2,
         },
     };
-    const char *qemu = g_getenv("QTEST_QEMU_BINARY");
     g_autofree char *fdtget = g_find_program_in_path("fdtget");
-    g_autofree char *kernel = NULL;
     g_autofree char *dtb = NULL;
-    g_autofree char *machine = NULL;
-    g_autoptr(GError) error = NULL;
-    int fd;
-    int status;
-    char *argv[12];
 
-    if (!qemu) {
+    if (!g_getenv("QTEST_QEMU_BINARY")) {
         g_test_skip("QTEST_QEMU_BINARY not set");
         return;
     }
@@ -1460,30 +1545,7 @@ static void test_rk3588_rknpu_fdt(void)
         return;
     }
 
-    kernel = rk3588_create_dummy_kernel();
-    fd = g_file_open_tmp("rk3588-dtb-XXXXXX", &dtb, &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(fd, >=, 0);
-    close(fd);
-
-    machine = g_strdup_printf(RK3588_EVB_MACHINE ",rknpu=on,dumpdtb=%s", dtb);
-    argv[0] = (char *)qemu;
-    argv[1] = (char *)"-machine";
-    argv[2] = machine;
-    argv[3] = (char *)"-smp";
-    argv[4] = (char *)"1";
-    argv[5] = (char *)"-m";
-    argv[6] = (char *)"512M";
-    argv[7] = (char *)"-kernel";
-    argv[8] = kernel;
-    argv[9] = (char *)"-display";
-    argv[10] = (char *)"none";
-    argv[11] = NULL;
-
-    g_spawn_sync(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL,
-                 &status, &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(status, ==, 0);
+    dtb = rk3588_dump_rknpu_dtb("");
 
     for (unsigned int i = 0; i < ARRAY_SIZE(nodes); i++) {
         g_autofree char *compatible =
@@ -1584,7 +1646,224 @@ static void test_rk3588_rknpu_fdt(void)
     }
 
     unlink(dtb);
-    unlink(kernel);
+}
+
+static void test_rk3588_rknpu_vendor_fdt(void)
+{
+    static const uint32_t core_base[] = {
+        RK3588_RKNN0_PC_BASE,
+        RK3588_RKNN1_PC_BASE,
+        RK3588_RKNN2_PC_BASE,
+    };
+    static const uint32_t iommu_base[] = {
+        RK3588_RKNN0_MMU_BASE,
+        RK3588_RKNN0_MMU1_BASE,
+        RK3588_RKNN1_MMU_BASE,
+        RK3588_RKNN2_MMU_BASE,
+    };
+    static const uint32_t irq[] = {
+        RK3588_RKNN0_SPI,
+        RK3588_RKNN1_SPI,
+        RK3588_RKNN2_SPI,
+    };
+    static const uint32_t reset[] = {
+        RK3588_VENDOR_SRST_A_RKNN0,
+        RK3588_VENDOR_SRST_A_RKNN1,
+        RK3588_VENDOR_SRST_A_RKNN2,
+        RK3588_VENDOR_SRST_H_RKNN0,
+        RK3588_VENDOR_SRST_H_RKNN1,
+        RK3588_VENDOR_SRST_H_RKNN2,
+    };
+    const char *npu = "/npu@fdab0000";
+    const char *iommu = "/iommu@fdab9000";
+    g_autofree char *fdtget = g_find_program_in_path("fdtget");
+    g_autofree char *dtb = NULL;
+    g_autofree char *npu_compatible = NULL;
+    g_autofree char *npu_reg_text = NULL;
+    g_autofree char *npu_interrupts_text = NULL;
+    g_autofree char *npu_irq_names = NULL;
+    g_autofree char *npu_clocks_text = NULL;
+    g_autofree char *npu_clock_names = NULL;
+    g_autofree char *npu_resets_text = NULL;
+    g_autofree char *npu_reset_names = NULL;
+    g_autofree char *npu_iommus_text = NULL;
+    g_autofree char *npu_status = NULL;
+    g_autofree char *iommu_compatible = NULL;
+    g_autofree char *iommu_reg_text = NULL;
+    g_autofree char *iommu_interrupts_text = NULL;
+    g_autofree char *iommu_irq_names = NULL;
+    g_autofree char *iommu_clocks_text = NULL;
+    g_autofree char *iommu_clock_names = NULL;
+    g_autofree char *iommu_cells_text = NULL;
+    g_autofree char *iommu_phandle_text = NULL;
+    g_autofree char *iommu_status = NULL;
+    g_autofree char *clock_provider_text = NULL;
+    g_autofree char *reset_provider_text = NULL;
+    g_autoptr(GArray) npu_reg = NULL;
+    g_autoptr(GArray) npu_interrupts = NULL;
+    g_autoptr(GArray) npu_clocks = NULL;
+    g_autoptr(GArray) npu_resets = NULL;
+    g_autoptr(GArray) npu_iommus = NULL;
+    g_autoptr(GArray) iommu_reg = NULL;
+    g_autoptr(GArray) iommu_interrupts = NULL;
+    g_autoptr(GArray) iommu_clocks = NULL;
+    g_autoptr(GArray) iommu_cells = NULL;
+    g_autoptr(GArray) iommu_phandle = NULL;
+    g_autoptr(GArray) clock_provider = NULL;
+    g_autoptr(GArray) reset_provider = NULL;
+
+    if (!g_getenv("QTEST_QEMU_BINARY")) {
+        g_test_skip("QTEST_QEMU_BINARY not set");
+        return;
+    }
+    if (!fdtget) {
+        g_test_skip("fdtget not available");
+        return;
+    }
+
+    dtb = rk3588_dump_rknpu_dtb(",rknpu-vendor-fdt=on");
+    g_assert_true(rk3588_fdt_has_node(fdtget, dtb, npu));
+    g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdac0000"));
+    g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdad0000"));
+    g_assert_true(rk3588_fdt_has_node(fdtget, dtb, iommu));
+    g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/iommu@fdaca000"));
+    g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/iommu@fdada000"));
+
+    npu_compatible = rk3588_fdtget(fdtget, dtb, "s", npu, "compatible");
+    npu_reg_text = rk3588_fdtget(fdtget, dtb, "u", npu, "reg");
+    npu_interrupts_text =
+        rk3588_fdtget(fdtget, dtb, "u", npu, "interrupts");
+    npu_irq_names =
+        rk3588_fdtget(fdtget, dtb, "s", npu, "interrupt-names");
+    npu_clocks_text = rk3588_fdtget(fdtget, dtb, "u", npu, "clocks");
+    npu_clock_names =
+        rk3588_fdtget(fdtget, dtb, "s", npu, "clock-names");
+    npu_resets_text = rk3588_fdtget(fdtget, dtb, "u", npu, "resets");
+    npu_reset_names =
+        rk3588_fdtget(fdtget, dtb, "s", npu, "reset-names");
+    npu_iommus_text = rk3588_fdtget(fdtget, dtb, "u", npu, "iommus");
+    npu_status = rk3588_fdtget(fdtget, dtb, "s", npu, "status");
+    iommu_compatible =
+        rk3588_fdtget(fdtget, dtb, "s", iommu, "compatible");
+    iommu_reg_text = rk3588_fdtget(fdtget, dtb, "u", iommu, "reg");
+    iommu_interrupts_text =
+        rk3588_fdtget(fdtget, dtb, "u", iommu, "interrupts");
+    iommu_irq_names =
+        rk3588_fdtget(fdtget, dtb, "s", iommu, "interrupt-names");
+    iommu_clocks_text =
+        rk3588_fdtget(fdtget, dtb, "u", iommu, "clocks");
+    iommu_clock_names =
+        rk3588_fdtget(fdtget, dtb, "s", iommu, "clock-names");
+    iommu_cells_text =
+        rk3588_fdtget(fdtget, dtb, "u", iommu, "#iommu-cells");
+    iommu_phandle_text =
+        rk3588_fdtget(fdtget, dtb, "u", iommu, "phandle");
+    iommu_status = rk3588_fdtget(fdtget, dtb, "s", iommu, "status");
+    clock_provider_text =
+        rk3588_fdtget(fdtget, dtb, "u", "/xin24m", "phandle");
+    reset_provider_text = rk3588_fdtget(
+        fdtget, dtb, "u", "/clock-reset-controller@fd7c0000", "phandle");
+
+    g_assert_cmpstr(g_strstrip(npu_compatible), ==,
+                    "rockchip,rk3588-rknpu");
+    g_assert_cmpstr(g_strstrip(npu_irq_names), ==,
+                    "npu0_irq npu1_irq npu2_irq");
+    g_assert_cmpstr(g_strstrip(npu_clock_names), ==,
+                    "clk_npu aclk0 aclk1 aclk2 hclk0 hclk1 hclk2 pclk");
+    g_assert_cmpstr(g_strstrip(npu_reset_names), ==,
+                    "srst_a0 srst_a1 srst_a2 srst_h0 srst_h1 srst_h2");
+    g_assert_cmpstr(g_strstrip(iommu_compatible), ==,
+                    "rockchip,iommu-v2");
+    g_assert_cmpstr(g_strstrip(iommu_irq_names), ==,
+                    "npu0_mmu npu1_mmu npu2_mmu");
+    g_assert_cmpstr(g_strstrip(iommu_clock_names), ==,
+                    "aclk0 aclk1 aclk2 iface0 iface1 iface2");
+    g_assert_cmpstr(g_strstrip(npu_status), ==, "okay");
+    g_assert_cmpstr(g_strstrip(iommu_status), ==, "okay");
+
+    npu_reg = rk3588_parse_fdt_cells(npu_reg_text);
+    npu_interrupts = rk3588_parse_fdt_cells(npu_interrupts_text);
+    npu_clocks = rk3588_parse_fdt_cells(npu_clocks_text);
+    npu_resets = rk3588_parse_fdt_cells(npu_resets_text);
+    npu_iommus = rk3588_parse_fdt_cells(npu_iommus_text);
+    iommu_reg = rk3588_parse_fdt_cells(iommu_reg_text);
+    iommu_interrupts = rk3588_parse_fdt_cells(iommu_interrupts_text);
+    iommu_clocks = rk3588_parse_fdt_cells(iommu_clocks_text);
+    iommu_cells = rk3588_parse_fdt_cells(iommu_cells_text);
+    iommu_phandle = rk3588_parse_fdt_cells(iommu_phandle_text);
+    clock_provider = rk3588_parse_fdt_cells(clock_provider_text);
+    reset_provider = rk3588_parse_fdt_cells(reset_provider_text);
+
+    g_assert_cmpuint(npu_reg->len, ==, 12);
+    for (unsigned int i = 0; i < ARRAY_SIZE(core_base); i++) {
+        g_assert_cmpuint(g_array_index(npu_reg, uint32_t, i * 4), ==, 0);
+        g_assert_cmpuint(g_array_index(npu_reg, uint32_t, i * 4 + 1), ==,
+                         core_base[i]);
+        g_assert_cmpuint(g_array_index(npu_reg, uint32_t, i * 4 + 2), ==, 0);
+        g_assert_cmpuint(g_array_index(npu_reg, uint32_t, i * 4 + 3), ==,
+                         0x10000);
+    }
+    g_assert_cmpuint(npu_interrupts->len, ==, 12);
+    g_assert_cmpuint(iommu_interrupts->len, ==, 12);
+    for (unsigned int i = 0; i < ARRAY_SIZE(irq); i++) {
+        g_assert_cmpuint(g_array_index(npu_interrupts, uint32_t, i * 4), ==,
+                         0);
+        g_assert_cmpuint(g_array_index(npu_interrupts, uint32_t, i * 4 + 1),
+                         ==, irq[i]);
+        g_assert_cmpuint(g_array_index(npu_interrupts, uint32_t, i * 4 + 2),
+                         ==, 4);
+        g_assert_cmpuint(g_array_index(npu_interrupts, uint32_t, i * 4 + 3),
+                         ==, 0);
+        for (unsigned int cell = 0; cell < 4; cell++) {
+            g_assert_cmpuint(
+                g_array_index(iommu_interrupts, uint32_t, i * 4 + cell), ==,
+                g_array_index(npu_interrupts, uint32_t, i * 4 + cell));
+        }
+    }
+    g_assert_cmpuint(npu_clocks->len, ==, 8);
+    for (unsigned int i = 1; i < npu_clocks->len; i++) {
+        g_assert_cmpuint(g_array_index(npu_clocks, uint32_t, i), ==,
+                         g_array_index(npu_clocks, uint32_t, 0));
+    }
+    g_assert_cmpuint(clock_provider->len, ==, 1);
+    g_assert_cmpuint(g_array_index(npu_clocks, uint32_t, 0), ==,
+                     g_array_index(clock_provider, uint32_t, 0));
+    g_assert_cmpuint(npu_resets->len, ==, 12);
+    for (unsigned int i = 0; i < ARRAY_SIZE(reset); i++) {
+        g_assert_cmpuint(g_array_index(npu_resets, uint32_t, i * 2), ==,
+                         g_array_index(npu_resets, uint32_t, 0));
+        g_assert_cmpuint(g_array_index(npu_resets, uint32_t, i * 2 + 1), ==,
+                         reset[i]);
+    }
+    g_assert_cmpuint(reset_provider->len, ==, 1);
+    g_assert_cmpuint(g_array_index(npu_resets, uint32_t, 0), ==,
+                     g_array_index(reset_provider, uint32_t, 0));
+
+    g_assert_cmpuint(iommu_reg->len, ==, 16);
+    for (unsigned int i = 0; i < ARRAY_SIZE(iommu_base); i++) {
+        g_assert_cmpuint(g_array_index(iommu_reg, uint32_t, i * 4), ==, 0);
+        g_assert_cmpuint(g_array_index(iommu_reg, uint32_t, i * 4 + 1), ==,
+                         iommu_base[i]);
+        g_assert_cmpuint(g_array_index(iommu_reg, uint32_t, i * 4 + 2), ==,
+                         0);
+        g_assert_cmpuint(g_array_index(iommu_reg, uint32_t, i * 4 + 3), ==,
+                         RK_IOMMU_WINDOW_SIZE);
+    }
+    g_assert_cmpuint(iommu_clocks->len, ==, 6);
+    for (unsigned int i = 1; i < iommu_clocks->len; i++) {
+        g_assert_cmpuint(g_array_index(iommu_clocks, uint32_t, i), ==,
+                         g_array_index(iommu_clocks, uint32_t, 0));
+    }
+    g_assert_cmpuint(g_array_index(iommu_clocks, uint32_t, 0), ==,
+                     g_array_index(clock_provider, uint32_t, 0));
+    g_assert_cmpuint(iommu_cells->len, ==, 1);
+    g_assert_cmpuint(g_array_index(iommu_cells, uint32_t, 0), ==, 0);
+    g_assert_cmpuint(iommu_phandle->len, ==, 1);
+    g_assert_cmpuint(npu_iommus->len, ==, 1);
+    g_assert_cmpuint(g_array_index(npu_iommus, uint32_t, 0), ==,
+                     g_array_index(iommu_phandle, uint32_t, 0));
+
+    unlink(dtb);
 }
 
 static void test_rk3588_rknpu_version_and_cores(void)
@@ -6722,6 +7001,8 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588/rknpu-disabled-by-default",
                    test_rk3588_rknpu_disabled_by_default);
     qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_rknpu_fdt);
+    qtest_add_func("/rk3588/rknpu-vendor-fdt",
+                   test_rk3588_rknpu_vendor_fdt);
     qtest_add_func("/rk3588/rknpu-version-and-cores",
                    test_rk3588_rknpu_version_and_cores);
     qtest_add_func("/rk3588/rknpu-ppu-windows-all-cores",

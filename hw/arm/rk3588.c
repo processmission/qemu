@@ -218,6 +218,7 @@ struct RK3588MachineState {
     bool firmware_atf_entered;
     bool zvm_ram;
     bool rknpu;
+    bool rknpu_vendor_fdt;
     bool rknpu_functional;
     RK3588BootROM bootrom_state;
 };
@@ -1065,8 +1066,8 @@ static void rk3588_fdt_add_pcie_nodes(RK3588MachineState *s, void *fdt,
     }
 }
 
-static void rk3588_fdt_add_rknpu_nodes(void *fdt, uint32_t cru_phandle,
-                                       uint32_t clk_phandle)
+static void rk3588_fdt_add_rknpu_core_nodes(void *fdt, uint32_t cru_phandle,
+                                            uint32_t clk_phandle)
 {
     static const int pc_memmap[] = {
         RK3588_RKNN0_PC,
@@ -1205,6 +1206,114 @@ static void rk3588_fdt_add_rknpu_nodes(void *fdt, uint32_t cru_phandle,
     }
 }
 
+static void rk3588_fdt_add_rknpu_vendor_node(void *fdt,
+                                             uint32_t cru_phandle,
+                                             uint32_t clk_phandle)
+{
+    static const int core_memmap[] = {
+        RK3588_RKNN0_PC,
+        RK3588_RKNN1_PC,
+        RK3588_RKNN2_PC,
+    };
+    static const int iommu_memmap[] = {
+        RK3588_RKNN0_MMU0,
+        RK3588_RKNN0_MMU1,
+        RK3588_RKNN1_MMU,
+        RK3588_RKNN2_MMU,
+    };
+    static const int irq[] = {
+        RK3588_RKNN0_SPI,
+        RK3588_RKNN1_SPI,
+        RK3588_RKNN2_SPI,
+    };
+    static const int reset[] = {
+        486, 432, 448,
+        488, 434, 450,
+    };
+    static const char * const irq_names[] = {
+        "npu0_irq", "npu1_irq", "npu2_irq",
+    };
+    static const char * const clock_names[] = {
+        "clk_npu", "aclk0", "aclk1", "aclk2",
+        "hclk0", "hclk1", "hclk2", "pclk",
+    };
+    static const char * const reset_names[] = {
+        "srst_a0", "srst_a1", "srst_a2",
+        "srst_h0", "srst_h1", "srst_h2",
+    };
+    static const char * const iommu_irq_names[] = {
+        "npu0_mmu", "npu1_mmu", "npu2_mmu",
+    };
+    static const char * const iommu_clock_names[] = {
+        "aclk0", "aclk1", "aclk2", "iface0", "iface1", "iface2",
+    };
+    const char *iommu = "/iommu@fdab9000";
+    const char *npu = "/npu@fdab0000";
+    uint32_t iommu_phandle = qemu_fdt_alloc_phandle(fdt);
+
+    qemu_fdt_add_subnode(fdt, iommu);
+    qemu_fdt_setprop_string(fdt, iommu, "compatible", "rockchip,iommu-v2");
+    qemu_fdt_setprop_sized_cells(
+        fdt, iommu, "reg",
+        2, rk3588_memmap[iommu_memmap[0]].base,
+        2, rk3588_memmap[iommu_memmap[0]].size,
+        2, rk3588_memmap[iommu_memmap[1]].base,
+        2, rk3588_memmap[iommu_memmap[1]].size,
+        2, rk3588_memmap[iommu_memmap[2]].base,
+        2, rk3588_memmap[iommu_memmap[2]].size,
+        2, rk3588_memmap[iommu_memmap[3]].base,
+        2, rk3588_memmap[iommu_memmap[3]].size);
+    qemu_fdt_setprop_cells(fdt, iommu, "interrupts",
+                           FDT_GIC_SPI, irq[0], FDT_IRQ_TYPE_LEVEL_HIGH, 0,
+                           FDT_GIC_SPI, irq[1], FDT_IRQ_TYPE_LEVEL_HIGH, 0,
+                           FDT_GIC_SPI, irq[2], FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+    qemu_fdt_setprop_string_array(fdt, iommu, "interrupt-names",
+                                  (char **)&iommu_irq_names,
+                                  ARRAY_SIZE(iommu_irq_names));
+    qemu_fdt_setprop_cells(fdt, iommu, "clocks",
+                           clk_phandle, clk_phandle, clk_phandle,
+                           clk_phandle, clk_phandle, clk_phandle);
+    qemu_fdt_setprop_string_array(fdt, iommu, "clock-names",
+                                  (char **)&iommu_clock_names,
+                                  ARRAY_SIZE(iommu_clock_names));
+    qemu_fdt_setprop_cell(fdt, iommu, "#iommu-cells", 0);
+    qemu_fdt_setprop_cell(fdt, iommu, "phandle", iommu_phandle);
+    qemu_fdt_setprop_string(fdt, iommu, "status", "okay");
+
+    qemu_fdt_add_subnode(fdt, npu);
+    qemu_fdt_setprop_string(fdt, npu, "compatible",
+                            "rockchip,rk3588-rknpu");
+    qemu_fdt_setprop_sized_cells(fdt, npu, "reg",
+                                 2, rk3588_memmap[core_memmap[0]].base,
+                                 2, 0x10000,
+                                 2, rk3588_memmap[core_memmap[1]].base,
+                                 2, 0x10000,
+                                 2, rk3588_memmap[core_memmap[2]].base,
+                                 2, 0x10000);
+    qemu_fdt_setprop_cells(fdt, npu, "interrupts",
+                           FDT_GIC_SPI, irq[0], FDT_IRQ_TYPE_LEVEL_HIGH, 0,
+                           FDT_GIC_SPI, irq[1], FDT_IRQ_TYPE_LEVEL_HIGH, 0,
+                           FDT_GIC_SPI, irq[2], FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+    qemu_fdt_setprop_string_array(fdt, npu, "interrupt-names",
+                                  (char **)&irq_names,
+                                  ARRAY_SIZE(irq_names));
+    qemu_fdt_setprop_cells(fdt, npu, "clocks",
+                           clk_phandle, clk_phandle, clk_phandle, clk_phandle,
+                           clk_phandle, clk_phandle, clk_phandle, clk_phandle);
+    qemu_fdt_setprop_string_array(fdt, npu, "clock-names",
+                                  (char **)&clock_names,
+                                  ARRAY_SIZE(clock_names));
+    qemu_fdt_setprop_cells(fdt, npu, "resets",
+                           cru_phandle, reset[0], cru_phandle, reset[1],
+                           cru_phandle, reset[2], cru_phandle, reset[3],
+                           cru_phandle, reset[4], cru_phandle, reset[5]);
+    qemu_fdt_setprop_string_array(fdt, npu, "reset-names",
+                                  (char **)&reset_names,
+                                  ARRAY_SIZE(reset_names));
+    qemu_fdt_setprop_cell(fdt, npu, "iommus", iommu_phandle);
+    qemu_fdt_setprop_string(fdt, npu, "status", "okay");
+}
+
 static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 {
     RK3588MachineState *s = container_of(binfo, RK3588MachineState, bootinfo);
@@ -1242,7 +1351,11 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
                               its1_phandle);
     if (s->rknpu) {
-        rk3588_fdt_add_rknpu_nodes(fdt, cru_phandle, clk_phandle);
+        if (s->rknpu_vendor_fdt) {
+            rk3588_fdt_add_rknpu_vendor_node(fdt, cru_phandle, clk_phandle);
+        } else {
+            rk3588_fdt_add_rknpu_core_nodes(fdt, cru_phandle, clk_phandle);
+        }
     }
 
     return fdt;
@@ -2619,6 +2732,10 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         error_report("rknpu-functional requires rknpu=on");
         exit(EXIT_FAILURE);
     }
+    if (s->rknpu_vendor_fdt && !s->rknpu) {
+        error_report("rknpu-vendor-fdt requires rknpu=on");
+        exit(EXIT_FAILURE);
+    }
     if (!s->rknpu) {
         return;
     }
@@ -3103,6 +3220,20 @@ static void rk3588_set_rknpu(Object *obj, bool value, Error **errp)
     s->rknpu = value;
 }
 
+static bool rk3588_get_rknpu_vendor_fdt(Object *obj, Error **errp)
+{
+    RK3588MachineState *s = RK3588_MACHINE(obj);
+
+    return s->rknpu_vendor_fdt;
+}
+
+static void rk3588_set_rknpu_vendor_fdt(Object *obj, bool value, Error **errp)
+{
+    RK3588MachineState *s = RK3588_MACHINE(obj);
+
+    s->rknpu_vendor_fdt = value;
+}
+
 static bool rk3588_get_rknpu_functional(Object *obj, Error **errp)
 {
     RK3588MachineState *s = RK3588_MACHINE(obj);
@@ -3134,6 +3265,7 @@ void rk3588_machine_instance_configure(Object *obj,
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
     s->rknpu = false;
+    s->rknpu_vendor_fdt = false;
     s->rknpu_functional = false;
 }
 
@@ -3162,6 +3294,12 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     object_class_property_set_description(oc, "rknpu",
                                           "Enable RK3588 RKNN/RKNPU fake "
                                           "completion accelerator cores");
+    object_class_property_add_bool(oc, "rknpu-vendor-fdt",
+                                   rk3588_get_rknpu_vendor_fdt,
+                                   rk3588_set_rknpu_vendor_fdt);
+    object_class_property_set_description(
+        oc, "rknpu-vendor-fdt",
+        "Expose the aggregate vendor-driver RK3588 RKNPU FDT binding");
     object_class_property_add_bool(oc, "rknpu-functional",
                                    rk3588_get_rknpu_functional,
                                    rk3588_set_rknpu_functional);
