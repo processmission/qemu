@@ -2,9 +2,10 @@
 /*
  * SpacemiT K3 Pico-ITX machine
  *
- * This model implements the standard RISC-V platform subset needed to boot
- * the K3 SDK Linux kernel with generic OpenSBI.  K3 vendor firmware and the
- * A100/IME harts are intentionally outside this machine's current contract.
+ * This model implements the RISC-V platform and K3 boot-path subset needed
+ * to boot the SDK Linux kernel directly or through U-Boot with generic
+ * OpenSBI.  BootROM, SPL, DDR training, and the A100/IME harts are outside
+ * this machine's current contract.
  */
 
 #include "qemu/osdep.h"
@@ -19,9 +20,14 @@
 #include "hw/riscv/boot.h"
 #include "hw/riscv/machines-qom.h"
 #include "hw/riscv/spacemit-k3.h"
+#include "hw/sd/sd.h"
 #include "system/address-spaces.h"
+#include "system/block-backend.h"
+#include "system/blockdev.h"
 #include "system/device_tree.h"
+#include "system/memory.h"
 #include "system/qtest.h"
+#include "system/reset.h"
 #include "system/system.h"
 #include "target/riscv/cpu.h"
 #include "target/riscv/cpu-qom.h"
@@ -30,15 +36,19 @@
 #include <libfdt.h>
 
 const MemMapEntry spacemit_k3_memmap[] = {
-    [K3_DEV_RESET]    = { 0xc0800000,       0x1000 },
-    [K3_DEV_UART0]    = { 0xd4017000,        0x100 },
-    [K3_DEV_S_IMSIC]  = { 0xe0400000,     0x400000 },
-    [K3_DEV_S_APLIC]  = { 0xe0804000,       0x4000 },
-    [K3_DEV_M_IMSIC]  = { 0xf1000000,      0x10000 },
-    [K3_DEV_M_APLIC]  = { 0xf1800000,       0x4000 },
-    [K3_DEV_M_CLINT]  = { 0xf1810000,      0x10000 },
-    [K3_DEV_FIRMWARE] = { 0x100000000,    32 * MiB },
-    [K3_DEV_DRAM]     = { 0x102000000,           0 },
+    [K3_DEV_SRAM]         = { 0xc0800000,      0x80000 },
+    [K3_DEV_DDR_TRAINING] = { 0xc08d0000,     0x100 },
+    [K3_DEV_UART0]        = { 0xd4017000,        0x100 },
+    [K3_DEV_SDHCI0]       = { 0xd4280000,        0x200 },
+    [K3_DEV_APMU]         = { 0xd4282800,        0x400 },
+    [K3_DEV_CIU]          = { 0xd4282c00,        0x400 },
+    [K3_DEV_S_IMSIC]      = { 0xe0400000,     0x400000 },
+    [K3_DEV_S_APLIC]      = { 0xe0804000,       0x4000 },
+    [K3_DEV_M_IMSIC]      = { 0xf1000000,      0x10000 },
+    [K3_DEV_M_APLIC]      = { 0xf1800000,       0x4000 },
+    [K3_DEV_M_CLINT]      = { 0xf1810000,      0x10000 },
+    [K3_DEV_FIRMWARE]     = { 0x100000000,    32 * MiB },
+    [K3_DEV_DRAM]         = { 0x102000000,           0 },
 };
 
 static RISCVCPU *k3_pico_itx_hart(SpacemitK3SoCState *s, unsigned int hartid)
@@ -80,7 +90,7 @@ static bool k3_pico_itx_validate_cpu(SpacemitK3SoCState *s, Error **errp)
         }
         if (riscv_has_ext(&cpu->env, RVH)) {
             error_setg(errp,
-                       "K3 Linux-first X100 hart %u does not support H",
+                       "K3 X100 hart %u does not support H",
                        hartid);
             return false;
         }
@@ -159,6 +169,14 @@ static void k3_pico_itx_create_aia(SpacemitK3SoCState *s)
         K3_PICO_ITX_APLIC_IPRIO_BITS, true, false, s->m_aplic);
 }
 
+static void spacemit_k3_soc_reset(void *opaque)
+{
+    SpacemitK3SoCState *s = opaque;
+
+    memset(memory_region_get_ram_ptr(&s->ddr_training), 0,
+           spacemit_k3_memmap[K3_DEV_DDR_TRAINING].size);
+}
+
 static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
 {
     SpacemitK3SoCState *s = SPACEMIT_K3_SOC(dev);
@@ -166,14 +184,25 @@ static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
     MemoryRegion *system_memory = get_system_memory();
     unsigned int cluster;
 
-    memory_region_init_rom(&s->reset, OBJECT(dev), "spacemit.k3.reset",
-                           spacemit_k3_memmap[K3_DEV_RESET].size, errp);
+    memory_region_init_ram(&s->sram, OBJECT(dev), "spacemit.k3.sram",
+                           spacemit_k3_memmap[K3_DEV_SRAM].size, errp);
     if (*errp) {
         return;
     }
     memory_region_add_subregion(system_memory,
-                                spacemit_k3_memmap[K3_DEV_RESET].base,
-                                &s->reset);
+                                spacemit_k3_memmap[K3_DEV_SRAM].base,
+                                &s->sram);
+
+    memory_region_init_ram(&s->ddr_training, OBJECT(dev),
+                           "spacemit.k3.ddr-training",
+                           spacemit_k3_memmap[K3_DEV_DDR_TRAINING].size,
+                           errp);
+    if (*errp) {
+        return;
+    }
+    memory_region_add_subregion(
+        system_memory, spacemit_k3_memmap[K3_DEV_DDR_TRAINING].base,
+        &s->ddr_training);
 
     memory_region_init_ram(&s->firmware, OBJECT(dev), "spacemit.k3.firmware",
                            spacemit_k3_memmap[K3_DEV_FIRMWARE].size, errp);
@@ -216,6 +245,27 @@ static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
 
     k3_pico_itx_create_aia(s);
 
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->apmu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->apmu), 0,
+                    spacemit_k3_memmap[K3_DEV_APMU].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ciu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ciu), 0,
+                    spacemit_k3_memmap[K3_DEV_CIU].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci0), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sdhci0), 0,
+                    spacemit_k3_memmap[K3_DEV_SDHCI0].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci0), 0,
+                       qdev_get_gpio_in(s->m_aplic,
+                                       K3_PICO_ITX_SDHCI0_IRQ));
+
     memory_region_init(&s->uart0_mem, OBJECT(dev), "spacemit.k3.uart0",
                        spacemit_k3_memmap[K3_DEV_UART0].size);
     memory_region_add_subregion(system_memory,
@@ -225,6 +275,8 @@ static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
         &s->uart0_mem, 0, 2,
         qdev_get_gpio_in(s->m_aplic, K3_PICO_ITX_UART0_IRQ),
         115200, serial_hd(0), DEVICE_LITTLE_ENDIAN);
+
+    qemu_register_reset(spacemit_k3_soc_reset, s);
 }
 
 static void spacemit_k3_soc_instance_init(Object *obj)
@@ -240,6 +292,10 @@ static void spacemit_k3_soc_instance_init(Object *obj)
                             TYPE_CPU_CLUSTER);
     object_initialize_child(OBJECT(&s->clusters[1]), "cpus", &s->cpus[1],
                             TYPE_RISCV_HART_ARRAY);
+    object_initialize_child(obj, "apmu", &s->apmu, TYPE_SPACEMIT_K3_APMU);
+    object_initialize_child(obj, "ciu", &s->ciu, TYPE_SPACEMIT_K3_CIU);
+    object_initialize_child(obj, "sdhci0", &s->sdhci0,
+                            TYPE_SPACEMIT_K3_SDHCI);
 
     for (cluster = 0; cluster < K3_PICO_ITX_NUM_CLUSTERS; cluster++) {
         qdev_prop_set_uint32(DEVICE(&s->clusters[cluster]), "cluster-id",
@@ -249,7 +305,7 @@ static void spacemit_k3_soc_instance_init(Object *obj)
         qdev_prop_set_uint32(DEVICE(&s->cpus[cluster]), "hartid-base",
                             cluster * K3_PICO_ITX_HARTS_PER_CLUSTER);
         qdev_prop_set_uint64(DEVICE(&s->cpus[cluster]), "resetvec",
-                            spacemit_k3_memmap[K3_DEV_RESET].base);
+                            spacemit_k3_memmap[K3_DEV_SRAM].base);
     }
 }
 
@@ -328,7 +384,7 @@ static void k3_pico_itx_validate_fdt(K3PicoITXState *s)
                             machine->fdt, node);
     }
     if (fdt_path_offset(machine->fdt, "/cpus/cpu@8") >= 0) {
-        error_report("k3-pico-itx Linux-first DTB must not expose A100 harts");
+        error_report("k3-pico-itx DTB must not expose A100 harts");
         exit(EXIT_FAILURE);
     }
 
@@ -351,8 +407,8 @@ static void k3_pico_itx_validate_fdt(K3PicoITXState *s)
     }
 }
 
-static void k3_pico_itx_check_loaded_images(MachineState *machine,
-                                            RISCVBootInfo *info)
+static void k3_pico_itx_check_loaded_payloads(MachineState *machine,
+                                              RISCVBootInfo *info)
 {
     hwaddr dram_base = spacemit_k3_memmap[K3_DEV_DRAM].base;
     hwaddr dram_end = dram_base + machine->ram_size;
@@ -361,16 +417,31 @@ static void k3_pico_itx_check_loaded_images(MachineState *machine,
         (info->image_low_addr < dram_base ||
          info->image_high_addr > dram_end ||
          info->image_high_addr < info->image_low_addr)) {
-        error_report("K3 Linux kernel does not fit in the Linux RAM window");
+        error_report("K3 -kernel payload does not fit in the DRAM window");
         exit(EXIT_FAILURE);
     }
     if (info->initrd_size &&
         (info->initrd_start < dram_base ||
          info->initrd_start + info->initrd_size > dram_end ||
          info->initrd_start + info->initrd_size < info->initrd_start)) {
-        error_report("K3 initramfs does not fit in the Linux RAM window");
+        error_report("K3 -initrd payload does not fit in the DRAM window");
         exit(EXIT_FAILURE);
     }
+}
+
+static void k3_pico_itx_attach_sd_card(K3PicoITXState *s)
+{
+    DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
+    DeviceState *card;
+
+    if (!dinfo) {
+        return;
+    }
+
+    card = qdev_new(TYPE_SD_CARD);
+    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                            &error_fatal);
+    qdev_realize_and_unref(card, s->soc.sdhci0.sd_bus, &error_fatal);
 }
 
 static void k3_pico_itx_machine_init(MachineState *machine)
@@ -389,6 +460,7 @@ static void k3_pico_itx_machine_init(MachineState *machine)
                                 spacemit_k3_memmap[K3_DEV_DRAM].base,
                                 machine->ram);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
+    k3_pico_itx_attach_sd_card(s);
 
     riscv_boot_info_init(&boot_info, &s->soc.cpus[0]);
 
@@ -427,7 +499,7 @@ static void k3_pico_itx_machine_init(MachineState *machine)
             spacemit_k3_memmap[K3_DEV_DRAM].base);
 
         riscv_load_kernel(machine, &boot_info, kernel_start_addr, true, NULL);
-        k3_pico_itx_check_loaded_images(machine, &boot_info);
+        k3_pico_itx_check_loaded_payloads(machine, &boot_info);
         kernel_entry = boot_info.image_low_addr;
     }
 
@@ -438,15 +510,15 @@ static void k3_pico_itx_machine_init(MachineState *machine)
         if (fdt_load_addr < spacemit_k3_memmap[K3_DEV_DRAM].base ||
             fdt_load_addr + fdt_totalsize(machine->fdt) >
                 spacemit_k3_memmap[K3_DEV_DRAM].base + machine->ram_size) {
-            error_report("K3 DTB does not fit in the Linux RAM window");
+            error_report("K3 DTB does not fit in the DRAM window");
             exit(EXIT_FAILURE);
         }
         riscv_load_fdt(fdt_load_addr, machine->fdt);
     }
 
     riscv_setup_rom_reset_vec(machine, &s->soc.cpus[0], firmware_load_addr,
-                              spacemit_k3_memmap[K3_DEV_RESET].base,
-                              spacemit_k3_memmap[K3_DEV_RESET].size,
+                              spacemit_k3_memmap[K3_DEV_SRAM].base,
+                              spacemit_k3_memmap[K3_DEV_SRAM].size,
                               kernel_entry, fdt_load_addr);
 }
 
@@ -477,7 +549,7 @@ static void k3_pico_itx_machine_class_init(ObjectClass *oc, const void *data)
         NULL,
     };
 
-    mc->desc = "SpacemiT K3 Pico-ITX (Linux-first X100 subset)";
+    mc->desc = "SpacemiT K3 Pico-ITX (X100 subset)";
     mc->init = k3_pico_itx_machine_init;
     mc->min_cpus = K3_PICO_ITX_NUM_HARTS;
     mc->max_cpus = K3_PICO_ITX_NUM_HARTS;
@@ -486,6 +558,7 @@ static void k3_pico_itx_machine_class_init(ObjectClass *oc, const void *data)
     mc->valid_cpu_types = valid_cpu_types;
     mc->default_ram_size = 2 * GiB;
     mc->default_ram_id = "spacemit.k3.ram";
+    mc->auto_create_sdcard = true;
     mc->smp_props.clusters_supported = true;
     compat_props_add(mc->compat_props, k3_pico_itx_cpu_defaults,
                      G_N_ELEMENTS(k3_pico_itx_cpu_defaults));
