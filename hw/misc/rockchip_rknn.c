@@ -1559,37 +1559,34 @@ static bool rockchip_rknn_fetch_pipeline_task(
         g_new0(RockchipRKNNRegisterFile, 1);
     RockchipRKNNPipelineTask task = {};
     RockchipRKNNDPUStageSnapshot stage = {};
-    const unsigned int slot = 0;
     uint32_t next_iova;
     uint32_t next_amount;
     bool decoded;
 
     trace_rockchip_rknn_task_fetch(s->core_index, index, iova,
                                    command_count);
-    memset(&s->pending_pipeline[slot], 0,
-           sizeof(s->pending_pipeline[slot]));
-    memset(&s->pending_dpu_stage[slot], 0,
-           sizeof(s->pending_dpu_stage[slot]));
-    s->pending_pipeline_valid[slot] = false;
-    s->pending_domain_runtime_valid[slot] = false;
+    memset(s->pending_pipeline, 0, sizeof(*s->pending_pipeline));
+    memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
+    s->pending_pipeline_valid = false;
+    s->pending_domain_runtime_valid = false;
     rockchip_rknn_register_file_init(file, runtime);
     if (!rockchip_rknn_fetch_register_file(s, file, iova, command_count)) {
         trace_rockchip_rknn_task_fetch_error(s->core_index, index,
                                               "regcmd-fetch");
         return false;
     }
-    memcpy(s->pending_domain_runtime[slot], file->runtime,
+    memcpy(s->pending_domain_runtime, file->runtime,
            sizeof(file->runtime));
-    s->pending_domain_runtime_valid[slot] = true;
+    s->pending_domain_runtime_valid = true;
     decoded = rockchip_rknn_decode_pipeline(s, &task, &stage, file);
     if (decoded ||
         task.enabled_blocks == (ROCKCHIP_RKNN_BLOCK_PPU |
                                 ROCKCHIP_RKNN_BLOCK_PPU_RDMA)) {
-        s->pending_pipeline[slot] = task;
-        s->pending_dpu_stage[slot] = stage;
+        *s->pending_pipeline = task;
+        s->pending_dpu_stage = stage;
     }
     if (decoded) {
-        s->pending_pipeline_valid[slot] =
+        s->pending_pipeline_valid =
             rockchip_rknn_pipeline_is_captured_profile(&task, &stage);
     }
 
@@ -1626,10 +1623,9 @@ static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
     s->pending_task_index = 0;
     s->pending_next_iova = 0;
     s->pending_next_command_count = 0;
-    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
-    memset(s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
-    memset(s->pending_domain_runtime_valid, 0,
-           sizeof(s->pending_domain_runtime_valid));
+    s->pending_pipeline_valid = false;
+    memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
+    s->pending_domain_runtime_valid = false;
     if (!task_count || task_count > ROCKCHIP_RKNN_STREAM_TASKS_MAX) {
         return;
     }
@@ -1651,19 +1647,18 @@ static void rockchip_rknn_prepare_slave_pipeline(RockchipRKNNCoreState *s,
     s->pending_task_index = 0;
     s->pending_next_iova = 0;
     s->pending_next_command_count = 0;
-    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
-    memset(s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
-    memset(s->pending_domain_runtime_valid, 0,
-           sizeof(s->pending_domain_runtime_valid));
+    s->pending_pipeline_valid = false;
+    memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
+    s->pending_domain_runtime_valid = false;
     s->slave_file.enabled_blocks = enabled_blocks & 0x7f;
-    memcpy(s->pending_domain_runtime[0], s->slave_file.runtime,
+    memcpy(s->pending_domain_runtime, s->slave_file.runtime,
            sizeof(s->slave_file.runtime));
-    s->pending_domain_runtime_valid[0] = true;
+    s->pending_domain_runtime_valid = true;
     if (rockchip_rknn_decode_pipeline(s, &task, &stage, &s->slave_file) &&
         rockchip_rknn_pipeline_is_captured_profile(&task, &stage)) {
-        s->pending_pipeline[0] = task;
-        s->pending_dpu_stage[0] = stage;
-        s->pending_pipeline_valid[0] = true;
+        *s->pending_pipeline = task;
+        s->pending_dpu_stage = stage;
+        s->pending_pipeline_valid = true;
     }
 }
 
@@ -2156,10 +2151,9 @@ static void rockchip_rknn_set_ppu_status(RockchipRKNNCoreState *s,
                                          uint32_t status)
 {
     unsigned int ppu_bank =
-        s->pending_domain_runtime[0][ROCKCHIP_RKNN_DOMAIN_PPU].pointer_bank;
+        s->pending_domain_runtime[ROCKCHIP_RKNN_DOMAIN_PPU].pointer_bank;
     unsigned int rdma_bank =
-        s->pending_domain_runtime[0]
-                                 [ROCKCHIP_RKNN_DOMAIN_PPU_RDMA].pointer_bank;
+        s->pending_domain_runtime[ROCKCHIP_RKNN_DOMAIN_PPU_RDMA].pointer_bank;
 
     s->ppu_regs[R_PPU_S_STATUS] = ppu_bank ? 0 : status;
     s->ppu_rdma_regs[R_PPU_RDMA_S_STATUS] = rdma_bank ? 0 : status;
@@ -2175,10 +2169,9 @@ static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s)
         [ROCKCHIP_RKNN_DOMAIN_PPU] = ROCKCHIP_RKNN_BLOCK_PPU,
         [ROCKCHIP_RKNN_DOMAIN_PPU_RDMA] = ROCKCHIP_RKNN_BLOCK_PPU_RDMA,
     };
-    uint32_t enabled_blocks =
-        s->pending_pipeline[0].enabled_blocks;
+    uint32_t enabled_blocks = s->pending_pipeline->enabled_blocks;
 
-    memcpy(s->domain_runtime, s->pending_domain_runtime[0],
+    memcpy(s->domain_runtime, s->pending_domain_runtime,
            sizeof(s->domain_runtime));
 
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
@@ -2249,7 +2242,6 @@ static void rockchip_rknn_complete(void *opaque)
 
     if (s->functional) {
         while (s->pending_task_index < s->pending_task_count) {
-            const unsigned int slot = 0;
             bool ppu_success = false;
 
             /* Completion belongs to the last decoded task in the chain. */
@@ -2257,35 +2249,33 @@ static void rockchip_rknn_complete(void *opaque)
             final_ppu_attempted = false;
             final_ppu_success = false;
             final_ppu_attempted =
-                s->pending_pipeline[slot].enabled_blocks ==
+                s->pending_pipeline->enabled_blocks ==
                 (ROCKCHIP_RKNN_BLOCK_PPU |
                  ROCKCHIP_RKNN_BLOCK_PPU_RDMA);
             if (final_ppu_attempted) {
                 ppu_stage_attempted = true;
                 final_ppu_bank =
-                    s->pending_domain_runtime[slot]
-                                             [ROCKCHIP_RKNN_DOMAIN_PPU]
-                                                 .pointer_bank;
+                    s->pending_domain_runtime[ROCKCHIP_RKNN_DOMAIN_PPU]
+                        .pointer_bank;
                 rockchip_rknn_set_ppu_status(s, 0);
             }
-            if (s->pending_pipeline_valid[slot] &&
+            if (s->pending_pipeline_valid &&
                 rockchip_rknn_pipeline_is_captured_profile(
-                    &s->pending_pipeline[slot],
-                    &s->pending_dpu_stage[slot])) {
+                    s->pending_pipeline, &s->pending_dpu_stage)) {
                 /* PPU/RDMA is stage-local; the full pipeline owns final IRQ. */
                 const uint32_t final_blocks = ROCKCHIP_RKNN_BLOCK_CNA |
                     ROCKCHIP_RKNN_BLOCK_CORE | ROCKCHIP_RKNN_BLOCK_DPU |
                     ROCKCHIP_RKNN_BLOCK_DPU_RDMA;
                 const uint32_t pipeline_blocks =
-                    s->pending_pipeline[slot].enabled_blocks;
+                    s->pending_pipeline->enabled_blocks;
 
                 final_pipeline_attempted =
                     pipeline_blocks == (final_blocks &
                                         ~ROCKCHIP_RKNN_BLOCK_DPU_RDMA) ||
                     pipeline_blocks == final_blocks;
                 dma_error_bits |= rockchip_rknn_execute_pipeline(
-                    s, &s->pending_pipeline[slot],
-                    &s->pending_dpu_stage[slot], &ppu_success);
+                    s, s->pending_pipeline,
+                    &s->pending_dpu_stage, &ppu_success);
                 if (final_ppu_attempted) {
                     final_ppu_success = ppu_success;
                     rockchip_rknn_set_ppu_status(
@@ -2294,7 +2284,7 @@ static void rockchip_rknn_complete(void *opaque)
                                       ROCKCHIP_RKNN_PPU_STATUS_FAULT);
                 }
             }
-            if (s->pending_domain_runtime_valid[slot]) {
+            if (s->pending_domain_runtime_valid) {
                 rockchip_rknn_commit_runtime(s);
             }
             s->pending_task_index++;
@@ -2336,10 +2326,9 @@ static void rockchip_rknn_complete(void *opaque)
     s->pending_task_index = 0;
     s->pending_next_iova = 0;
     s->pending_next_command_count = 0;
-    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
-    memset(s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
-    memset(s->pending_domain_runtime_valid, 0,
-           sizeof(s->pending_domain_runtime_valid));
+    s->pending_pipeline_valid = false;
+    memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
+    s->pending_domain_runtime_valid = false;
     s->pending_slave = false;
     s->busy = false;
     s->pc_regs[R_PC_OPERATION_ENABLE] &= ~R_PC_OPERATION_ENABLE_OP_EN_MASK;
@@ -3176,10 +3165,9 @@ static void rockchip_rknn_reset(DeviceState *dev)
     s->pending_task_index = 0;
     s->pending_next_iova = 0;
     s->pending_next_command_count = 0;
-    memset(s->pending_pipeline_valid, 0, sizeof(s->pending_pipeline_valid));
-    memset(s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
-    memset(s->pending_domain_runtime_valid, 0,
-           sizeof(s->pending_domain_runtime_valid));
+    s->pending_pipeline_valid = false;
+    memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
+    s->pending_domain_runtime_valid = false;
     s->pending_slave = false;
     s->busy = false;
     rockchip_rknn_clear_regcmd_shadow(s);
@@ -3281,8 +3269,7 @@ static void rockchip_rknn_init(Object *obj)
 
     timer_init_ns(&s->complete_timer, QEMU_CLOCK_VIRTUAL,
                   rockchip_rknn_complete, s);
-    s->pending_pipeline = g_new0(RockchipRKNNPipelineTask,
-                                 ROCKCHIP_RKNN_PENDING_SLOTS);
+    s->pending_pipeline = g_new0(RockchipRKNNPipelineTask, 1);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->pc_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->cna_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->core_reg_array->mem);
@@ -3567,7 +3554,7 @@ static const VMStateDescription vmstate_rockchip_rknn_register_file = {
 
 static const VMStateDescription vmstate_rockchip_rknn = {
     .name = TYPE_ROCKCHIP_RKNN_CORE,
-    .version_id = 2,
+    .version_id = 1,
     .minimum_version_id = 1,
     .post_load = rockchip_rknn_post_load,
     .fields = (const VMStateField[]) {
@@ -3577,10 +3564,10 @@ static const VMStateDescription vmstate_rockchip_rknn = {
                              ROCKCHIP_RKNN_CNA_R_MAX),
         VMSTATE_UINT32_ARRAY(core_regs, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_CORE_R_MAX),
-        VMSTATE_UINT32_ARRAY_V(ppu_regs, RockchipRKNNCoreState,
-                               ROCKCHIP_RKNN_PPU_R_MAX, 2),
-        VMSTATE_UINT32_ARRAY_V(ppu_rdma_regs, RockchipRKNNCoreState,
-                               ROCKCHIP_RKNN_PPU_RDMA_R_MAX, 2),
+        VMSTATE_UINT32_ARRAY(ppu_regs, RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_PPU_R_MAX),
+        VMSTATE_UINT32_ARRAY(ppu_rdma_regs, RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_PPU_RDMA_R_MAX),
         VMSTATE_TIMER(complete_timer, RockchipRKNNCoreState),
         VMSTATE_UINT32(core_index, RockchipRKNNCoreState),
         VMSTATE_BOOL(busy, RockchipRKNNCoreState),
@@ -3589,20 +3576,15 @@ static const VMStateDescription vmstate_rockchip_rknn = {
                              ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT, 0,
                              vmstate_rockchip_rknn_domain_runtime,
                              RockchipRKNNDomainRuntimeState),
-        VMSTATE_STRUCT_VARRAY_POINTER_KNOWN(
-            pending_pipeline, RockchipRKNNCoreState,
-            ROCKCHIP_RKNN_PENDING_SLOTS, 0,
-            vmstate_rockchip_rknn_pipeline, RockchipRKNNPipelineTask),
-        VMSTATE_STRUCT_2DARRAY(pending_domain_runtime, RockchipRKNNCoreState,
-                             ROCKCHIP_RKNN_PENDING_SLOTS,
+        VMSTATE_STRUCT_POINTER(pending_pipeline, RockchipRKNNCoreState,
+                               vmstate_rockchip_rknn_pipeline,
+                               RockchipRKNNPipelineTask),
+        VMSTATE_STRUCT_ARRAY(pending_domain_runtime, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT, 0,
                              vmstate_rockchip_rknn_domain_runtime,
                              RockchipRKNNDomainRuntimeState),
-        VMSTATE_BOOL_ARRAY(pending_pipeline_valid, RockchipRKNNCoreState,
-                           ROCKCHIP_RKNN_PENDING_SLOTS),
-        VMSTATE_BOOL_ARRAY(pending_domain_runtime_valid,
-                           RockchipRKNNCoreState,
-                           ROCKCHIP_RKNN_PENDING_SLOTS),
+        VMSTATE_BOOL(pending_pipeline_valid, RockchipRKNNCoreState),
+        VMSTATE_BOOL(pending_domain_runtime_valid, RockchipRKNNCoreState),
         VMSTATE_UINT32(pending_next_iova, RockchipRKNNCoreState),
         VMSTATE_UINT32(pending_next_command_count, RockchipRKNNCoreState),
         VMSTATE_UINT16(pending_task_count, RockchipRKNNCoreState),
@@ -3624,10 +3606,9 @@ static const VMStateDescription vmstate_rockchip_rknn = {
         VMSTATE_UINT32(lut_le_slope_shift, RockchipRKNNCoreState),
         VMSTATE_UINT32(lut_lo_slope_scale, RockchipRKNNCoreState),
         VMSTATE_UINT32(lut_lo_slope_shift, RockchipRKNNCoreState),
-        VMSTATE_STRUCT_ARRAY(pending_dpu_stage, RockchipRKNNCoreState,
-                             ROCKCHIP_RKNN_PENDING_SLOTS, 0,
-                             vmstate_rockchip_rknn_dpu_stage,
-                             RockchipRKNNDPUStageSnapshot),
+        VMSTATE_STRUCT(pending_dpu_stage, RockchipRKNNCoreState, 0,
+                       vmstate_rockchip_rknn_dpu_stage,
+                       RockchipRKNNDPUStageSnapshot),
         VMSTATE_END_OF_LIST()
     },
 };

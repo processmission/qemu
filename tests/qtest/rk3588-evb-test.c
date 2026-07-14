@@ -150,6 +150,11 @@
      RK3588_RKNN_CONTROL_CHAIN_LINK_COMMANDS + \
      RK3588_RKNN_MATMUL_COMMANDS)
 #define RK3588_RKNN_STREAM_TASKS_MAX 256
+#define RK3588_RKNN_MOBILENET_IMAGE_ADDR (RK3588_RAM_BASE + 0x80000)
+#define RK3588_RKNN_MOBILENET_IMAGE_IOVA 0xffc35000U
+#define RK3588_RKNN_MOBILENET_IMAGE_SIZE 0x1d000U
+#define RK3588_RKNN_MOBILENET_IMAGE_SHA256 \
+    "4136b022e5ce7831b11c8ed14725921d54bfcb7683bdeffbb0bc01fb654e5895"
 #define RK3588_SRST_A_RKNN1 250
 #define RK3588_SRST_H_RKNN1 252
 #define RK3588_SRST_A_RKNN2 254
@@ -4783,6 +4788,115 @@ static void test_rk3588_rknpu_pipeline_control_chain_120(void)
     qtest_quit(qts);
 }
 
+static void rk3588_rknn_load_mobilenet_control_graph(void **data,
+                                                      gsize *length)
+{
+    g_autofree char *path = g_build_filename(
+        "tests", "data", "rk3588-rknpu-mobilenet-v1-control-chain",
+        "regcmd-chain.bin", NULL);
+    g_autoptr(GError) error = NULL;
+    char *contents = NULL;
+
+    if (!g_file_get_contents(path, &contents, length, &error)) {
+        g_error("cannot load %s: %s", path, error->message);
+    }
+    *data = contents;
+}
+
+static void rk3588_rknn_prepare_mobilenet_control_graph(
+    QTestState *qts, const void *image, size_t image_size,
+    uint32_t root_iova, uint32_t root_commands)
+{
+    const unsigned int first_pte =
+        (RK3588_RKNN_MOBILENET_IMAGE_IOVA >> 12) & 0x3ff;
+
+    g_assert_cmpuint(image_size, ==, RK3588_RKNN_MOBILENET_IMAGE_SIZE);
+    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_IMAGE_ADDR,
+                   image, image_size);
+    qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR +
+                 (RK3588_RKNN_MOBILENET_IMAGE_IOVA >> 22) * 4,
+                 RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
+    for (unsigned int page = 0;
+         page < RK3588_RKNN_MOBILENET_IMAGE_SIZE / 0x1000; page++) {
+        qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR +
+                     (first_pte + page) * 4,
+                     (RK3588_RKNN_MOBILENET_IMAGE_ADDR + page * 0x1000) |
+                     RK_IOMMU_PTE_RW);
+    }
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+                 RK3588_RKNN_MATMUL_DTE_ADDR);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
+                 root_iova);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 rk3588_rknn_register_amount(root_commands));
+}
+
+static void test_rk3588_rknpu_mobilenet_control_graph(void)
+{
+    static const struct {
+        uint32_t root_iova;
+        uint16_t task_count;
+        uint16_t root_commands;
+        bool ppu_terminal;
+        bool final_job;
+    } roots[] = {
+        { 0xffc35bc0, 50, 130, false, false },
+        { 0xffc43240, 34, 126, true, false },
+        { 0xffc4b440, 23, 126, false, true },
+    };
+    g_autofree void *image = NULL;
+    g_autofree char *checksum = NULL;
+    gsize image_size;
+
+    rk3588_rknn_load_mobilenet_control_graph(&image, &image_size);
+    g_assert_cmpuint(image_size, ==, RK3588_RKNN_MOBILENET_IMAGE_SIZE);
+    checksum = g_compute_checksum_for_data(G_CHECKSUM_SHA256, image,
+                                           image_size);
+    g_assert_cmpstr(checksum, ==, RK3588_RKNN_MOBILENET_IMAGE_SHA256);
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(roots); i++) {
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+        uint32_t raw_status;
+
+        rk3588_rknn_prepare_mobilenet_control_graph(
+            qts, image, image_size, roots[i].root_iova,
+            roots[i].root_commands);
+        qtest_irq_intercept_out_named(qts, RK3588_RKNN0_QOM,
+                                      "sysbus-irq");
+        rk3588_rknn_start_control_chain(qts, roots[i].task_count);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+
+        g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                    RKNN_PC_TASK_STATUS), ==,
+                        RKNN_TASK_STATUS_SUCCESS);
+        raw_status = qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                 RKNN_PC_INTERRUPT_RAW_STATUS);
+        if (roots[i].ppu_terminal) {
+            g_assert_cmphex(raw_status & RKNN_PPU_STAGE_INTERRUPT_BITS, ==,
+                            RKNN_PPU_STAGE_INTERRUPT_BITS);
+            g_assert_cmphex(raw_status & RKNN_DPU_INTERRUPT_BITS, ==, 0);
+            g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PPU_BASE), ==,
+                            RKNN_PPU_STATUS_SUCCESS);
+            g_assert_cmphex(qtest_readl(qts,
+                                        RK3588_RKNN0_PPU_RDMA_BASE), ==,
+                            RKNN_PPU_STATUS_SUCCESS);
+        } else {
+            g_assert_cmphex(raw_status & RKNN_PPU_STAGE_INTERRUPT_BITS, ==,
+                            0);
+        }
+        if (roots[i].final_job) {
+            g_assert_cmphex(raw_status, ==, RKNN_DPU_INTERRUPT_BITS);
+        }
+        g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                    RKNN_PC_OPERATION_ENABLE) &
+                        RKNN_PC_OPERATION_ENABLE_OP_EN, ==, 0);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_quit(qts);
+    }
+}
+
 static void test_rk3588_rknpu_pipeline_control_chain_reset(void)
 {
     uint8_t output[RK3588_RKNN_MATMUL_M * RK3588_RKNN_MATMUL_N * 4];
@@ -6702,6 +6816,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_pipeline_multitask_chain);
     qtest_add_func("/rk3588/rknpu-pipeline-control-chain-120",
                    test_rk3588_rknpu_pipeline_control_chain_120);
+    qtest_add_func("/rk3588/rknpu-mobilenet-control-graph",
+                   test_rk3588_rknpu_mobilenet_control_graph);
     qtest_add_func("/rk3588/rknpu-pipeline-control-chain-reset",
                    test_rk3588_rknpu_pipeline_control_chain_reset);
     qtest_add_func("/rk3588/rknpu-pipeline-multitask-unsupported-tail",
