@@ -20,7 +20,10 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/intc/arm_gic.h"
+#include "hw/sd/ax650x-sdhci.h"
+#include "hw/sd/sd.h"
 #include "system/address-spaces.h"
+#include "system/blockdev.h"
 #include "system/device_tree.h"
 #include "system/system.h"
 #include "target/arm/cpu.h"
@@ -51,6 +54,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(AX650XPyramidState, AX650X_PYRAMID_MACHINE)
 #define AX650X_UART0_IRQ             135
 #define AX650X_UART_CLOCK_HZ         200000000
 #define AX650X_UART_BAUDBASE         (AX650X_UART_CLOCK_HZ / 16)
+
+#define AX650X_EMMC_BASE             0x28000000
+#define AX650X_EMMC_SIZE             0x600
+#define AX650X_EMMC_IRQ              93
+#define AX650X_EMMC_CLOCK_HZ         200000000
 
 #define AX650X_TIMER_CLOCK_HZ        24000000
 #define AX650X_PMU_IRQ_BASE          80
@@ -161,6 +169,28 @@ static void ax650x_create_gic(AX650XPyramidState *s)
     }
 }
 
+static void ax650x_create_emmc(AX650XPyramidState *s)
+{
+    DeviceState *host = qdev_new(TYPE_AX650X_SDHCI);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(host);
+    DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
+
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, AX650X_EMMC_BASE);
+    sysbus_connect_irq(sbd, 0,
+                       qdev_get_gpio_in(s->gic, AX650X_EMMC_IRQ));
+
+    if (dinfo) {
+        DeviceState *card = qdev_new(TYPE_EMMC);
+
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        qdev_realize_and_unref(card,
+                               BUS(ax650x_sdhci_get_bus(AX650X_SDHCI(host))),
+                               &error_fatal);
+    }
+}
+
 static void ax650x_create_fdt(AX650XPyramidState *s)
 {
     MachineState *machine = MACHINE(s);
@@ -168,8 +198,11 @@ static void ax650x_create_fdt(AX650XPyramidState *s)
     uint32_t gic_phandle;
     uint32_t uart_baud_phandle;
     uint32_t uart_apb_phandle;
+    uint32_t emmc_clock_phandle;
     const char clock_names[] = "baudclk\0apb_pclk";
+    const char emmc_clock_names[] = "aclk\0hclk\0cardclk";
     const char uart_path[] = "/soc/ax_uart@2016000";
+    const char emmc_path[] = "/soc/sdhc@28000000";
 
     s->fdt = create_device_tree(&s->fdt_size);
     if (!s->fdt) {
@@ -305,6 +338,16 @@ static void ax650x_create_fdt(AX650XPyramidState *s)
     qemu_fdt_setprop_cell(s->fdt, "/uart-apb-clock", "phandle",
                           uart_apb_phandle);
 
+    qemu_fdt_add_subnode(s->fdt, "/emmc-clock");
+    qemu_fdt_setprop_string(s->fdt, "/emmc-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(s->fdt, "/emmc-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(s->fdt, "/emmc-clock", "clock-frequency",
+                          AX650X_EMMC_CLOCK_HZ);
+    emmc_clock_phandle = qemu_fdt_alloc_phandle(s->fdt);
+    qemu_fdt_setprop_cell(s->fdt, "/emmc-clock", "phandle",
+                          emmc_clock_phandle);
+
     qemu_fdt_add_subnode(s->fdt, "/soc");
     qemu_fdt_setprop_string(s->fdt, "/soc", "compatible", "simple-bus");
     qemu_fdt_setprop_cell(s->fdt, "/soc", "#address-cells", 2);
@@ -328,6 +371,55 @@ static void ax650x_create_fdt(AX650XPyramidState *s)
                            GIC_FDT_IRQ_TYPE_SPI, AX650X_UART0_IRQ,
                            GIC_FDT_IRQ_FLAGS_LEVEL_HI);
     qemu_fdt_setprop_string(s->fdt, uart_path, "status", "okay");
+
+    qemu_fdt_add_subnode(s->fdt, emmc_path);
+    qemu_fdt_setprop_string(s->fdt, emmc_path, "compatible",
+                            "axera,sdhc-ax650");
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "#address-cells", 2);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "#size-cells", 2);
+    qemu_fdt_setprop_sized_cells(s->fdt, emmc_path, "reg",
+                                 2, AX650X_EMMC_BASE,
+                                 2, AX650X_EMMC_SIZE);
+    qemu_fdt_setprop_cells(s->fdt, emmc_path, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, AX650X_EMMC_IRQ,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cells(s->fdt, emmc_path, "clocks",
+                           emmc_clock_phandle, emmc_clock_phandle,
+                           emmc_clock_phandle);
+    qemu_fdt_setprop(s->fdt, emmc_path, "clock-names",
+                     emmc_clock_names, sizeof(emmc_clock_names));
+    qemu_fdt_setprop_cells(s->fdt, emmc_path, "sdhci-caps-mask",
+                           0x2, 0x03200000);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "bus-width", 8);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "max-frequency",
+                          AX650X_EMMC_CLOCK_HZ);
+    qemu_fdt_setprop(s->fdt, emmc_path, "cap-mmc-hw-reset", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "cap-mmc-highspeed", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "mmc-hs200-1_8v", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "mmc-hs400-1_8v", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "mmc-hs400-enhanced-strobe",
+                     NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "no-sdio", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "no-sd", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "non-removable", NULL, 0);
+    qemu_fdt_setprop(s->fdt, emmc_path, "disable-wp", NULL, 0);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-cnfg", 0x00cc0000);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-cmdpad-cnfg",
+                          0x0449);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-datapad-cnfg",
+                          0x0449);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-clkpad-cnfg",
+                          0x0440);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-stbpad-cnfg",
+                          0x0451);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-rstnpad-cnfg",
+                          0x0449);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-commdl-cnfg", 0);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-sdclkdl-cnfg", 1);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-sdclkdl-dc", 0x7f);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-smpldl-cnfg", 0xc);
+    qemu_fdt_setprop_cell(s->fdt, emmc_path, "axera,phy-atdl-cnfg", 0xc);
+    qemu_fdt_setprop_string(s->fdt, emmc_path, "status", "okay");
 }
 
 static void *ax650x_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
@@ -352,6 +444,7 @@ static void ax650x_pyramid_init(MachineState *machine)
     memory_region_add_subregion(sysmem, AX650X_RAM_BASE, machine->ram);
     ax650x_create_cpus(s);
     ax650x_create_gic(s);
+    ax650x_create_emmc(s);
 
     serial_mm_init(sysmem, AX650X_UART0_BASE, 2,
                    qdev_get_gpio_in(s->gic, AX650X_UART0_IRQ),
