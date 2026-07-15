@@ -48,10 +48,16 @@
 #define SDHC_NORINTSTS               0x30
 #define SDHC_NORINTSTSEN             0x34
 #define SDHC_NORINTSIGEN             0x38
+#define SDHC_ARGUMENT2               0x00
+#define SDHC_TRNS_AUTO_CMD23         0x0008
 #define SDHC_NIS_CMDCMP              BIT(0)
 #define SDHC_AX650X_HCVER            0x2402
 #define SDHC_EMMC_SEND_OP_COND       (1 << 8)
 #define SDHC_EMMC_SET_RELATIVE_ADDR  (3 << 8)
+#define SDHC_EMMC_SEND_STATUS        (13 << 8)
+#define SDHC_R1_READY_FOR_DATA       BIT(8)
+#define SDHC_R1_CURRENT_STATE_MASK   0x1e00
+#define SDHC_R1_STATE_TRAN           (4 << 9)
 
 static char *emmc_path;
 
@@ -313,6 +319,47 @@ static void test_emmc_block_io_and_irq(void)
     g_assert_cmpmem(readback, sizeof(readback), written, sizeof(written));
 }
 
+static void test_emmc_auto_cmd23(void)
+{
+    uint8_t expected[AX650X_EMMC_BLOCK_SIZE];
+    uint8_t readback[AX650X_EMMC_BLOCK_SIZE];
+    QTestState *qts = ax650x_pyramid_start_with_emmc();
+    uint32_t status;
+    int fd;
+    ssize_t ret;
+
+    for (unsigned int i = 0; i < sizeof(expected); i++) {
+        expected[i] = (i * 5) % 251 + 1;
+    }
+
+    qtest_writel(qts, AX650X_EMMC_BASE + SDHC_ARGUMENT2, 1);
+    sdhci_cmd_regs(qts, AX650X_EMMC_BASE, sizeof(expected), 1,
+                   AX650X_EMMC_BLOCK_SIZE,
+                   SDHC_TRNS_MULTI | SDHC_TRNS_AUTO_CMD23 |
+                   SDHC_TRNS_BLK_CNT_EN,
+                   SDHC_WRITE_MULTIPLE_BLOCK | SDHC_CMD_DATA_PRESENT);
+    for (unsigned int i = 0; i < sizeof(expected); i += sizeof(uint32_t)) {
+        qtest_writel(qts, AX650X_EMMC_BASE + SDHC_BDATA,
+                     ldl_le_p(&expected[i]));
+    }
+
+    sdhci_cmd_regs(qts, AX650X_EMMC_BASE, 0, 0, 1 << 16, 0,
+                   SDHC_EMMC_SEND_STATUS | SDHC_CMD_RESPONSE);
+    status = qtest_readl(qts, AX650X_EMMC_BASE + SDHC_RSPREG0);
+    g_assert_cmphex(status & SDHC_R1_READY_FOR_DATA, ==,
+                    SDHC_R1_READY_FOR_DATA);
+    g_assert_cmphex(status & SDHC_R1_CURRENT_STATE_MASK, ==,
+                    SDHC_R1_STATE_TRAN);
+    qtest_quit(qts);
+
+    fd = open(emmc_path, O_RDONLY);
+    g_assert_cmpint(fd, >=, 0);
+    ret = pread(fd, readback, sizeof(readback), AX650X_EMMC_BLOCK_SIZE);
+    g_assert_cmpint(ret, ==, sizeof(readback));
+    close(fd);
+    g_assert_cmpmem(readback, sizeof(readback), expected, sizeof(expected));
+}
+
 static void emmc_drive_create(void)
 {
     GError *error = NULL;
@@ -350,6 +397,8 @@ int main(int argc, char **argv)
                    test_emmc_registers_and_reset);
     qtest_add_func("ax650x-pyramid/emmc-block-io-and-irq",
                    test_emmc_block_io_and_irq);
+    qtest_add_func("ax650x-pyramid/emmc-auto-cmd23",
+                   test_emmc_auto_cmd23);
 
     ret = g_test_run();
     emmc_drive_destroy();
