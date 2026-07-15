@@ -4,9 +4,9 @@ SpacemiT K3 Pico-ITX board (``k3-pico-itx``)
 ================================================
 
 The ``k3-pico-itx`` machine models the standard RISC-V platform subset
-needed to boot a SpacemiT K3 SDK Linux kernel directly or through U-Boot on
-the K3 Pico-ITX board.  It focuses on the eight X100 application harts and
-does not expose the K3 A100 or IME harts.
+needed to boot a SpacemiT K3 SDK Linux kernel on the K3 Pico-ITX board.  It
+focuses on the eight X100 application harts and does not expose the K3 A100 or
+IME harts.
 
 The machine has a fixed CPU topology and memory layout matching the Linux
 view of the board.  The default configuration must be used without overriding
@@ -21,25 +21,26 @@ The ``k3-pico-itx`` machine supports:
 * 256-bit RISC-V vector registers, Sstc, and the Smaia/Ssaia extensions;
 * 2 GiB of RAM starting at ``0x102000000``;
 * a 32 MiB firmware window starting at ``0x100000000``;
+* 512 KiB of on-chip SRAM starting at ``0xc0800000``;
 * an ACLINT software interrupt and machine timer block with a 24 MHz timebase;
-* machine- and supervisor-level APLIC and IMSIC interrupt controllers;
-* the 8250-compatible UART0 at ``0xd4017000``, using interrupt source 42; and
-* the K3 SDHCI controller at ``0xd4280000``, using interrupt source 99.
+* machine- and supervisor-level APLIC and IMSIC interrupt controllers; and
+* the 8250-compatible UART0 at ``0xd4017000``, using interrupt source 42;
+* the SDHCI0 controller at ``0xd4280000``, using interrupt source 99; and
+* the SD clock/reset and boot-mode registers used by U-Boot.
 
 Boot options
 ------------
 
-Both supported Linux boot paths start generic OpenSBI directly.  QEMU can
-either load Linux and its initramfs, or load U-Boot proper and let U-Boot load
-Linux from an SD image.  An external device tree is required because the
-machine validates the exact K3 topology and address map before boot.
-
-The following examples use artifacts built from the SpacemiT K3 Buildroot SDK
-v1.0.2 and published in the ``sdk-v1.0.2-qemu2`` release of
-``spacemit-k3-qemu-images``.
+The machine supports both direct Linux boot and a firmware path through
+U-Boot proper and SD.  Both paths use generic OpenSBI firmware and require an
+external device tree because the machine validates the exact K3 Linux topology
+and address map before boot.
 
 Direct Linux boot
 ~~~~~~~~~~~~~~~~~
+
+The following example uses artifacts built from the SpacemiT K3 Buildroot SDK
+v1.0.2:
 
 .. code-block:: bash
 
@@ -61,12 +62,12 @@ The machine uses the fixed ``spacemit-x100`` CPU model.
 U-Boot and SD boot
 ~~~~~~~~~~~~~~~~~~
 
-Decompress ``k3-qemu-sd.raw.xz``, then start U-Boot proper as OpenSBI's next
-stage:
+The K3 SDK U-Boot proper can run as the supervisor-mode next stage of OpenSBI.
+Attach a raw SD image as the first SD drive; it is wired to SDHCI0 and appears
+as MMC device 0 in U-Boot:
 
 .. code-block:: bash
 
-   $ xz -dk k3-qemu-sd.raw.xz
    $ qemu-system-riscv64 \
        -machine k3-pico-itx \
        -bios fw_dynamic.bin \
@@ -75,21 +76,26 @@ stage:
        -drive file=k3-qemu-sd.raw,if=sd,format=raw,snapshot=on \
        -nographic -no-reboot
 
-U-Boot imports its deterministic environment from the SD boot partition and
-loads the Linux kernel, Linux device tree, and initramfs from that partition.
-The successful path prints ``K3-QEMU: Starting kernel from SD`` before Linux
-prints ``K3_LINUX_MVP_PASS``.
+QEMU reports SD boot through the K3 CIU boot flag.  U-Boot then initializes
+SDHCI0, finds the GPT partition named ``bootfs``, imports ``env_k3.txt``, and
+loads the Linux ``Image``, device tree, and optional initramfs from that FAT
+partition.  Using ``snapshot=on`` prevents firmware or the guest from changing
+the source image.
+
+The controller advertises a 52 MHz base clock, four-bit 3.3 V operation,
+SD High Speed (up to 50 MHz), and ADMA2.  It does not advertise 1.8 V
+signaling or UHS modes.
 
 Limitations
 -----------
 
-This machine is a Linux boot subset rather than a complete K3 hardware model.
+This machine is a boot-path subset rather than a complete K3 hardware model.
 It disables the X100 H extension because the VS interrupt files and
-virtualization path are not modeled.  The A100 and IME harts, PCIe,
-networking, multimedia accelerators, power management, and most board
-peripherals are not implemented.
+virtualization path are not modeled.  The K3 BootROM, bootinfo parsing,
+U-Boot SPL, and LPDDR initialization and training are also not modeled; QEMU
+provides initialized RAM and starts OpenSBI directly.
 
-The K3 BootROM, bootinfo parser, U-Boot SPL, and LPDDR training are not
-modeled.  QEMU provides initialized RAM and starts generic OpenSBI directly;
-the firmware boot path therefore uses U-Boot proper rather than the vendor
-SPL chain.
+The A100 and IME harts, eMMC, UFS, SPI flash, PCIe, networking, multimedia
+accelerators, system power management, and most board peripherals are not
+implemented.  SDHCI0 implements the register and DMA behavior required by the
+documented U-Boot-to-Linux path, not every vendor PHY tuning mode.
