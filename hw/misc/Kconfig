@@ -342,3 +342,9 @@ config SOPHGO_CV1800B_CLK
     bool
 
 source macio/Kconfig
+# AX650X DWMAC clock/reset/interface glue
+config AX650X_DWMAC_GLUE
+    bool
+
+config AX650X_HWSPINLOCK
+    bool
