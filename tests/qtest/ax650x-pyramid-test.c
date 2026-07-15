@@ -31,9 +31,13 @@
 #define AX650X_UART_REGSHIFT         2
 #define AX650X_UART_IER              (1 << AX650X_UART_REGSHIFT)
 #define AX650X_UART_LSR              (5 << AX650X_UART_REGSHIFT)
+#define AX650X_UART_USR              0x7c
+#define AX650X_UART_UCV              0xf8
 #define AX650X_UART_IER_THRI         0x02
 #define AX650X_UART_LSR_THRE         0x20
 #define AX650X_UART_LSR_TEMT         0x40
+#define AX650X_UART_USR_TFNF         BIT(1)
+#define AX650X_UART_USR_TFE          BIT(2)
 #define AX650X_UART0_INTID           (32 + 135)
 
 #define AX650X_EMMC_BASE             0x28000000
@@ -155,6 +159,18 @@ static void test_uart_irq_and_reset(void)
                     ==, 0);
     g_assert_cmphex(qtest_readq(qts, AX650X_RESET_RAM_TEST_ADDR), ==,
                     ram_pattern);
+
+    qtest_quit(qts);
+}
+
+static void test_uart_extension_registers(void)
+{
+    QTestState *qts = ax650x_pyramid_start();
+
+    g_assert_cmphex(qtest_readl(qts, AX650X_UART0_BASE + AX650X_UART_USR),
+                    ==, AX650X_UART_USR_TFNF | AX650X_UART_USR_TFE);
+    g_assert_cmphex(qtest_readl(qts, AX650X_UART0_BASE + AX650X_UART_UCV),
+                    ==, 0);
 
     qtest_quit(qts);
 }
@@ -327,6 +343,8 @@ int main(int argc, char **argv)
     qtest_add_func("ax650x-pyramid/memory-and-gic", test_memory_and_gic);
     qtest_add_func("ax650x-pyramid/uart-irq-and-reset",
                    test_uart_irq_and_reset);
+    qtest_add_func("ax650x-pyramid/uart-extension-registers",
+                   test_uart_extension_registers);
     qtest_add_func("ax650x-pyramid/emmc-registers-and-reset",
                    test_emmc_registers_and_reset);
     qtest_add_func("ax650x-pyramid/emmc-block-io-and-irq",
