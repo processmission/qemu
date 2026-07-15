@@ -27,9 +27,13 @@ The machine provides the following devices and architectural services:
 * Arm generic timers running at 24 MHz;
 * PSCI 1.0 using the SMC conduit;
 * the AXERA UART0 console at ``0x02016000``, including the extension
-  registers needed by the AXERA 8250 driver; and
+  registers needed by the AXERA 8250 driver;
 * an AX650X SDHCI/eMMC controller at ``0x28000000``, including the vendor PHY
-  and eMMC registers used during Linux probe.
+  and eMMC registers used during Linux probe;
+* two Synopsys DWMAC 4.10a compatible Ethernet controllers, including the
+  AX650X clock/reset glue, MDIO PHY identity, DMA and interrupt paths;
+* the DesignWare APB GPIO blocks used for PHY reset; and
+* the AX650X hardware spinlock block used by the GPIO driver.
 
 QEMU generates a minimal device tree containing only those implemented
 devices.  An eMMC backend supplied with ``if=sd`` is attached to the AX650X
@@ -42,19 +46,44 @@ The model requires an uncompressed Arm64 ``Image`` containing the AXERA UART
 and SDHCI drivers.  The following example boots an ext4 root filesystem from
 partition 12 of an eMMC image that uses the target's fixed partition layout.
 The image has no MBR or GPT, so the complete ``blkdevparts`` argument is
-required::
+required:
 
-  $ KERNEL=/path/to/Image-5.15.73-axera
-  $ EMMC=/path/to/ax650x-ubuntu-22.04-emmc.raw
-  $ PARTS='mmcblk0:1536K(uboot),1536K(uboot_bk),1M(env),20M(param),6M(logo),1M(dtb),64M(kernel),1M(atf),1M(optee),1M(recovery_dtb),74M(recovery),30380032K(rootfs)'
-  $ qemu-system-aarch64 \
+.. code-block:: shell
+
+  QEMU=${QEMU:-build/qemu-system-aarch64}
+  ASSET_DIR=${ASSET_DIR:-assets/ax650x}
+  KERNEL=${KERNEL:-$ASSET_DIR/Image-5.15.73-axera}
+  EMMC=${EMMC:-$ASSET_DIR/ax650x-ubuntu-22.04-emmc.raw}
+
+  PARTS='mmcblk0:1536K(uboot),1536K(uboot_bk),1M(env),20M(param)'
+  PARTS="$PARTS,6M(logo),1M(dtb),64M(kernel),1M(atf),1M(optee)"
+  PARTS="$PARTS,1M(recovery_dtb),74M(recovery),30380032K(rootfs)"
+  CMDLINE='console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x2016000'
+  CMDLINE="$CMDLINE root=/dev/mmcblk0p12 rootfstype=ext4 rw rootwait"
+  CMDLINE="$CMDLINE blkdevparts=$PARTS"
+  CMDLINE="$CMDLINE systemd.show_status=yes systemd.log_target=console"
+
+  for input in "$QEMU" "$KERNEL" "$EMMC"; do
+      if [ ! -r "$input" ]; then
+          echo "missing input: $input" >&2
+          exit 1
+      fi
+  done
+
+  exec "$QEMU" \
       -machine ax650x-pyramid \
       -accel tcg,thread=multi \
-      -smp 8 -m 2G \
+      -cpu cortex-a55 \
+      -smp 8 \
+      -m 2G \
       -kernel "$KERNEL" \
-      -append "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x2016000 root=/dev/mmcblk0p12 rootfstype=ext4 rw rootwait blkdevparts=$PARTS" \
-      -drive file="$EMMC",if=sd,format=raw,snapshot=on \
-      -serial mon:stdio -display none -no-reboot
+      -append "$CMDLINE" \
+      -drive "file=$EMMC,if=sd,format=raw,snapshot=on" \
+      -chardev stdio,id=serial0,signal=off \
+      -serial chardev:serial0 \
+      -display none \
+      -monitor none \
+      -no-reboot
 
 ``snapshot=on`` keeps the reusable eMMC image unchanged.  Remove it only when
 persistent guest writes are intentional.
@@ -69,11 +98,11 @@ Known limitations
 
 * Only QEMU direct kernel boot is implemented.  BootROM, SPL, U-Boot, Arm
   Trusted Firmware and OP-TEE images are not loaded or executed.
-* The AXERA DWMAC 4.10a Ethernet controllers are not modeled, so this machine
-  currently has no network interface.
 * NPU, VDSP, RISC-V auxiliary cores, video, ISP, display, audio, USB, PCIe,
-  SATA, GPIO and the full clock, reset and power-management trees are not
-  modeled.
+  SATA and the full clock, reset and power-management trees are not modeled.
+  GPIO behavior is limited to the DesignWare APB subset needed for PHY reset.
+* DWMAC TSO, PTP/TSN, multi-queue performance fidelity and analog PHY timing
+  are not modeled.
 * The UART extension window implements the probe-time subset.  The AXERA
   driver can report a harmless capability mismatch because the UART component
   version register intentionally selects its compatible fallback path.
@@ -87,8 +116,27 @@ Running tests
 -------------
 
 The board qtest covers CPU topology, RAM, GICv2, UART MMIO and IRQ behavior,
-SDHCI vendor registers, reset, block I/O, eMMC IRQ routing, 64-bit ADMA
-capability and Auto CMD23::
+SDHCI vendor registers, reset, block I/O, eMMC IRQ routing, 64-bit ADMA,
+Auto CMD23, DWMAC synthesis registers, MDIO, GPIO and reset glue, hardware
+spinlocks, 40-bit DMA and Ethernet IRQ routing::
 
   $ meson test -C build qemu:qtest-aarch64/ax650x-pyramid-test \
       --print-errorlogs
+
+The Ubuntu quick-boot functional test downloads a pinned kernel and compressed
+qcow2 image from the `AX650X Ubuntu 22.04 QEMU assets release
+<https://github.com/processmission/qemu/releases/tag/ax650x-ubuntu-22.04-qemu1>`__.
+The functional asset layer verifies both SHA-256 digests.  The test uses
+``snapshot=on`` and waits for DWMAC probe, the eMMC partition map, the mounted
+root filesystem, Ubuntu readiness markers and the serial login prompt:
+
+.. code-block:: shell
+
+  $ meson test -C build \
+        --suite thorough \
+        func-aarch64-ax650x_ubuntu \
+        --print-errorlogs
+
+The test is registered in the ``thorough`` functional suite because the
+kernel and Ubuntu image are external assets.  A cached copy is reused only
+after its declared content hash has been checked.
