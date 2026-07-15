@@ -8,7 +8,7 @@
  * (dwmac4.h / dwmac4_dma.h / dwmac4_descs.h in the Linux stmmac driver):
  *
  *   - MAC register bank 0x000..0x3ff (MAC_CONFIG, PACKET_FILTER, ADDR slots,
- *     MDIO, HW_FEATURE0..3, MAC_VERSION @ 0x110 = SNPSVER 0x51).
+ *     MDIO, HW_FEATURE0..3, and board-selectable MAC_VERSION @ 0x110.
  *   - DMA register bank 0x1000..0x11ff (DMA_BUS_MODE, per-channel block at
  *     0x1100 + chan*0x80: TX/RX_CONTROL, TX/RX_BASE_ADDR, RING_LEN,
  *     INTR_ENA, CHAN_STATUS as W1C with 4.10-layout NIS/AIS).
@@ -30,6 +30,7 @@
 #include "net/checksum.h"
 #include "net/eth.h"
 #include "net/net.h"
+#include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -98,6 +99,7 @@ REG32(DMA_CHAN_TX_CONTROL,        0x04)
     FIELD(DMA_CHAN_TX_CONTROL, ST, 0, 1)
 REG32(DMA_CHAN_RX_CONTROL,        0x08)
     FIELD(DMA_CHAN_RX_CONTROL, SR, 0, 1)
+    FIELD(DMA_CHAN_RX_CONTROL, RBSZ, 1, 14)
 REG32(DMA_CHAN_TX_BASE_ADDR_HI,   0x10)
 REG32(DMA_CHAN_TX_BASE_ADDR,      0x14)
 REG32(DMA_CHAN_RX_BASE_ADDR_HI,   0x18)
@@ -168,6 +170,7 @@ REG32(DMA_CHAN_STATUS,            0x60)
 #define DESC_OWN                  BIT(31)
 #define TX_DESC3_FIRST            BIT(29)
 #define TX_DESC3_LAST             BIT(28)
+#define TX_DESC3_CIC_MASK         0x00030000u
 #define TX_DESC2_IOC              BIT(31)
 #define TX_DESC2_B1SZ_MASK        0x00003fffu   /* BUFFER1_SIZE[13:0] */
 #define RX_DESC3_FIRST            BIT(29)
@@ -258,23 +261,26 @@ static void dwmac4_update_irq(DWMAC4State *s)
 
 static void dwmac4_try_send(DWMAC4State *s, int chan)
 {
+    g_autoptr(GByteArray) frame = NULL;
+    bool frame_checksum = false;
     hwaddr base_addr = ((uint64_t)s->dma_regs[dwmac4_chan_reg(chan,
                           A_DMA_CHAN_TX_BASE_ADDR_HI) / 4] << 32) |
                        s->dma_regs[dwmac4_chan_reg(chan,
                           A_DMA_CHAN_TX_BASE_ADDR) / 4];
     uint32_t ring_len = s->dma_regs[dwmac4_chan_reg(chan,
                           A_DMA_CHAN_TX_RING_LEN) / 4];
-    if (!base_addr || !ring_len) {
+    uint64_t ring_entries = (uint64_t)ring_len + 1;
+    if (!base_addr) {
         return;
     }
 
     NetClientState *nc = qemu_get_queue(s->nic);
-    uint32_t cur = s->tx_desc_cur[chan];
+    hwaddr cur = s->tx_desc_cur[chan];
     if (!cur) {
         cur = base_addr;
     }
 
-    for (uint32_t i = 0; i < ring_len; i++) {
+    for (uint64_t i = 0; i < ring_entries; i++) {
         uint32_t d[4];
         if (dwmac4_read_desc(cur, d)) {
             return;
@@ -282,12 +288,13 @@ static void dwmac4_try_send(DWMAC4State *s, int chan)
 
         /* OWN=1 -> MAC owns, can TX. Otherwise ring drained for now. */
         if (!(d[3] & DESC_OWN)) {
-            return;
+            break;
         }
 
         bool first = d[3] & TX_DESC3_FIRST;
         bool last = d[3] & TX_DESC3_LAST;
         bool ioc = d[2] & TX_DESC2_IOC;
+        bool checksum_insertion = d[3] & TX_DESC3_CIC_MASK;
         uint32_t b1sz = d[2] & TX_DESC2_B1SZ_MASK;
         /*
          * dwmac4 TDES0 holds buffer-1 address (low 32). In extended 64-bit
@@ -299,22 +306,37 @@ static void dwmac4_try_send(DWMAC4State *s, int chan)
          */
         hwaddr b1addr = ((uint64_t)d[1] << 32) | d[0];
 
-        if (first && last) {
-            /* Common case: single-buffer frame in one descriptor. */
-            g_autofree uint8_t *buf = NULL;
-            if (b1sz && b1sz <= 65536) {
-                buf = g_malloc(b1sz);
-                if (dma_memory_read(&address_space_memory, b1addr, buf, b1sz,
-                                    MEMTXATTRS_UNSPECIFIED)) {
-                    qemu_log_mask(LOG_GUEST_ERROR,
-                                  "dwmac4: TX buffer read failed @ 0x%"
-                                  HWADDR_PRIx "\n", b1addr);
-                    g_free(buf);
-                    return;
-                }
-                net_checksum_calculate(buf, b1sz, 0);
-                qemu_send_packet(nc, buf, b1sz);
+        if (first) {
+            g_clear_pointer(&frame, g_byte_array_unref);
+            frame = g_byte_array_new();
+            frame_checksum = checksum_insertion;
+        }
+
+        if (frame && b1sz) {
+            size_t offset = frame->len;
+
+            if (offset + b1sz > 65536) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "dwmac4: TX frame exceeds 64 KiB\n");
+                return;
             }
+            g_byte_array_set_size(frame, offset + b1sz);
+            if (dma_memory_read(&address_space_memory, b1addr,
+                                frame->data + offset, b1sz,
+                                MEMTXATTRS_UNSPECIFIED)) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "dwmac4: TX buffer read failed @ 0x%"
+                              HWADDR_PRIx "\n", b1addr);
+                return;
+            }
+        }
+
+        if (last && frame) {
+            if (frame_checksum) {
+                net_checksum_calculate(frame->data, frame->len, CSUM_ALL);
+            }
+            qemu_send_packet(nc, frame->data, frame->len);
+            g_clear_pointer(&frame, g_byte_array_unref);
         }
 
         /* Write-back: clear OWN. Error summary (bit15) left clear. */
@@ -324,7 +346,7 @@ static void dwmac4_try_send(DWMAC4State *s, int chan)
         }
 
         cur += 16;
-        if (cur >= base_addr + (uint64_t)ring_len * 16) {
+        if (cur >= base_addr + ring_entries * 16) {
             cur = base_addr;
         }
 
@@ -335,10 +357,6 @@ static void dwmac4_try_send(DWMAC4State *s, int chan)
             dwmac4_update_irq(s);
         }
 
-        if (last) {
-            /* Stop after a complete frame so the guest can observe IRQ. */
-            break;
-        }
     }
 
     s->tx_desc_cur[chan] = cur;
@@ -379,17 +397,18 @@ static ssize_t dwmac4_receive(NetClientState *nc, const uint8_t *buf, size_t len
                           A_DMA_CHAN_RX_BASE_ADDR) / 4];
     uint32_t ring_len = s->dma_regs[dwmac4_chan_reg(chan,
                           A_DMA_CHAN_RX_RING_LEN) / 4];
-    if (!base_addr || !ring_len) {
+    uint64_t ring_entries = (uint64_t)ring_len + 1;
+    if (!base_addr) {
         return len;   /* no ring posted yet - silently drop */
     }
 
-    uint32_t cur = s->rx_desc_cur[chan];
+    hwaddr cur = s->rx_desc_cur[chan];
     if (!cur) {
         cur = base_addr;
     }
 
     /* Find the next descriptor the MAC owns. */
-    for (uint32_t i = 0; i < ring_len; i++) {
+    for (uint64_t i = 0; i < ring_entries; i++) {
         uint32_t d[4];
         if (dwmac4_read_desc(cur, d)) {
             return len;
@@ -400,8 +419,10 @@ static ssize_t dwmac4_receive(NetClientState *nc, const uint8_t *buf, size_t len
         }
 
         hwaddr b1addr = ((uint64_t)d[1] << 32) | d[0];
-        /* RDES2[14:0] is BUFFER1_SIZE; we cap the write to that. */
-        uint32_t b1sz = d[2] & 0x3fff;
+        /* DWMAC4 keeps the receive buffer size in DMA_CHAN_RX_CONTROL. */
+        uint32_t rxctl = s->dma_regs[dwmac4_chan_reg(
+            chan, A_DMA_CHAN_RX_CONTROL) / 4];
+        uint32_t b1sz = FIELD_EX32(rxctl, DMA_CHAN_RX_CONTROL, RBSZ);
         uint32_t to_write = MIN((uint32_t)len, b1sz);
 
         if (to_write && dma_memory_write(&address_space_memory, b1addr, buf,
@@ -418,14 +439,20 @@ static ssize_t dwmac4_receive(NetClientState *nc, const uint8_t *buf, size_t len
          */
         d[3] &= ~DESC_OWN;
         d[3] &= ~RX_DESC3_PKT_SIZE_MASK;
-        d[3] |= RX_DESC3_FIRST | RX_DESC3_LAST | ((uint32_t)len &
-                                                  RX_DESC3_PKT_SIZE_MASK);
+        /*
+         * GMAC4 reports a packet size that includes the four-byte Ethernet
+         * FCS, although the DMA buffer does not contain the FCS.  stmmac
+         * accounts for that contract by subtracting ETH_FCS_LEN before it
+         * hands the skb to the network stack.
+         */
+        d[3] |= RX_DESC3_FIRST | RX_DESC3_LAST |
+                (((uint32_t)len + ETH_FCS_LEN) & RX_DESC3_PKT_SIZE_MASK);
         if (dwmac4_write_desc(cur, d)) {
             return len;
         }
 
         cur += 16;
-        if (cur >= base_addr + (uint64_t)ring_len * 16) {
+        if (cur >= base_addr + ring_entries * 16) {
             cur = base_addr;
         }
         s->rx_desc_cur[chan] = cur;
@@ -485,11 +512,7 @@ static void dwmac4_mdio(DWMAC4State *s, uint32_t v)
         s->mac_regs[R_GMAC_MDIO_ADDR] = v;
         return;
     }
-    if (pa > 1) {
-        /*
-         * The ROC-RK3588S-PC DT uses PHY address 1.  Keep address 0 alive
-         * for the simple QEMU DT and report all other addresses as idle.
-         */
+    if (pa != s->phy_addr) {
         if (!write) {
             s->mac_regs[R_GMAC_MDIO_DATA] = 0xffff;
         }
@@ -499,9 +522,20 @@ static void dwmac4_mdio(DWMAC4State *s, uint32_t v)
 
     if (write) {
         data = s->mac_regs[R_GMAC_MDIO_DATA] & 0xffff;
-        s->phy_regs[gr] = data;
+        if (gr == 31) {
+            s->phy_page = data;
+        } else if (s->phy_page == 0) {
+            /* BMCR reset and autoneg restart are self-clearing commands. */
+            s->phy_regs[gr] = gr == 0 ? data & ~(BIT(15) | BIT(9)) : data;
+        }
     } else {
-        s->mac_regs[R_GMAC_MDIO_DATA] = s->phy_regs[gr];
+        if (gr == 31) {
+            s->mac_regs[R_GMAC_MDIO_DATA] = s->phy_page;
+        } else {
+            /* Vendor pages are accepted as RAZ/WI; page 0 is clause-22. */
+            s->mac_regs[R_GMAC_MDIO_DATA] =
+                s->phy_page == 0 ? s->phy_regs[gr] : 0;
+        }
     }
 
     /* BUSY is self-clearing in hardware; model that. */
@@ -698,7 +732,7 @@ static const RegisterAccessInfo mac_regs_info[] = {
       .ro = MAKE_64BIT_MASK(0, 32),
     },
     { .name = "GMAC4_VERSION",             .addr = A_GMAC4_VERSION,
-      .reset = DWMAC4_VERSION_RESET,
+      .reset = DWMAC4_DEFAULT_SNPS_VERSION,
       .ro = MAKE_64BIT_MASK(0, 32),
     },
     { .name = "GMAC_DEBUG",                .addr = A_GMAC_DEBUG,
@@ -710,7 +744,8 @@ static const RegisterAccessInfo mac_regs_info[] = {
      * dwmac4.h: RXCOESEL=16, TXCOSEL=14, TSSEL=12, MMCSEL=8, MGKSEL=7.
      */
     { .name = "GMAC_HW_FEATURE0",          .addr = A_GMAC_HW_FEATURE0,
-      .reset = BIT(16) | BIT(14) | BIT(12) | BIT(8) | BIT(7),
+      .reset = BIT(16) | BIT(14) | BIT(12) | BIT(8) | BIT(7) | BIT(6) |
+               BIT(5) | BIT(1) | BIT(0),
       .ro = MAKE_64BIT_MASK(0, 32),
     },
     { .name = "GMAC_HW_FEATURE1",          .addr = A_GMAC_HW_FEATURE1,
@@ -954,6 +989,17 @@ static void dwmac4_reset(DeviceState *dev)
         s->rx_desc_cur[chan] = 0;
     }
     memcpy(s->phy_regs, phy_reg_init, sizeof(s->phy_regs));
+    s->phy_page = 0;
+    s->phy_regs[2] = s->phy_id1;
+    s->phy_regs[3] = s->phy_id2;
+
+    s->mac_regs[R_GMAC4_VERSION] =
+        ((uint32_t)s->user_version << 8) | s->snps_version;
+    s->mac_regs[R_GMAC_HW_FEATURE1] =
+        ((s->dma_width == 40 ? 1 : s->dma_width == 48 ? 2 : 0) << 14) |
+        ((ctz32(s->tx_fifo_size) - 7) << 6) |
+        (ctz32(s->rx_fifo_size) - 7) |
+        (s->tso ? BIT(18) : 0);
 
     /* Reflect the configured MAC address into MAC_ADDR_HIGH0/LOW0. */
     s->mac_regs[R_GMAC_ADDR_HIGH0] = 0x80000000 |
@@ -969,6 +1015,27 @@ static void dwmac4_realize(DeviceState *dev, Error **errp)
 {
     DWMAC4State *s = DWMAC4(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (s->dma_width != 32 && s->dma_width != 40 && s->dma_width != 48) {
+        error_setg(errp, "dwmac4: dma-width must be 32, 40, or 48");
+        return;
+    }
+    if (!is_power_of_2(s->tx_fifo_size) || s->tx_fifo_size < 128 ||
+        s->tx_fifo_size > 4 * MiB) {
+        error_setg(errp, "dwmac4: tx-fifo-size must be a power of two "
+                   "between 128 bytes and 4 MiB");
+        return;
+    }
+    if (!is_power_of_2(s->rx_fifo_size) || s->rx_fifo_size < 128 ||
+        s->rx_fifo_size > 4 * MiB) {
+        error_setg(errp, "dwmac4: rx-fifo-size must be a power of two "
+                   "between 128 bytes and 4 MiB");
+        return;
+    }
+    if (s->phy_addr > 31) {
+        error_setg(errp, "dwmac4: phy-addr must be in the range 0..31");
+        return;
+    }
 
     /*
      * Two register blocks, each giving us a MemoryRegion + RegisterInfo
@@ -1006,20 +1073,34 @@ static void dwmac4_unrealize(DeviceState *dev)
 
 static const VMStateDescription vmstate_dwmac4 = {
     .name = TYPE_DWMAC4,
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(mac_regs, DWMAC4State, DWMAC4_MAC_NR_REGS),
         VMSTATE_UINT32_ARRAY(dma_regs, DWMAC4State, DWMAC4_DMA_NR_REGS),
-        VMSTATE_UINT32_ARRAY(tx_desc_cur, DWMAC4State, DWMAC4_NR_CHANNELS),
-        VMSTATE_UINT32_ARRAY(rx_desc_cur, DWMAC4State, DWMAC4_NR_CHANNELS),
+        VMSTATE_UINT64_ARRAY(tx_desc_cur, DWMAC4State, DWMAC4_NR_CHANNELS),
+        VMSTATE_UINT64_ARRAY(rx_desc_cur, DWMAC4State, DWMAC4_NR_CHANNELS),
         VMSTATE_UINT16_ARRAY(phy_regs, DWMAC4State, 32),
+        VMSTATE_UINT16(phy_page, DWMAC4State),
         VMSTATE_END_OF_LIST(),
     },
 };
 
 static const Property dwmac4_properties[] = {
     DEFINE_NIC_PROPERTIES(DWMAC4State, conf),
+    DEFINE_PROP_UINT8("snps-version", DWMAC4State, snps_version,
+                      DWMAC4_DEFAULT_SNPS_VERSION),
+    DEFINE_PROP_UINT8("user-version", DWMAC4State, user_version, 0),
+    DEFINE_PROP_UINT8("dma-width", DWMAC4State, dma_width,
+                      DWMAC4_DEFAULT_DMA_WIDTH),
+    DEFINE_PROP_UINT8("phy-addr", DWMAC4State, phy_addr, 1),
+    DEFINE_PROP_UINT16("phy-id1", DWMAC4State, phy_id1, 0x001c),
+    DEFINE_PROP_UINT16("phy-id2", DWMAC4State, phy_id2, 0xc916),
+    DEFINE_PROP_UINT32("tx-fifo-size", DWMAC4State, tx_fifo_size,
+                       DWMAC4_DEFAULT_FIFO_SIZE),
+    DEFINE_PROP_UINT32("rx-fifo-size", DWMAC4State, rx_fifo_size,
+                       DWMAC4_DEFAULT_FIFO_SIZE),
+    DEFINE_PROP_BOOL("tso", DWMAC4State, tso, false),
 };
 
 static void dwmac4_class_init(ObjectClass *klass, const void *data)
