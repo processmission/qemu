@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 """
-Boot the pinned SpacemiT K3 SDK Linux image on k3-pico-itx.
+Boot pinned SpacemiT K3 SDK Linux images on k3-pico-itx.
 """
 
 from qemu_test import Asset, QemuSystemTest
@@ -13,7 +13,7 @@ from qemu_test import wait_for_console_pattern
 
 
 class SpacemitK3Test(QemuSystemTest):
-    """Test the Linux-first K3 Pico-ITX boot path."""
+    """Test direct and U-Boot K3 Pico-ITX Linux boot paths."""
 
     RELEASE_URL = (
         'https://github.com/zevorn/spacemit-k3-qemu-images/releases/'
@@ -32,6 +32,15 @@ class SpacemitK3Test(QemuSystemTest):
     ASSET_DTB = Asset(
         RELEASE_URL + 'k3-pico-itx-qemu.dtb',
         '35e2fc80a64e41963d091cb23b142ed6dfc1e56f9e808061c6e241d7da4bf56e')
+    ASSET_UBOOT = Asset(
+        RELEASE_URL + 'u-boot.bin',
+        '02a86461f8ea30e9bae42b6c420cd9897cdc6b29b334a00b7919cb67995bd7b5')
+    ASSET_UBOOT_DTB = Asset(
+        RELEASE_URL + 'k3-pico-itx-qemu-uboot.dtb',
+        'd695bac441b5a5a2814fc2ae0c5e735c11a37379e36ec59cedd16cb9f6bc3486')
+    ASSET_SD_IMAGE = Asset(
+        RELEASE_URL + 'k3-qemu-sd.raw.xz',
+        'b00d9abd9c65e25346c2f76b304af0785755b2fcf49ea7faf6ec877228f32e65')
 
     def _wait_for_linux_boot(self):
         panic = 'Kernel panic - not syncing'
@@ -79,6 +88,29 @@ class SpacemitK3Test(QemuSystemTest):
                          '-no-reboot')
         self.vm.set_console()
         self.vm.launch()
+        self._wait_for_linux_boot()
+
+    def test_uboot_sd_boot(self):
+        self.set_machine('k3-pico-itx')
+
+        firmware_path = self.ASSET_FIRMWARE.fetch()
+        uboot_path = self.ASSET_UBOOT.fetch()
+        dtb_path = self.ASSET_UBOOT_DTB.fetch()
+        sd_path = self.uncompress(self.ASSET_SD_IMAGE)
+
+        self.vm.add_args('-bios', firmware_path,
+                         '-kernel', uboot_path,
+                         '-dtb', dtb_path,
+                         '-drive', (f'file={sd_path},if=sd,format=raw,'
+                                    'snapshot=on'),
+                         '-no-reboot')
+        self.vm.set_console()
+        self.vm.launch()
+
+        panic = 'Kernel panic - not syncing'
+        wait_for_console_pattern(self, 'U-Boot 2022.10', panic)
+        wait_for_console_pattern(self,
+                                 'K3-QEMU: Starting kernel from SD', panic)
         self._wait_for_linux_boot()
 
 
