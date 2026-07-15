@@ -87,6 +87,10 @@ two-dimensional 1x1 direct convolution with stride one and no padding, and
 3x3 direct convolution with stride one or two and one-cell top/left padding.
 The stride-one profile also covers the hardware-observed asymmetric case with
 left/bottom padding but no top/right padding.
+INT8 depthwise convolution is executed when CNA and DPU select convolution
+mode 3 and CORE enables depthwise operation.  Compact weights are consumed in
+kernel-row, kernel-column, channel order, and each output channel multiplies
+only the corresponding input channel.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
@@ -201,8 +205,10 @@ The INT8 QD BRDMA path additionally requires the board-validated external
 CPEND operand selection (``BS_OW_CFG=0x125`` and ``BS_OW_OP=0``); other CPEND
 operand and bypass modes are reported as unsupported until their semantics
 are modeled.  Hardware-level shape checks use the documented register
-relationships.  The current aligned
-INT32 executor uses a four-channel storage atom; other DPU output layouts
+relationships.  The direct INT32 executor uses a four-channel storage atom.
+The depthwise INT32 path derives its channel-plane width and rows per surface
+from the DPU cube channels, valid channels, output atom, and ``SURFACE_ADD``;
+inactive lanes in each physical plane are cleared.  Other DPU output layouts
 remain under implementation.  Partial valid/storage and valid/cube
 submissions are decoded using their register-provided packed layout; the
 partial-channel qtest verifies that valid lanes execute while padding lanes
