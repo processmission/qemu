@@ -1,6 +1,9 @@
 config PL061
     bool
 
+config DW_APB_GPIO
+    bool
+
 config GPIO_KEY
     bool
 
