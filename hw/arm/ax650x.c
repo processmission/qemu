@@ -51,6 +51,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(AX650XPyramidState, AX650X_PYRAMID_MACHINE)
 
 #define AX650X_UART0_BASE            0x02016000
 #define AX650X_UART0_SIZE            0x400
+#define AX650X_UART_STD_SIZE         0x20
+#define AX650X_UART_USR              0x7c
+#define AX650X_UART_UCV              0xf8
+#define AX650X_UART_USR_TFNF         BIT(1)
+#define AX650X_UART_USR_TFE          BIT(2)
 #define AX650X_UART0_IRQ             135
 #define AX650X_UART_CLOCK_HZ         200000000
 #define AX650X_UART_BAUDBASE         (AX650X_UART_CLOCK_HZ / 16)
@@ -71,9 +76,49 @@ struct AX650XPyramidState {
     ARMCPU *cpus[AX650X_NUM_CPUS];
     DeviceState *gic;
     MemoryRegion gic_cpu_alias;
+    MemoryRegion uart0_ext;
     struct arm_boot_info bootinfo;
     void *fdt;
     int fdt_size;
+};
+
+static uint64_t ax650x_uart_ext_read(void *opaque, hwaddr offset,
+                                     unsigned int size)
+{
+    hwaddr reg = AX650X_UART_STD_SIZE + offset;
+
+    switch (reg) {
+    case AX650X_UART_USR:
+        return AX650X_UART_USR_TFNF | AX650X_UART_USR_TFE;
+    case AX650X_UART_UCV:
+        /*
+         * The hardware component revision is not documented.  Zero selects
+         * the AXERA driver's defined fallback for a UART without DesignWare
+         * additional features.
+         */
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static void ax650x_uart_ext_write(void *opaque, hwaddr offset,
+                                  uint64_t value, unsigned int size)
+{
+}
+
+static const MemoryRegionOps ax650x_uart_ext_ops = {
+    .read = ax650x_uart_ext_read,
+    .write = ax650x_uart_ext_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
 };
 
 static uint64_t ax650x_cpu_mpidr(unsigned int cpu)
@@ -449,6 +494,12 @@ static void ax650x_pyramid_init(MachineState *machine)
     serial_mm_init(sysmem, AX650X_UART0_BASE, 2,
                    qdev_get_gpio_in(s->gic, AX650X_UART0_IRQ),
                    AX650X_UART_BAUDBASE, serial_hd(0), DEVICE_LITTLE_ENDIAN);
+    memory_region_init_io(&s->uart0_ext, OBJECT(s), &ax650x_uart_ext_ops, s,
+                          "ax650x.uart0-ext",
+                          AX650X_UART0_SIZE - AX650X_UART_STD_SIZE);
+    memory_region_add_subregion(sysmem,
+                                AX650X_UART0_BASE + AX650X_UART_STD_SIZE,
+                                &s->uart0_ext);
 
     ax650x_create_fdt(s);
 
