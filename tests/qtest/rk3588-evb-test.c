@@ -402,6 +402,15 @@ static QTestState *rk3588_qtest_start_rknpu_matmul(void)
                       "-smp 1 -m 512M");
 }
 
+static QTestState *rk3588_qtest_start_rknpu_matmul_trace(
+    const char *trace, const char *event)
+{
+    return qtest_initf("-machine " RK3588_EVB_MACHINE
+                       ",rknpu=on,rknpu-functional=on "
+                       "-smp 1 -m 512M -trace enable=%s,file=%s",
+                       event, trace);
+}
+
 static QTestState *rk3588_qtest_start_rknpu_matmul_incoming(void)
 {
     return qtest_init("-machine " RK3588_EVB_MACHINE
@@ -4724,6 +4733,117 @@ static void test_rk3588_rknpu_matmul_partial_channels_unmodeled(void)
     qtest_quit(qts);
 }
 
+static void test_rk3588_rknpu_pipeline_profile_boundaries(void)
+{
+    static const struct {
+        struct {
+            uint32_t target;
+            uint32_t reg;
+            uint32_t value;
+        } patches[2];
+        unsigned int patch_count;
+        const char *reason;
+    } cases[] = {
+        { { {0x0201, 0x1020, (1 << 16) | 65} }, 1, "spatial-range" },
+        { { {0x0201, 0x1024, ((160 - 1) << 16) | 160} }, 1,
+          "input-channel-range" },
+        { { {0x0201, 0x1038, (1 << 24) | (1 << 16) | 128},
+            {0x1001, 0x403c, ((128 - 1) << 16) | (128 - 1)} }, 2,
+          "output-channel-range" },
+        { { {0x0801, 0x3010, 2} }, 1, "depthwise" },
+        { { {0x1001, 0x4010, 0xe0} }, 1, "output-precision" },
+    };
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
+        g_autoptr(GError) error = NULL;
+        g_autofree char *trace = NULL;
+        g_autofree char *contents = NULL;
+        g_autofree char *expected = NULL;
+        uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+        uint8_t output[RK3588_RKNN_MATMUL_M *
+                       RK3588_RKNN_MATMUL_N * 4];
+        QTestState *qts;
+        gsize length;
+        int fd;
+
+        fd = g_file_open_tmp("rk3588-rknn-profile-XXXXXX", &trace, &error);
+        g_assert_no_error(error);
+        g_assert_cmpint(fd, >=, 0);
+        close(fd);
+        qts = rk3588_qtest_start_rknpu_matmul_trace(
+            trace, "rockchip_rknn_pipeline_profile");
+
+        rk3588_rknn_prepare_matmul(qts, true, 0x6e);
+        rk3588_rknn_make_matmul_regcmd(commands, true);
+        for (unsigned int patch = 0; patch < cases[i].patch_count; patch++) {
+            size_t index = rk3588_rknn_find_regcmd(
+                commands, ARRAY_SIZE(commands),
+                cases[i].patches[patch].target,
+                cases[i].patches[patch].reg);
+
+            commands[index] = rk3588_rknn_regcmd(
+                cases[i].patches[patch].target,
+                cases[i].patches[patch].reg,
+                cases[i].patches[patch].value);
+        }
+        qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                       sizeof(commands));
+
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        rk3588_rknn_read_matmul_output(qts, output, sizeof(output));
+        for (unsigned int j = 0; j < ARRAY_SIZE(output); j++) {
+            g_assert_cmphex(output[j], ==, 0x6e);
+        }
+        g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                    RKNN_PC_TASK_STATUS), ==,
+                        RKNN_TASK_STATUS_SUCCESS);
+        qtest_quit(qts);
+
+        g_assert_true(g_file_get_contents(trace, &contents, &length, &error));
+        g_assert_no_error(error);
+        expected = g_strdup_printf("accepted=0 reason=%s", cases[i].reason);
+        g_assert_nonnull(strstr(contents, expected));
+        unlink(trace);
+    }
+}
+
+static void test_rk3588_rknpu_pipeline_profile_trace(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *trace = NULL;
+    g_autofree char *contents = NULL;
+    uint64_t commands[RK3588_RKNN_MATMUL_COMMANDS];
+    QTestState *qts;
+    gsize length;
+    size_t clip;
+    int fd;
+
+    fd = g_file_open_tmp("rk3588-rknn-profile-XXXXXX", &trace, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+
+    qts = rk3588_qtest_start_rknpu_matmul_trace(
+        trace, "rockchip_rknn_pipeline_profile");
+    rk3588_rknn_prepare_matmul(qts, true, 0x6e);
+    rk3588_rknn_make_matmul_regcmd(commands, true);
+    clip = rk3588_rknn_find_regcmd(commands, ARRAY_SIZE(commands),
+                                   0x0801, 0x301c);
+    commands[clip] = rk3588_rknn_regcmd(0x0801, 0x3010, 0);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR, commands,
+                   sizeof(commands));
+    rk3588_rknn_start_matmul(qts);
+    qtest_quit(qts);
+
+    g_assert_true(g_file_get_contents(trace, &contents, &length, &error));
+    g_assert_no_error(error);
+    g_assert_nonnull(strstr(contents,
+        "decoded=0 accepted=0 reason=decode depthwise=0 "
+        "output_precision=0"));
+    unlink(trace);
+}
+
 static void test_rk3588_rknpu_pipeline_semantic_regcmd(void)
 {
     uint64_t original[RK3588_RKNN_MATMUL_COMMANDS];
@@ -7026,6 +7146,10 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_matmul_iommu_access);
     qtest_add_func("/rk3588/rknpu-matmul-functional-shape",
                    test_rk3588_rknpu_matmul_functional_shape);
+    qtest_add_func("/rk3588/rknpu-pipeline-profile-boundaries",
+                   test_rk3588_rknpu_pipeline_profile_boundaries);
+    qtest_add_func("/rk3588/rknpu-pipeline-profile-trace",
+                   test_rk3588_rknpu_pipeline_profile_trace);
     qtest_add_func("/rk3588/rknpu-conv1x1-spatial-hardware-shape",
                    test_rk3588_rknpu_conv1x1_spatial_hardware_shape);
     qtest_add_func("/rk3588/rknpu-spatial-rdma-ew-add",
