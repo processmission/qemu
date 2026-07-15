@@ -162,7 +162,9 @@ static void ax650x_sdhci_realize(DeviceState *dev, Error **errp)
     qdev_prop_set_uint8(DEVICE(&s->sdhci), "sd-spec-version", 3);
     qdev_prop_set_uint8(DEVICE(&s->sdhci), "uhs", UHS_I);
     qdev_prop_set_uint64(DEVICE(&s->sdhci), "capareg",
-                         SDHC_CAPAB_REG_DEFAULT | BIT_ULL(18));
+                         SDHC_CAPAB_REG_DEFAULT |
+                         R_SDHC_CAPAB_EMBEDDED_8BIT_MASK |
+                         R_SDHC_CAPAB_BUS64BIT_MASK);
     if (!sysbus_realize(sdhci_sbd, errp)) {
         return;
     }

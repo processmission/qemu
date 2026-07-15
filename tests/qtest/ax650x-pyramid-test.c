@@ -185,6 +185,7 @@ static void test_emmc_registers_and_reset(void)
                     AX650X_SDHCI_VENDOR_PTR_VALUE);
     capabilities = qtest_readq(qts, base + SDHC_CAPAB);
     g_assert_cmphex(capabilities & BIT_ULL(18), ==, BIT_ULL(18));
+    g_assert_cmphex(capabilities & BIT_ULL(28), ==, BIT_ULL(28));
     g_assert_cmphex(qtest_readw(qts, base + SDHC_HCVER), ==,
                     SDHC_AX650X_HCVER);
 
