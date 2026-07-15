@@ -9,13 +9,14 @@ for new machine requests or bug reports.
 
 ## Machine Models
 
-| arch | machine | direct booting | firmware booting | documentation |
-| --- | --- | --- | --- | --- |
-| RISC-V | `k230-canmv` | ✅ | ✅ | [docs/system/riscv/k230-canmv.rst](docs/system/riscv/k230-canmv.rst) |
-| RISC-V | `milkv-duo` | ✅ | ✅ | [docs/system/riscv/milkv-duo.rst](docs/system/riscv/milkv-duo.rst) |
-| ARM | `phytium-pi` | ✅ | ✅ | [docs/system/arm/phytium-pi.rst](docs/system/arm/phytium-pi.rst) |
-| ARM | `rk3588-evb` | ✅ | ✅ | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
-| ARM | `rk3588s-roc-pc` | ✅ | ✅ | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
+| arch | machine | direct booting | firmware booting | source | documentation |
+| --- | --- | --- | --- | --- | --- |
+| RISC-V | `k230-canmv` | ✅ | ✅ | Self-maintained downstream | [docs/system/riscv/k230-canmv.rst](docs/system/riscv/k230-canmv.rst) |
+| RISC-V | `milkv-duo` | ✅ | ✅ | Self-maintained downstream | [docs/system/riscv/milkv-duo.rst](docs/system/riscv/milkv-duo.rst) |
+| RISC-V | `riscv-server-ref` | ✅ | ✅ | Upstream qemu-devel patch series + local downstream fixups | [docs/system/riscv/riscv-server-ref.rst](docs/system/riscv/riscv-server-ref.rst) |
+| ARM | `phytium-pi` | ✅ | ✅ | Self-maintained downstream | [docs/system/arm/phytium-pi.rst](docs/system/arm/phytium-pi.rst) |
+| ARM | `rk3588-evb` | ✅ | ✅ | Self-maintained downstream | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
+| ARM | `rk3588s-roc-pc` | ✅ | ✅ | Self-maintained downstream | [docs/system/arm/rk3588.rst](docs/system/arm/rk3588.rst) |
 
 ## Development Workflow
 
