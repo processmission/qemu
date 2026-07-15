@@ -43,3 +43,7 @@ config K230_SDHCI
 config SPACEMIT_K3_SDHCI
     bool
     select SDHCI
+
+config AX650X_SDHCI
+    bool
+    select SDHCI
