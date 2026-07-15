@@ -10,6 +10,7 @@
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "hw/arm/ax650x-dwmac.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/bsa.h"
 #include "hw/arm/fdt.h"
@@ -398,6 +399,7 @@ static void ax650x_create_fdt(AX650XPyramidState *s)
     qemu_fdt_setprop_cell(s->fdt, "/soc", "#address-cells", 2);
     qemu_fdt_setprop_cell(s->fdt, "/soc", "#size-cells", 2);
     qemu_fdt_setprop(s->fdt, "/soc", "ranges", NULL, 0);
+    ax650x_dwmac_create_fdt(s->fdt);
 
     qemu_fdt_add_subnode(s->fdt, uart_path);
     qemu_fdt_setprop_string(s->fdt, uart_path, "compatible",
@@ -490,6 +492,7 @@ static void ax650x_pyramid_init(MachineState *machine)
     ax650x_create_cpus(s);
     ax650x_create_gic(s);
     ax650x_create_emmc(s);
+    ax650x_dwmac_create(s->gic);
 
     serial_mm_init(sysmem, AX650X_UART0_BASE, 2,
                    qdev_get_gpio_in(s->gic, AX650X_UART0_IRQ),
