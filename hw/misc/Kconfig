@@ -258,3 +258,9 @@ config XLNX_ZYNQ_DDRC
     bool
 
 source macio/Kconfig
+# AX650X DWMAC clock/reset/interface glue
+config AX650X_DWMAC_GLUE
+    bool
+
+config AX650X_HWSPINLOCK
+    bool
