@@ -888,6 +888,22 @@ F: include/hw/misc/arm_integrator_debug.h
 F: tests/functional/arm/test_integratorcp.py
 F: docs/system/arm/integratorcp.rst
 
+M5Stack AI Pyramid (AX650X)
+M: Chao Liu <chao.liu@processmission.com>
+L: qemu-arm@nongnu.org
+S: Maintained
+F: docs/system/arm/ax650x-pyramid.rst
+F: hw/arm/ax650x*.c
+F: hw/gpio/dw-apb-gpio.c
+F: hw/misc/ax650x-*.c
+F: hw/sd/ax650x-sdhci.c
+F: include/hw/arm/ax650x*.h
+F: include/hw/gpio/dw-apb-gpio.h
+F: include/hw/misc/ax650x-*.h
+F: include/hw/sd/ax650x-sdhci.h
+F: tests/functional/aarch64/test_ax650x_ubuntu.py
+F: tests/qtest/ax650x-pyramid-test.c
+
 MAX78000FTHR
 L: qemu-arm@nongnu.org
 S: Orphan

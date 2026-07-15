@@ -38,6 +38,14 @@ config ARM_VIRT
     select ACPI_HMAT
     select WDT_SBSA
 
+config AX650X_PYRAMID
+    bool
+    default y
+    depends on TCG && AARCH64
+    select ARM_GIC
+    select DEVICE_TREE
+    select SERIAL_MM
+
 config CUBIEBOARD
     bool
     default y
