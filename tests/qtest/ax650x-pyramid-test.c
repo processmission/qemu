@@ -504,9 +504,10 @@ static void test_emmc_block_io_and_irq(void)
         source[i] = i % 127 + 1;
         written[i] = (i * 3) % 127 + 1;
     }
-    fd = open(emmc_path, O_WRONLY);
+    fd = open(emmc_path, O_WRONLY | O_BINARY);
     g_assert_cmpint(fd, >=, 0);
-    ret = pwrite(fd, source, sizeof(source), 0);
+    g_assert_cmpint(lseek(fd, 0, SEEK_SET), ==, 0);
+    ret = qemu_write_full(fd, source, sizeof(source));
     g_assert_cmpint(ret, ==, sizeof(source));
     close(fd);
 
@@ -529,9 +530,10 @@ static void test_emmc_block_io_and_irq(void)
                     sizeof(written), AX650X_EMMC_BLOCK_SIZE);
     qtest_quit(qts);
 
-    fd = open(emmc_path, O_RDONLY);
+    fd = open(emmc_path, O_RDONLY | O_BINARY);
     g_assert_cmpint(fd, >=, 0);
-    ret = pread(fd, readback, sizeof(readback), 0);
+    g_assert_cmpint(lseek(fd, 0, SEEK_SET), ==, 0);
+    ret = read(fd, readback, sizeof(readback));
     g_assert_cmpint(ret, ==, sizeof(readback));
     close(fd);
     g_assert_cmpmem(readback, sizeof(readback), written, sizeof(written));
@@ -570,9 +572,11 @@ static void test_emmc_auto_cmd23(void)
                     SDHC_R1_STATE_TRAN);
     qtest_quit(qts);
 
-    fd = open(emmc_path, O_RDONLY);
+    fd = open(emmc_path, O_RDONLY | O_BINARY);
     g_assert_cmpint(fd, >=, 0);
-    ret = pread(fd, readback, sizeof(readback), AX650X_EMMC_BLOCK_SIZE);
+    g_assert_cmpint(lseek(fd, AX650X_EMMC_BLOCK_SIZE, SEEK_SET), ==,
+                    AX650X_EMMC_BLOCK_SIZE);
+    ret = read(fd, readback, sizeof(readback));
     g_assert_cmpint(ret, ==, sizeof(readback));
     close(fd);
     g_assert_cmpmem(readback, sizeof(readback), expected, sizeof(expected));
