@@ -23,3 +23,7 @@ config SDHCI_PCI
 config CADENCE_SDHCI
     bool
     select SDHCI
+
+config AX650X_SDHCI
+    bool
+    select SDHCI
