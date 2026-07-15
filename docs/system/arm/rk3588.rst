@@ -147,6 +147,14 @@ yet.
 The executor derives tensor dimensions, strides, channel validity, and output
 layout from each submitted register file.  Hardware captures validate
 arithmetic and layout; they are not a whitelist of shapes or model tasks.
+The CNA input path supports the board-validated interleaved RGB888 mode with
+``NONALIGN_DMA`` and ``GROUP_LINE_OFF`` enabled.  Per-channel CVT offset,
+scale, truncation, rounding, and signed-input selection are applied before
+convolution.  The validated MobileNet input profile converts unsigned bytes
+with ``(input - 128) * 16384 >> 14``.  Its 16-channel weight atom, complete
+QD convolution-window sum, stride, padding, and right-edge clipping are
+derived from the submitted registers; output surfaces use the programmed DPU
+surface stride.
 The validated spatial EW DPU-RDMA profile uses the same 16-channel operand
 planes with output-space surface stride/notch.  Spatial BRDMA reads one
 signed INT32 bias per channel and broadcasts it across the output surface.
