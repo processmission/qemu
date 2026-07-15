@@ -336,6 +336,30 @@ static void sdhci_data_transfer(void *opaque);
 
 #define BLOCK_SIZE_MASK (4 * KiB - 1)
 
+static bool sdhci_send_auto_cmd23(SDHCIState *s)
+{
+    SDRequest request = {
+        .cmd = 23,
+        .arg = s->sdmasysad,
+    };
+    uint8_t response[16];
+    size_t rlen;
+
+    trace_sdhci_send_command(request.cmd, request.arg);
+    rlen = sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
+    if (rlen == 4) {
+        return true;
+    }
+
+    trace_sdhci_error("Auto CMD23 failed");
+    s->acmd12errsts |= R_SDHC_ACMD12ERRSTS_TIMEOUT_ERR_MASK;
+    if (s->errintstsen & SDHC_EIS_CMD12ERR) {
+        s->errintsts |= SDHC_EIS_CMD12ERR;
+        s->norintsts |= SDHC_NIS_ERR;
+    }
+    return false;
+}
+
 static void sdhci_send_command(SDHCIState *s)
 {
     SDRequest request;
@@ -347,6 +371,13 @@ static void sdhci_send_command(SDHCIState *s)
     s->acmd12errsts = 0;
     request.cmd = s->cmdreg >> 8;
     request.arg = s->argument;
+
+    if ((s->trnmod & SDHC_TRNS_ACMD23) &&
+        (s->cmdreg & SDHC_CMD_DATA_PRESENT) &&
+        !sdhci_send_auto_cmd23(s)) {
+        sdhci_update_irq(s);
+        return;
+    }
 
     trace_sdhci_send_command(request.cmd, request.arg);
     rlen = sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
