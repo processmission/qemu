@@ -23,6 +23,7 @@
 #include "hw/intc/riscv_aclint.h"
 #include "kvm/kvm_riscv.h"
 #include "system/kvm.h"
+#include "system/qtest.h"
 #include "system/tcg.h"
 
 static void riscv_accel_set_irq(RISCVCPU *cpu, int irq, int level)
@@ -31,7 +32,7 @@ static void riscv_accel_set_irq(RISCVCPU *cpu, int irq, int level)
         kvm_riscv_set_irq(cpu, irq, level);
     }
 
-    if (tcg_enabled()) {
+    if (tcg_enabled() || qtest_enabled()) {
         riscv_cpu_update_mip(&cpu->env, irq, level);
     }
 }
