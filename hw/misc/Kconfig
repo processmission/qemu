@@ -208,6 +208,9 @@ config RK3588_CRU
 config RK3588_SCMI
     bool
 
+config SPACEMIT_K3_CTRL
+    bool
+
 config MAC_VIA
     bool
     select MOS6522

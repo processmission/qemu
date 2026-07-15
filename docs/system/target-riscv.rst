@@ -73,6 +73,7 @@ undocumented; you can get a complete list by running
    riscv/mips
    riscv/shakti-c
    riscv/sifive_u
+   riscv/spacemit-k3
    riscv/virt
    riscv/xiangshan-kunminghu
    riscv/riscv-server-ref
