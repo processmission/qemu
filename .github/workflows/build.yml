@@ -330,10 +330,11 @@ jobs:
       - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       # bypass package signature check by faking sqv binary
+      # Documentation is covered elsewhere; keep this a compiler-only build.
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx 'cp /usr/bin/echo /usr/bin/sqv && LLVM_VERSION=22 && apt update && apt install -y lsb-release wget gnupg && wget https://apt.llvm.org/llvm.sh && bash llvm.sh ${LLVM_VERSION} && ./configure ${{ env.QEMU_WERROR }} --cxx=clang++-${LLVM_VERSION} --cc=clang-${LLVM_VERSION} --host-cc=clang-${LLVM_VERSION} --enable-debug && ninja -C build install'
+          bash -cx 'cp /usr/bin/echo /usr/bin/sqv && LLVM_VERSION=22 && apt update && apt install -y lsb-release wget gnupg && wget https://apt.llvm.org/llvm.sh && bash llvm.sh ${LLVM_VERSION} && ./configure ${{ env.QEMU_WERROR }} --disable-docs --cxx=clang++-${LLVM_VERSION} --cc=clang-${LLVM_VERSION} --host-cc=clang-${LLVM_VERSION} --enable-debug && ninja -C build install'
 
   build-kvm-only:
     needs: checkapply
