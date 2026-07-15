@@ -21,13 +21,13 @@
 #include "net/net.h"
 
 /*
- * MAC_VERSION (GMAC4_VERSION @ 0x110) synth-id. Linux stmmac reads SNPSVER
- * (bits[7:0]) and routes through stmmac_hw[]: min_id=DWMAC_CORE_5_10 (0x51)
- * selects dwmac510_ops / dwmac410_dma_ops / dwmac4_desc_ops. Real RK3588
- * silicon reports 0x51; the contract pins the model to 0x51.
+ * MAC_VERSION (GMAC4_VERSION @ 0x110) contains the Synopsys version in
+ * bits[7:0] and a user version in bits[15:8].  Boards select their reported
+ * version through properties; the defaults retain the original 0x51 model.
  */
-#define DWMAC4_SNPSVER                 0x51u
-#define DWMAC4_VERSION_RESET          (DWMAC4_SNPSVER & 0xff)
+#define DWMAC4_DEFAULT_SNPS_VERSION    0x51u
+#define DWMAC4_DEFAULT_DMA_WIDTH       32u
+#define DWMAC4_DEFAULT_FIFO_SIZE       4096u
 
 /* MAC register bank window. Covers 0x000..0x3ff (some slots beyond 0x300). */
 #define DWMAC4_MAC_REG_SIZE           0x400
@@ -66,11 +66,23 @@ typedef struct DWMAC4State {
     RegisterInfoArray *dma_reg_array;
 
     /* Per-channel descriptor-ring cursor state (not part of the reg bank). */
-    uint32_t tx_desc_cur[DWMAC4_NR_CHANNELS];
-    uint32_t rx_desc_cur[DWMAC4_NR_CHANNELS];
+    uint64_t tx_desc_cur[DWMAC4_NR_CHANNELS];
+    uint64_t rx_desc_cur[DWMAC4_NR_CHANNELS];
 
     /* MDIO clause-22 PHY scratch (minimal: link up, full-duplex 1G). */
     uint16_t phy_regs[32];
+    uint16_t phy_page;
+
+    /* Board-selectable synthesis and PHY identity. */
+    uint8_t snps_version;
+    uint8_t user_version;
+    uint8_t dma_width;
+    uint8_t phy_addr;
+    uint16_t phy_id1;
+    uint16_t phy_id2;
+    uint32_t tx_fifo_size;
+    uint32_t rx_fifo_size;
+    bool tso;
 } DWMAC4State;
 
 #define TYPE_DWMAC4 "dwmac4"
