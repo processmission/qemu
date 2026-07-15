@@ -177,6 +177,34 @@
 #define RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES 200704
 #define RK3588_RKNN_MOBILENET_TASK6_COMMANDS 130
 #define RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES 256
+#define RK3588_RKNN_RGB_CVT_INPUT_WIDTH 8
+#define RK3588_RKNN_RGB_CVT_INPUT_HEIGHT 5
+#define RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH 4
+#define RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT 2
+#define RK3588_RKNN_RGB_CVT_INPUT_CHANNELS 3
+#define RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS 16
+#define RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS 32
+#define RK3588_RKNN_RGB_CVT_KERNEL 3
+#define RK3588_RKNN_RGB_CVT_SURFACE_STRIDE 0x1000
+#define RK3588_RKNN_RGB_CVT_BS_IOVA 0x10052000U
+#define RK3588_RKNN_RGB_CVT_INPUT_BYTES \
+    (RK3588_RKNN_RGB_CVT_INPUT_WIDTH * \
+     RK3588_RKNN_RGB_CVT_INPUT_HEIGHT * \
+     RK3588_RKNN_RGB_CVT_INPUT_CHANNELS)
+#define RK3588_RKNN_RGB_CVT_WEIGHT_BYTES \
+    (RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS * \
+     RK3588_RKNN_RGB_CVT_KERNEL * RK3588_RKNN_RGB_CVT_KERNEL * \
+     RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS)
+#define RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES \
+    (RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH * \
+     RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT * 16)
+#define RK3588_RKNN_RGB_CVT_OUTPUT_BYTES \
+    (RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH * \
+     RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT * \
+     RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS)
+#define RK3588_RKNN_RGB_CVT_BS_BYTES \
+    (RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS / 8 * 0x40)
+#define RK3588_RKNN_RGB_CVT_CON0 0x00020404U
 #define RK3588_SRST_A_RKNN1 250
 #define RK3588_SRST_H_RKNN1 252
 #define RK3588_SRST_A_RKNN2 254
@@ -2366,6 +2394,514 @@ static void rk3588_rknn_read_mobilenet_task6_output(
                     surface * RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES +
                     surface_bytes), ==, 0xa5);
         }
+    }
+}
+
+static size_t rk3588_rknn_rgb_cvt_weight_index(unsigned int output,
+                                                unsigned int kernel,
+                                                unsigned int channel)
+{
+    return (kernel * RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS + output) *
+           RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS + channel;
+}
+
+static void rk3588_rknn_patch_all_regcmd(uint64_t commands[], size_t count,
+                                         uint32_t target, uint32_t reg,
+                                         uint32_t value)
+{
+    bool found = false;
+
+    for (size_t index = 0; index < count; index++) {
+        uint64_t command = le64_to_cpu(commands[index]);
+
+        if ((command >> 48) == target && (command & 0xffff) == reg) {
+            commands[index] = rk3588_rknn_regcmd(target, reg, value);
+            found = true;
+        }
+    }
+    g_assert_true(found);
+}
+
+static uint32_t rk3588_rknn_regcmd_value(const uint64_t commands[],
+                                         size_t count, uint32_t target,
+                                         uint32_t reg)
+{
+    bool found = false;
+    uint32_t value = 0;
+
+    for (size_t index = 0; index < count; index++) {
+        uint64_t command = le64_to_cpu(commands[index]);
+
+        if ((command >> 48) == target && (command & 0xffff) == reg) {
+            value = (command >> 16) & UINT32_MAX;
+            found = true;
+        }
+    }
+    g_assert_true(found);
+    return value;
+}
+
+static int64_t rk3588_rknn_rgb_cvt_round_shift(int64_t value,
+                                                unsigned int shift,
+                                                bool ties_away)
+{
+    bool negative = value < 0;
+    uint64_t magnitude = negative ? -value : value;
+    uint64_t quotient;
+    uint64_t remainder;
+    uint64_t half;
+
+    if (!shift) {
+        return value;
+    }
+    quotient = magnitude >> shift;
+    remainder = magnitude & ((UINT64_C(1) << shift) - 1);
+    half = UINT64_C(1) << (shift - 1);
+    if (remainder > half ||
+        (remainder == half && (ties_away || (quotient & 1)))) {
+        quotient++;
+    }
+    return negative ? -(int64_t)quotient : quotient;
+}
+
+static int8_t rk3588_rknn_rgb_cvt_convert(
+    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    unsigned int channel, uint8_t raw)
+{
+    uint32_t cfg = rk3588_rknn_regcmd_value(
+        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        0x0201, 0x104c);
+    uint32_t channel_cfg = rk3588_rknn_regcmd_value(
+        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        0x0201, 0x1050 + channel * 4);
+    int input = cfg & (1U << 3) ? (int8_t)raw : raw;
+    int16_t offset = channel_cfg;
+    int16_t scale = channel_cfg >> 16;
+    unsigned int shift = (cfg >> (4 + channel * 6)) & 0x3f;
+    int64_t value = (input + offset) * scale;
+
+    value = rk3588_rknn_rgb_cvt_round_shift(
+        value, shift, cfg & (1U << 2));
+    return CLAMP(value, INT8_MIN, INT8_MAX);
+}
+
+static size_t rk3588_rknn_rgb_cvt_output_index(unsigned int channel,
+                                                unsigned int row,
+                                                unsigned int column)
+{
+    return channel / 16 * RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES +
+           (row * RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH + column) * 16 +
+           channel % 16;
+}
+
+static void rk3588_rknn_make_rgb_cvt_data(
+    uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES],
+    int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES],
+    uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES])
+{
+    memset(weights, 0, RK3588_RKNN_RGB_CVT_WEIGHT_BYTES);
+    memset(bs, 0, RK3588_RKNN_RGB_CVT_BS_BYTES);
+    for (unsigned int row = 0;
+         row < RK3588_RKNN_RGB_CVT_INPUT_HEIGHT; row++) {
+        for (unsigned int column = 0;
+             column < RK3588_RKNN_RGB_CVT_INPUT_WIDTH; column++) {
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_RGB_CVT_INPUT_CHANNELS; channel++) {
+                size_t index =
+                    (row * RK3588_RKNN_RGB_CVT_INPUT_WIDTH + column) *
+                    RK3588_RKNN_RGB_CVT_INPUT_CHANNELS + channel;
+
+                input[index] = 124 +
+                    (row * 7 + column * 2 + channel * 3) % 9;
+            }
+        }
+    }
+    for (unsigned int output = 0;
+         output < RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS; output++) {
+        unsigned int group = output / 8;
+        unsigned int lane = output % 8;
+        uint32_t alu = cpu_to_le32((output * 3) % 7);
+        uint16_t cpend = cpu_to_le16(output % 3 == 0);
+        uint16_t multiplier = cpu_to_le16(output % 2 + 1);
+
+        memcpy(bs + group * 0x40 + lane * 4, &alu, sizeof(alu));
+        memcpy(bs + group * 0x40 + 0x20 + lane * 2,
+               &cpend, sizeof(cpend));
+        memcpy(bs + group * 0x40 + 0x30 + lane * 2,
+               &multiplier, sizeof(multiplier));
+        for (unsigned int kernel = 0;
+             kernel < RK3588_RKNN_RGB_CVT_KERNEL *
+                      RK3588_RKNN_RGB_CVT_KERNEL; kernel++) {
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_RGB_CVT_INPUT_CHANNELS; channel++) {
+                size_t index = rk3588_rknn_rgb_cvt_weight_index(
+                    output, kernel, channel);
+
+                weights[index] = (output + kernel * 3 + channel * 5) % 7 == 0;
+            }
+        }
+    }
+}
+
+static int8_t rk3588_rknn_rgb_cvt_expected(
+    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    const uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES],
+    const int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES],
+    const uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES],
+    unsigned int output, unsigned int row, unsigned int column)
+{
+    int convolution = 0;
+    int qd_sum = 0;
+
+    for (unsigned int kernel_row = 0;
+         kernel_row < RK3588_RKNN_RGB_CVT_KERNEL; kernel_row++) {
+        unsigned int input_row = row * 2 + kernel_row;
+
+        for (unsigned int kernel_column = 0;
+             kernel_column < RK3588_RKNN_RGB_CVT_KERNEL; kernel_column++) {
+            unsigned int input_column = column * 2 + kernel_column;
+            unsigned int kernel =
+                kernel_row * RK3588_RKNN_RGB_CVT_KERNEL + kernel_column;
+
+            if (input_row >= RK3588_RKNN_RGB_CVT_INPUT_HEIGHT ||
+                input_column >= RK3588_RKNN_RGB_CVT_INPUT_WIDTH) {
+                continue;
+            }
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_RGB_CVT_INPUT_CHANNELS; channel++) {
+                size_t input_index =
+                    (input_row * RK3588_RKNN_RGB_CVT_INPUT_WIDTH +
+                     input_column) * RK3588_RKNN_RGB_CVT_INPUT_CHANNELS +
+                    channel;
+                int converted = rk3588_rknn_rgb_cvt_convert(
+                    commands, channel, input[input_index]);
+
+                qd_sum += converted;
+                convolution += converted * weights[
+                    rk3588_rknn_rgb_cvt_weight_index(
+                        output, kernel, channel)];
+            }
+        }
+    }
+    unsigned int group = output / 8;
+    unsigned int lane = output % 8;
+    uint32_t alu_le;
+    uint16_t cpend_le;
+    uint16_t multiplier_le;
+    int64_t value;
+    unsigned int shift;
+
+    memcpy(&alu_le, bs + group * 0x40 + lane * 4, sizeof(alu_le));
+    memcpy(&cpend_le, bs + group * 0x40 + 0x20 + lane * 2,
+           sizeof(cpend_le));
+    memcpy(&multiplier_le, bs + group * 0x40 + 0x30 + lane * 2,
+           sizeof(multiplier_le));
+    value = convolution + (int16_t)le16_to_cpu(cpend_le) * qd_sum +
+            (int32_t)le32_to_cpu(alu_le);
+    value *= (int16_t)le16_to_cpu(multiplier_le);
+    shift = value < 0 ?
+        (rk3588_rknn_regcmd_value(
+             commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+             0x1001, 0x4010) >> 4) & 0x3f :
+        (rk3588_rknn_regcmd_value(
+             commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+             0x1001, 0x4048) >> 8) & 0x3f;
+    value = rk3588_rknn_rgb_cvt_round_shift(value, shift, false);
+    return CLAMP(value, INT8_MIN, INT8_MAX);
+}
+
+static void rk3588_rknn_make_rgb_cvt_regcmd(uint64_t commands[])
+{
+    g_autofree void *original = NULL;
+    gsize length;
+    size_t index;
+
+    rk3588_rknn_load_mobilenet_task6_file(
+        "regcmd.bin", &original, &length);
+    g_assert_cmpuint(length, ==, RK3588_RKNN_MOBILENET_TASK6_COMMANDS *
+                                  sizeof(*commands));
+    memcpy(commands, original, length);
+
+#define PATCH_RGB(_target, _reg, _value) do {                         \
+    index = rk3588_rknn_find_regcmd(                                  \
+        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,               \
+        (_target), (_reg));                                           \
+    commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
+} while (0)
+    rk3588_rknn_patch_all_regcmd(
+        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        0x0201, 0x100c, 0x6000a000);
+    PATCH_RGB(0x0201, 0x1010,
+              RK3588_RKNN_RGB_CVT_INPUT_HEIGHT << 4);
+    PATCH_RGB(0x0201, 0x1014, 0x12);
+    PATCH_RGB(0x0201, 0x1020,
+              (RK3588_RKNN_RGB_CVT_INPUT_WIDTH << 16) |
+              RK3588_RKNN_RGB_CVT_INPUT_HEIGHT);
+    PATCH_RGB(0x0201, 0x1024,
+              ((RK3588_RKNN_RGB_CVT_INPUT_CHANNELS - 1) << 16) |
+              RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS);
+    PATCH_RGB(0x0201, 0x1028, RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH);
+    PATCH_RGB(0x0201, 0x102c,
+              RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH *
+              RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT);
+    PATCH_RGB(0x0201, 0x1030,
+              RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS *
+              RK3588_RKNN_RGB_CVT_KERNEL *
+              RK3588_RKNN_RGB_CVT_KERNEL *
+              RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS);
+    PATCH_RGB(0x0201, 0x1034,
+              RK3588_RKNN_RGB_CVT_KERNEL *
+              RK3588_RKNN_RGB_CVT_KERNEL *
+              RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS);
+    PATCH_RGB(0x0201, 0x1038,
+              (RK3588_RKNN_RGB_CVT_KERNEL << 24) |
+              (RK3588_RKNN_RGB_CVT_KERNEL << 16) |
+              RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS);
+    PATCH_RGB(0x0201, 0x104c, RK3588_RKNN_RGB_CVT_CON0);
+    PATCH_RGB(0x0201, 0x1050, 0x0001ff80);
+    PATCH_RGB(0x0201, 0x1054, 0x0003ff81);
+    PATCH_RGB(0x0201, 0x1058, 0x0005ff7e);
+    PATCH_RGB(0x0201, 0x105c, 0x10000);
+    PATCH_RGB(0x0201, 0x1068, 0);
+    PATCH_RGB(0x0201, 0x1070,
+              RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA);
+    PATCH_RGB(0x0201, 0x107c, RK3588_RKNN_RGB_CVT_INPUT_WIDTH);
+    PATCH_RGB(0x0201, 0x1080,
+              RK3588_RKNN_RGB_CVT_INPUT_WIDTH *
+              (RK3588_RKNN_RGB_CVT_INPUT_HEIGHT - 1));
+    PATCH_RGB(0x0201, 0x1084,
+              (RK3588_RKNN_RGB_CVT_INPUT_WIDTH << 16) |
+              RK3588_RKNN_RGB_CVT_INPUT_HEIGHT);
+    PATCH_RGB(0x0201, 0x1088, RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS);
+    PATCH_RGB(0x0201, 0x1110,
+              RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA);
+    PATCH_RGB(0x0201, 0x1180, 0xfff);
+    PATCH_RGB(0x0801, 0x3010, 1);
+    PATCH_RGB(0x0801, 0x3014,
+              ((RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT - 1) << 16) |
+              (RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH - 1));
+    PATCH_RGB(0x0801, 0x3018,
+              RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS - 1);
+    PATCH_RGB(0x0801, 0x301c, 0);
+    PATCH_RGB(0x1001, 0x400c, 0x1e4);
+    PATCH_RGB(0x1001, 0x4010, 0);
+    PATCH_RGB(0x1001, 0x4020,
+              RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    PATCH_RGB(0x1001, 0x4024, RK3588_RKNN_RGB_CVT_SURFACE_STRIDE);
+    PATCH_RGB(0x1001, 0x4030,
+              RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH - 1);
+    PATCH_RGB(0x1001, 0x4034,
+              RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT - 1);
+    PATCH_RGB(0x1001, 0x403c,
+              ((RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS - 1) << 16) |
+              (RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS - 1));
+    PATCH_RGB(0x1001, 0x4040, 0x00020140);
+    PATCH_RGB(0x1001, 0x4048, 1);
+    PATCH_RGB(0x1001, 0x4050, 0x125);
+    PATCH_RGB(0x1001, 0x4054, 0);
+    PATCH_RGB(0x1001, 0x4058,
+              RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS - 1);
+    PATCH_RGB(0x1001, 0x405c,
+              ((RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT - 1) << 16) |
+              (RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH - 1));
+    PATCH_RGB(0x1001, 0x4060, 0x53);
+    PATCH_RGB(0x1001, 0x4070, 0x383);
+    PATCH_RGB(0x1001, 0x4080, 0);
+    PATCH_RGB(0x1001, 0x4084, 1);
+    PATCH_RGB(0x1001, 0x4088, 0);
+    PATCH_RGB(0x1001, 0x40c0,
+              RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH *
+              RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT * 32);
+    PATCH_RGB(0x2001, 0x500c,
+              RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH - 1);
+    PATCH_RGB(0x2001, 0x5010,
+              RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT - 1);
+    PATCH_RGB(0x2001, 0x5014,
+              RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS - 1);
+    PATCH_RGB(0x2001, 0x501c, 0xe);
+    PATCH_RGB(0x2001, 0x5020, RK3588_RKNN_RGB_CVT_BS_IOVA);
+    PATCH_RGB(0x2001, 0x5034, 1);
+    PATCH_RGB(0x2001, 0x5044, 0x7810);
+    PATCH_RGB(0x2001, 0x5048, 0);
+    PATCH_RGB(0x2001, 0x5064, 0);
+    PATCH_RGB(0x2001, 0x5068, 0x01010101);
+#undef PATCH_RGB
+}
+
+static void rk3588_rknn_prepare_rgb_cvt(
+    QTestState *qts, const uint64_t commands[], const uint8_t input[],
+    const int8_t weights[], const uint8_t bs[])
+{
+    qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
+                 RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
+    for (unsigned int page = 0;
+         page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+        qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
+                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     RK_IOMMU_PTE_RW);
+    }
+    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
+                   RK3588_RKNN_MOBILENET_TASK6_COMMANDS *
+                   sizeof(*commands));
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                   RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA),
+                   input, RK3588_RKNN_RGB_CVT_INPUT_BYTES);
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                   RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+                   weights, RK3588_RKNN_RGB_CVT_WEIGHT_BYTES);
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                       RK3588_RKNN_RGB_CVT_BS_IOVA),
+                   bs, RK3588_RKNN_RGB_CVT_BS_BYTES);
+    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
+                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+                 0xa5, RK3588_RKNN_RGB_CVT_SURFACE_STRIDE +
+                       RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES + 1);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+                 RK3588_RKNN_MATMUL_DTE_ADDR);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
+                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 rk3588_rknn_register_amount(
+                     RK3588_RKNN_MOBILENET_TASK6_COMMANDS));
+}
+
+static void rk3588_rknn_assert_rgb_cvt_result(
+    QTestState *qts,
+    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    const uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES],
+    const int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES],
+    const uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES])
+{
+    uint8_t output[RK3588_RKNN_RGB_CVT_OUTPUT_BYTES];
+    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+
+    for (unsigned int surface = 0; surface < 2; surface++) {
+        qtest_memread(qts,
+                      output_addr +
+                      surface * RK3588_RKNN_RGB_CVT_SURFACE_STRIDE,
+                      output +
+                      surface * RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES,
+                      RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES);
+        g_assert_cmphex(qtest_readb(
+            qts, output_addr +
+                 surface * RK3588_RKNN_RGB_CVT_SURFACE_STRIDE +
+                 RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES), ==, 0xa5);
+    }
+    for (unsigned int row = 0;
+         row < RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT; row++) {
+        for (unsigned int column = 0;
+             column < RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH; column++) {
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_RGB_CVT_OUTPUT_CHANNELS; channel++) {
+                size_t index = rk3588_rknn_rgb_cvt_output_index(
+                    channel, row, column);
+                int8_t expected = rk3588_rknn_rgb_cvt_expected(
+                    commands, input, weights, bs, channel, row, column);
+
+                if ((int8_t)output[index] != expected) {
+                    g_error("RGB/CVT mismatch c=%u y=%u x=%u: %d != %d",
+                            channel, row, column, (int8_t)output[index],
+                            expected);
+                }
+            }
+        }
+    }
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==,
+                    RKNN_PIPELINE_BANK1_INTERRUPT);
+}
+
+static void rk3588_rknn_assert_rgb_cvt_rejected(QTestState *qts)
+{
+    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+
+    g_assert_cmphex(qtest_readb(qts, output_addr), ==, 0xa5);
+    g_assert_cmphex(qtest_readb(
+        qts, output_addr + RK3588_RKNN_RGB_CVT_SURFACE_STRIDE), ==, 0xa5);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_FETCH_ERROR | 1);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==, 0);
+}
+
+static void test_rk3588_rknpu_rgb_cvt_convolution(void)
+{
+    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
+    int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
+    uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+    rk3588_rknn_make_rgb_cvt_regcmd(commands);
+    rk3588_rknn_make_rgb_cvt_data(input, weights, bs);
+    rk3588_rknn_prepare_rgb_cvt(qts, commands, input, weights, bs);
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_assert_rgb_cvt_result(
+        qts, commands, input, weights, bs);
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_rgb_cvt_control_mutations(void)
+{
+    static const struct {
+        const char *name;
+        uint32_t reg;
+        uint32_t value;
+    } cases[] = {
+        { "argb-in", 0x100c, 0x60009000 },
+        { "nonalign-dma", 0x100c, 0x2000a000 },
+        { "group-line-off", 0x100c, 0x4000a000 },
+        { "deconv", 0x100c, 0x6001a000 },
+        { "nn-mode", 0x1014, 0x10000012 },
+        { "atrous-x", 0x1014, 0x00010012 },
+        { "atrous-y", 0x1014, 0x00200012 },
+        { "deconv-stride-x", 0x1014, 0x00000112 },
+        { "deconv-stride-y", 0x1014, 0x00000812 },
+        { "surface-mode", 0x102c,
+          (1U << 22) | RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH *
+                       RK3588_RKNN_RGB_CVT_OUTPUT_HEIGHT },
+        { "cvt-bypass", 0x104c, RK3588_RKNN_RGB_CVT_CON0 | (1U << 0) },
+        { "cvt-type", 0x104c, RK3588_RKNN_RGB_CVT_CON0 | (1U << 1) },
+        { "channel-0-cvt", 0x1180, 0xffe },
+        { "channel-1-cvt", 0x1180, 0xffd },
+        { "channel-2-cvt", 0x1180, 0xffb },
+    };
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
+        uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+        uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
+        int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
+        uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+        size_t index;
+
+        g_test_message("RGB/CVT mutation: %s", cases[i].name);
+        rk3588_rknn_make_rgb_cvt_regcmd(commands);
+        if (cases[i].reg == 0x100c) {
+            rk3588_rknn_patch_all_regcmd(
+                commands, ARRAY_SIZE(commands), 0x0201,
+                cases[i].reg, cases[i].value);
+        } else {
+            index = rk3588_rknn_find_regcmd(
+                commands, ARRAY_SIZE(commands), 0x0201, cases[i].reg);
+            commands[index] = rk3588_rknn_regcmd(
+                0x0201, cases[i].reg, cases[i].value);
+        }
+        rk3588_rknn_make_rgb_cvt_data(input, weights, bs);
+        rk3588_rknn_prepare_rgb_cvt(qts, commands, input, weights, bs);
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        rk3588_rknn_assert_rgb_cvt_rejected(qts);
+        qtest_quit(qts);
     }
 }
 
@@ -6726,6 +7262,56 @@ static void test_rk3588_rknpu_depthwise_migration_snapshot(void)
     qtest_quit(destination);
 }
 
+static void test_rk3588_rknpu_rgb_cvt_migration_snapshot(void)
+{
+    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
+    int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
+    uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
+    g_autofree char *migration_socket = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *source;
+    QTestState *destination;
+    size_t cvt;
+    int fd;
+
+    fd = g_file_open_tmp("rk3588-rknpu-rgb-cvt-migration-XXXXXX",
+                         &migration_socket, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    unlink(migration_socket);
+    uri = g_strdup_printf("unix:%s", migration_socket);
+
+    source = rk3588_qtest_start_rknpu_matmul();
+    rk3588_rknn_make_rgb_cvt_regcmd(commands);
+    rk3588_rknn_make_rgb_cvt_data(input, weights, bs);
+    rk3588_rknn_prepare_rgb_cvt(source, commands, input, weights, bs);
+    rk3588_rknn_start_matmul(source);
+
+    cvt = rk3588_rknn_find_regcmd(
+        commands, ARRAY_SIZE(commands), 0x0201, 0x104c);
+    qtest_writeq(source,
+                 RK3588_RKNN_MOBILENET_TASK6_ADDR +
+                 cvt * sizeof(uint64_t),
+                 le64_to_cpu(rk3588_rknn_regcmd(
+                     0x0201, 0x104c,
+                     RK3588_RKNN_RGB_CVT_CON0 | (1U << 0))));
+
+    destination = rk3588_qtest_start_rknpu_matmul_incoming();
+    qtest_qmp_assert_success(destination,
+                             "{ 'execute': 'migrate-incoming',"
+                             "  'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_assert_success(source,
+                             "{ 'execute': 'migrate',"
+                             "  'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(destination, "RESUME");
+    qtest_clock_step(destination, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_assert_rgb_cvt_result(
+        destination, commands, input, weights, bs);
+    qtest_quit(source);
+    qtest_quit(destination);
+}
+
 static void test_rk3588_rknpu_spatial_migration_snapshot(void)
 {
     enum {
@@ -8626,6 +9212,10 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_matmul_hardware_golden);
     qtest_add_func("/rk3588/rknpu-mobilenet-task6-hardware-golden",
                    test_rk3588_rknpu_mobilenet_task6_hardware_golden);
+    qtest_add_func("/rk3588/rknpu-rgb-cvt-convolution",
+                   test_rk3588_rknpu_rgb_cvt_convolution);
+    qtest_add_func("/rk3588/rknpu-rgb-cvt-control-mutations",
+                   test_rk3588_rknpu_rgb_cvt_control_mutations);
     qtest_add_func("/rk3588/rknpu-int8-qd-brdma-uncaptured-height",
                    test_rk3588_rknpu_int8_qd_brdma_uncaptured_height);
     qtest_add_func("/rk3588/rknpu-int8-qd-brdma-unsupported-data-use",
@@ -8759,6 +9349,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_pipeline_control_chain_migration);
     qtest_add_func("/rk3588/rknpu-depthwise-migration-snapshot",
                    test_rk3588_rknpu_depthwise_migration_snapshot);
+    qtest_add_func("/rk3588/rknpu-rgb-cvt-migration-snapshot",
+                   test_rk3588_rknpu_rgb_cvt_migration_snapshot);
     qtest_add_func("/rk3588/rknpu-spatial-migration-snapshot",
                    test_rk3588_rknpu_spatial_migration_snapshot);
     qtest_add_func("/rk3588/rknpu-slave-migration-snapshot",
