@@ -43,6 +43,7 @@ config AX650X_PYRAMID
     default y
     depends on TCG && AARCH64
     select ARM_GIC
+    select AX650X_SDHCI
     select DEVICE_TREE
     select SERIAL_MM
 
