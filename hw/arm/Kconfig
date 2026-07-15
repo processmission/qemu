@@ -43,9 +43,14 @@ config AX650X_PYRAMID
     default y
     depends on TCG && AARCH64
     select ARM_GIC
+    select AX650X_DWMAC_GLUE
+    select AX650X_HWSPINLOCK
     select AX650X_SDHCI
     select DEVICE_TREE
+    select DW_APB_GPIO
+    select DWMAC4
     select SERIAL_MM
+    select UNIMP
 
 config CUBIEBOARD
     bool
