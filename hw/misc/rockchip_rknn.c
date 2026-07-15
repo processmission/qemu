@@ -1414,6 +1414,63 @@ static bool rockchip_rknn_pipeline_is_captured_profile(
     return true;
 }
 
+static const char *rockchip_rknn_pipeline_profile_reason(
+    RockchipRKNNPipelineTask *task,
+    const RockchipRKNNDPUStageSnapshot *stage)
+{
+    const uint32_t blocks = ROCKCHIP_RKNN_BLOCK_CNA |
+                            ROCKCHIP_RKNN_BLOCK_CORE |
+                            ROCKCHIP_RKNN_BLOCK_DPU;
+    uint64_t spatial;
+    uint32_t k_storage;
+    uint32_t n_cube;
+
+    if (task->enabled_blocks == (ROCKCHIP_RKNN_BLOCK_PPU |
+                                 ROCKCHIP_RKNN_BLOCK_PPU_RDMA)) {
+        return rockchip_rknn_pipeline_is_captured_profile(task, stage) ?
+                   "accepted" : "ppu-profile";
+    }
+    if (task->core.depthwise) {
+        return "depthwise";
+    }
+    if (!rockchip_rknn_pipeline_shape_is_well_formed(task)) {
+        return "malformed-shape";
+    }
+
+    spatial = (uint64_t)task->cna.input.width * task->cna.input.height;
+    k_storage = task->cna.input.channels;
+    n_cube = task->dpu.output.channels;
+    if (task->cna.input_channels_valid != k_storage ||
+        task->cna.weight_kernels != n_cube ||
+        task->dpu.output_channels_valid != n_cube) {
+        return "partial-channels";
+    }
+    if (spatial > 64) {
+        return "spatial-range";
+    }
+    if (k_storage < 32 || k_storage > 128 || k_storage % 32) {
+        return "input-channel-range";
+    }
+    if (n_cube < 32 || n_cube > 96 || n_cube % 32) {
+        return "output-channel-range";
+    }
+    if (task->cna.kernel_width == 3 &&
+        (k_storage > 64 || n_cube > 64)) {
+        return "conv3x3-channel-range";
+    }
+    if (task->enabled_blocks != blocks &&
+        task->enabled_blocks != (blocks | ROCKCHIP_RKNN_BLOCK_DPU_RDMA)) {
+        return "block-combination";
+    }
+    if (task->dpu.output_precision != 4) {
+        return "output-precision";
+    }
+    if (!rockchip_rknn_pipeline_is_captured_profile(task, stage)) {
+        return "stage-profile";
+    }
+    return "accepted";
+}
+
 static size_t rockchip_rknn_feature_index(unsigned int width,
                                           unsigned int height,
                                           unsigned int atom,
@@ -1561,6 +1618,7 @@ static bool rockchip_rknn_fetch_pipeline_task(
     RockchipRKNNDPUStageSnapshot stage = {};
     uint32_t next_iova;
     uint32_t next_amount;
+    const char *profile_reason;
     bool decoded;
 
     trace_rockchip_rknn_task_fetch(s->core_index, index, iova,
@@ -1586,9 +1644,26 @@ static bool rockchip_rknn_fetch_pipeline_task(
         s->pending_dpu_stage = stage;
     }
     if (decoded) {
-        s->pending_pipeline_valid =
-            rockchip_rknn_pipeline_is_captured_profile(&task, &stage);
+        profile_reason = rockchip_rknn_pipeline_profile_reason(&task, &stage);
+        s->pending_pipeline_valid = !strcmp(profile_reason, "accepted");
+    } else {
+        profile_reason = "decode";
     }
+    trace_rockchip_rknn_pipeline_profile(
+        s->core_index, index, file->enabled_blocks, decoded,
+        s->pending_pipeline_valid, profile_reason, task.core.depthwise,
+        task.dpu.output_precision);
+    trace_rockchip_rknn_pipeline_profile_input(
+        s->core_index, index,
+        task.cna.input.width, task.cna.input.height,
+        task.cna.input_channels_valid, task.cna.input.channels,
+        task.cna.kernel_width, task.cna.kernel_height,
+        task.cna.stride_x, task.cna.stride_y);
+    trace_rockchip_rknn_pipeline_profile_output(
+        s->core_index, index,
+        task.dpu.output.width, task.dpu.output.height,
+        task.cna.weight_kernels, task.dpu.output_channels_valid,
+        task.dpu.output.channels);
 
     if (index + 1 < s->pending_task_count) {
         if (!rockchip_rknn_register_read(file, ROCKCHIP_RKNN_DOMAIN_PC,
