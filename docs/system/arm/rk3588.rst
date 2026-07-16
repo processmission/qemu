@@ -82,7 +82,7 @@ or slave-mode CNA/CORE/DPU MMIO writes into banked register files, then decodes
 an immutable hardware-pipeline task.  Slave mode is selected with
 ``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
 The current integer backend executes signed INT8 CNA/MAC pipelines with
-signed INT32 DPU output.  It covers width-one Matmul-style surfaces,
+signed INT8 and INT32 DPU output.  It covers width-one Matmul-style surfaces,
 two-dimensional 1x1 direct convolution with stride one and no padding, and
 3x3 direct convolution with stride one or two and one-cell top/left padding.
 The stride-one profile also covers the hardware-observed asymmetric case with
@@ -90,7 +90,9 @@ left/bottom padding but no top/right padding.
 INT8 depthwise convolution is executed when CNA and DPU select convolution
 mode 3 and CORE enables depthwise operation.  Compact weights are consumed in
 kernel-row, kernel-column, channel order, and each output channel multiplies
-only the corresponding input channel.
+only the corresponding input channel.  CNA ``PAD_CON1`` supplies the input
+domain padding value; interleaved input converts it through the per-channel
+CVT path before convolution.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
@@ -210,9 +212,11 @@ DPU WDMA channel, width, and height fields are checked against the cube size.
 The DPU ``DATA_CUBE_HEIGHT.MINMAX_CTL`` field is decoded and non-zero values
 are reported as unsupported until min/max output semantics are modeled.
 The INT8 QD BRDMA path additionally requires the board-validated external
-CPEND operand selection (``BS_OW_CFG=0x125`` and ``BS_OW_OP=0``); other CPEND
-operand and bypass modes are reported as unsupported until their semantics
-are modeled.  Hardware-level shape checks use the documented register
+CPEND operand selection (``BS_OW_CFG=0x125`` for ordinary convolution and
+``0x36d`` for depthwise, with ``BS_OW_OP=0``); the corresponding BRDMA feature
+modes are ``0x7810`` and ``0x7816``.  Other CPEND operand and bypass modes are
+reported as unsupported until their semantics are modeled.  Hardware-level
+shape checks use the documented register
 relationships.  The direct INT32 executor uses a four-channel storage atom.
 The depthwise INT32 path derives its channel-plane width and rows per surface
 from the DPU cube channels, valid channels, output atom, and ``SURFACE_ADD``;
