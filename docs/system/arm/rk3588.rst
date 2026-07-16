@@ -113,6 +113,15 @@ features use eight-channel FP16 atoms, conversion is round-to-nearest-even,
 and destination padding lanes are zero.  BS, BN, EW, BRDMA, and ERDMA must be
 bypassed for this mode; unsupported flying-mode, precision, converter,
 padding, notch, and layout controls fail before DMA.
+The DPU-RDMA FP16 LUT profile is also register-driven.  It accepts FP16 input
+surfaces, applies the decoded BN FP16 multiplier and FP32 add operand, selects
+the LE or LO table using the configured LUT boundaries and five-bit index
+fraction, performs rounded adjacent-entry interpolation, and converts the
+result using ``OUT_CVT`` ``minus_exp`` before FP16 writeback.  The validated
+profile includes the board-observed LE underflow clamp and table-specific
+output offset behavior.  Its LUT road, slope, precision, and stage controls
+are capability-checked; unsupported combinations fail before DMA rather than
+being treated as this profile.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
