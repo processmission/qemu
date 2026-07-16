@@ -103,8 +103,19 @@ FP16 or FP32.  FP16 grouped weights use the hardware's 16-output-channel
 groups, while tensor dimensions, strides, and channel validity remain
 register-derived.  The current FP16 profile requires direct CNA/CORE/DPU
 execution, bypassed BS/BN/EW stages, zero ``PAD_CON1``, and a destination
-surface stride large enough for one complete surface; unsupported controls
-fail explicitly rather than being silently ignored.
+surface stride large enough for one complete surface.  For FP16
+partial-channel output, ``OFFSET_PEND`` supplies the raw16 value for storage
+lanes beyond ``OUTPUT_CHANNELS_VALID``; the same control remains unsupported
+for other precisions.  Unsupported controls fail explicitly rather than
+being silently ignored.
+The FP16 compact profile selected by ``NONALIGN_DMA``, ``GROUP_LINE_OFF``,
+and ``ARGB_IN=8`` reads the register-sized input atom and consumes contiguous
+input tensor and output-major weights without synthetic 32-input or 16-output
+grouping.  This also covers multi-surface channel reductions and broadcasts
+with register-derived valid and storage channel counts.
+``BS_OW_CFG=0x126`` writes its FP16 storage lanes contiguously when the
+destination surface stride is zero.  This covers the board-validated 1x1
+broadcast reduction while retaining register-derived tensor dimensions.
 The DPU-only main-RDMA path also executes signed INT8 feature data to FP16
 writeback.  It derives dimensions, valid and storage channels, source and
 destination addresses, and destination surface stride from the DPU and
@@ -119,9 +130,25 @@ the LE or LO table using the configured LUT boundaries and five-bit index
 fraction, performs rounded adjacent-entry interpolation, and converts the
 result using ``OUT_CVT`` ``minus_exp`` before FP16 writeback.  The validated
 profile includes the board-observed LE underflow clamp and table-specific
-output offset behavior.  Its LUT road, slope, precision, and stage controls
+rounding: LE interpolation truncates before applying its output offset, while
+LO interpolation rounds upward without that offset.  Its LUT road, slope,
+precision, and stage controls
 are capability-checked; unsupported combinations fail before DMA rather than
-being treated as this profile.
+being treated as this profile.  Tensor dimensions and valid/storage channels
+remain register-derived: all valid FP16 lanes are converted, including the
+board-observed 1,008-lane softmax stage, while non-valid storage tail lanes
+are written as zero.
+The DPU-RDMA FP16 min/max profile scans all storage channels, including
+partial-channel padding lanes.  ``MINMAX_CTL`` selects the global minimum or
+maximum; when probability-only mode is clear, the second raw16 result word is
+the first matching storage-lane index.  The result is written to the decoded
+``DST_BASE_ADDR``.  Remaining auxiliary result words are not assigned stable
+semantics because board captures show submit-context-dependent values.
+The standalone FP16 EW profile consumes the decoded ERDMA FP16 operand and
+performs the board-validated subtract or divide-and-convert operation.  Its EW
+algorithm, per-lane ERDMA operand tensor, data format, source layout, and
+output stride are capability-checked; mutations of those controls fail before
+output DMA.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
