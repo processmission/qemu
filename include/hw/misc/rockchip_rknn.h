@@ -33,6 +33,9 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
 #define ROCKCHIP_RKNN_PRESENT_R_MAX 32
+#define ROCKCHIP_RKNN_PENDING_WRITE_R_MAX \
+    (ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT * 2 * \
+     ROCKCHIP_RKNN_PRESENT_R_MAX)
 
 typedef struct RockchipRKNNDomainRuntimeState {
     uint32_t pointer_value;
@@ -99,6 +102,8 @@ struct RockchipRKNNCoreState {
     MemoryRegion dpu_reg_array;
     MemoryRegion global_reg_array;
     RockchipRKNNRegisterFile slave_file;
+    RockchipRKNNRegisterFile pending_file;
+    uint32_t pending_register_writes[ROCKCHIP_RKNN_PENDING_WRITE_R_MAX];
 
     QEMUTimer complete_timer;
     qemu_irq irq;

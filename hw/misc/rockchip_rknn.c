@@ -109,6 +109,7 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_WDMA_SIZE_1 0x05c
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV 0x125
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE 0x36d
+#define ROCKCHIP_RKNN_DPU_BS_OW_CFG_RDMA 0x126
 #define ROCKCHIP_RKNN_DPU_BS_OW_OP_SUPPORTED 0
 #define ROCKCHIP_RKNN_DPU_RDMA_DATA_CUBE_WIDTH 0x00c
 #define ROCKCHIP_RKNN_DPU_RDMA_DATA_CUBE_HEIGHT 0x010
@@ -262,6 +263,19 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_ERDMA_DATA_MODE_SHIFT 30
 #define ROCKCHIP_RKNN_DPU_ERDMA_DATA_MODE_LENGTH 2
 #define ROCKCHIP_RKNN_DPU_ERDMA_DISABLE BIT(0)
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_FLYING_MODE BIT(0)
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_CONV_MODE_SHIFT 1
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_CONV_MODE_LENGTH 2
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_FP16_TO_FP32 BIT(3)
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_MAIN_DISABLE BIT(4)
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_PROCESS_PRECISION_SHIFT 5
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_PROCESS_PRECISION_LENGTH 3
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_COMBINATION_SHIFT 8
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_COMBINATION_LENGTH 3
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_BURST_LENGTH_SHIFT 11
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_BURST_LENGTH_LENGTH 4
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_INPUT_PRECISION_SHIFT 15
+#define ROCKCHIP_RKNN_DPU_RDMA_FEATURE_INPUT_PRECISION_LENGTH 3
 #define ROCKCHIP_RKNN_DPU_FEATURE_MODE_OUTPUT_MODE_SHIFT 1
 #define ROCKCHIP_RKNN_DPU_FEATURE_MODE_OUTPUT_MODE_LENGTH 2
 #define ROCKCHIP_RKNN_DPU_FEATURE_MODE_FLYING_MODE BIT(0)
@@ -278,7 +292,7 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_FEATURE_MODE_SURF_LEN_LENGTH 16
 #define ROCKCHIP_RKNN_DPU_FEATURE_MODE_SUPPORTED_OUTPUT_MODE 2
 #define ROCKCHIP_RKNN_DEFAULT_MAX_HOST_BYTES (UINT64_C(256) * 1024 * 1024)
-#define ROCKCHIP_RKNN_DEFAULT_MAX_MAC_OPERATIONS (UINT64_C(1) << 24)
+#define ROCKCHIP_RKNN_DEFAULT_MAX_MAC_OPERATIONS (UINT64_C(1) << 26)
 #define ROCKCHIP_RKNN_DEFAULT_MAX_PPU_WORK_ITEMS (UINT64_C(1) << 24)
 #define ROCKCHIP_RKNN_POINTER_BANK BIT(0)
 #define ROCKCHIP_RKNN_POINTER_PP_EN BIT(1)
@@ -481,6 +495,7 @@ typedef enum RockchipRKNNExecutionMode {
     ROCKCHIP_RKNN_EXECUTION_DPU_INT32,
     ROCKCHIP_RKNN_EXECUTION_DPU_INT8_QD_BRDMA,
     ROCKCHIP_RKNN_EXECUTION_DPU_FP16,
+    ROCKCHIP_RKNN_EXECUTION_DPU_RDMA_INT8_TO_FP16,
     ROCKCHIP_RKNN_EXECUTION_PPU_BYPASS,
     ROCKCHIP_RKNN_EXECUTION_PPU_INT4_MAX_POOL,
 } RockchipRKNNExecutionMode;
@@ -619,9 +634,10 @@ static void rockchip_rknn_set_pointer_state(
 
 }
 
-static bool rockchip_rknn_register_write(RockchipRKNNRegisterFile *file,
-                                         uint32_t target, uint32_t reg,
-                                         uint32_t value)
+static bool rockchip_rknn_register_write(
+    RockchipRKNNRegisterFile *file, uint32_t target, uint32_t reg,
+    uint32_t value,
+    uint32_t writes[ROCKCHIP_RKNN_PENDING_WRITE_R_MAX])
 {
     RockchipRKNNRegcmdDomain domain;
     RockchipRKNNDomainState *state;
@@ -629,6 +645,7 @@ static bool rockchip_rknn_register_write(RockchipRKNNRegisterFile *file,
     uint32_t base;
     uint32_t rel;
     uint32_t index;
+    unsigned int bank_index;
 
     if (!rockchip_rknn_domain_from_target(target, &domain, &base) ||
         reg < base || reg >= base + ROCKCHIP_RKNN_WINDOW_SIZE) {
@@ -648,19 +665,25 @@ static bool rockchip_rknn_register_write(RockchipRKNNRegisterFile *file,
         state->write_bank = runtime->pointer_bank;
         value = runtime->pointer_value;
     }
-    bank = &state->bank[domain == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
-                       state->write_bank];
+    bank_index = domain == ROCKCHIP_RKNN_DOMAIN_PC ? 0 : state->write_bank;
+    bank = &state->bank[bank_index];
     bank->regs[index] = value;
     bank->present[index / 32] |= BIT(index % 32);
+    if (writes) {
+        writes[((domain * 2 + bank_index) *
+                ROCKCHIP_RKNN_PRESENT_R_MAX) + index / 32] |=
+            BIT(index % 32);
+    }
     return true;
 }
 
 static void rockchip_rknn_register_file_init(
     RockchipRKNNRegisterFile *file,
-    const RockchipRKNNDomainRuntimeState runtime[ROCKCHIP_RKNN_DOMAIN_COUNT])
+    const RockchipRKNNRegisterFile *persistent)
 {
+    memcpy(file->domain, persistent->domain, sizeof(file->domain));
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
-        file->runtime[i] = runtime[i];
+        file->runtime[i] = persistent->runtime[i];
         file->domain[i].write_bank = i == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
                                      file->runtime[i].pointer_bank;
     }
@@ -755,7 +778,8 @@ static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
             file->block_enable = true;
             continue;
         }
-        if (!rockchip_rknn_register_write(file, target, reg, value)) {
+        if (!rockchip_rknn_register_write(
+                file, target, reg, value, s->pending_register_writes)) {
             return false;
         }
         if (target == ROCKCHIP_RKNN_REGCMD_TARGET_DPU &&
@@ -1168,6 +1192,16 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
                 ROCKCHIP_RKNN_DPU_RDMA_WEIGHT, &rdma_weight)) {
             return false;
         }
+        if (!(rdma_feature &
+              ROCKCHIP_RKNN_DPU_RDMA_FEATURE_MAIN_DISABLE) &&
+            (!rockchip_rknn_register_read(
+                 file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
+                 ROCKCHIP_RKNN_DPU_RDMA_SRC_BASE_ADDR, &rdma_src) ||
+             !rockchip_rknn_register_read(
+                 file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
+                 ROCKCHIP_RKNN_DPU_RDMA_SURF_NOTCH, &rdma_notch))) {
+            return false;
+        }
         if (rdma_erdma & ROCKCHIP_RKNN_DPU_ERDMA_DISABLE) {
             if (!rockchip_rknn_register_read(
                     file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
@@ -1179,17 +1213,11 @@ static bool rockchip_rknn_decode_pipeline(RockchipRKNNCoreState *s,
             }
         } else if (!rockchip_rknn_register_read(
                        file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
-                       ROCKCHIP_RKNN_DPU_RDMA_SRC_BASE_ADDR, &rdma_src) ||
-                   !rockchip_rknn_register_read(
-                       file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
                        ROCKCHIP_RKNN_DPU_RDMA_EW_BASE_ADDR, &rdma_ew) ||
                    !rockchip_rknn_register_read(
                        file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
                        ROCKCHIP_RKNN_DPU_RDMA_EW_SURF_STRIDE,
                        &rdma_ew_stride) ||
-                   !rockchip_rknn_register_read(
-                       file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
-                       ROCKCHIP_RKNN_DPU_RDMA_SURF_NOTCH, &rdma_notch) ||
                    !rockchip_rknn_register_read(
                        file, ROCKCHIP_RKNN_DOMAIN_DPU_RDMA,
                        ROCKCHIP_RKNN_DPU_RDMA_EW_SURF_NOTCH,
@@ -1501,9 +1529,11 @@ static bool rockchip_rknn_erdma_layout_is_supported(
 }
 
 static bool rockchip_rknn_dpu_feature_mode_is_supported(uint32_t feature_mode,
-                                                         uint8_t conv_mode)
+                                                         uint8_t conv_mode,
+                                                         bool flying_mode)
 {
-    return !(feature_mode & ROCKCHIP_RKNN_DPU_FEATURE_MODE_FLYING_MODE) &&
+    return !!(feature_mode & ROCKCHIP_RKNN_DPU_FEATURE_MODE_FLYING_MODE) ==
+               flying_mode &&
            !(feature_mode & (ROCKCHIP_RKNN_DPU_FEATURE_MODE_COMB_USE |
                              ROCKCHIP_RKNN_DPU_FEATURE_MODE_TP_EN |
                              ROCKCHIP_RKNN_DPU_FEATURE_MODE_NONALIGN)) &&
@@ -1524,6 +1554,35 @@ static bool rockchip_rknn_dpu_feature_mode_is_supported(uint32_t feature_mode,
                      ROCKCHIP_RKNN_DPU_FEATURE_MODE_OUTPUT_MODE_SHIFT,
                      ROCKCHIP_RKNN_DPU_FEATURE_MODE_OUTPUT_MODE_LENGTH) ==
                ROCKCHIP_RKNN_DPU_FEATURE_MODE_SUPPORTED_OUTPUT_MODE;
+}
+
+static bool rockchip_rknn_dpu_rdma_main_int8_is_supported(
+    uint32_t feature_mode)
+{
+    return !(feature_mode & ~MAKE_64BIT_MASK(0, 18)) &&
+           (feature_mode & ROCKCHIP_RKNN_DPU_RDMA_FEATURE_FLYING_MODE) &&
+           !(feature_mode & (ROCKCHIP_RKNN_DPU_RDMA_FEATURE_FP16_TO_FP32 |
+                             ROCKCHIP_RKNN_DPU_RDMA_FEATURE_MAIN_DISABLE)) &&
+           !extract32(
+               feature_mode,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_CONV_MODE_SHIFT,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_CONV_MODE_LENGTH) &&
+           !extract32(
+               feature_mode,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_PROCESS_PRECISION_SHIFT,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_PROCESS_PRECISION_LENGTH) &&
+           !extract32(
+               feature_mode,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_COMBINATION_SHIFT,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_COMBINATION_LENGTH) &&
+           extract32(
+               feature_mode,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_BURST_LENGTH_SHIFT,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_BURST_LENGTH_LENGTH) == 0xf &&
+           !extract32(
+               feature_mode,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_INPUT_PRECISION_SHIFT,
+               ROCKCHIP_RKNN_DPU_RDMA_FEATURE_INPUT_PRECISION_LENGTH);
 }
 
 static bool rockchip_rknn_cna_interleaved_input(
@@ -1556,6 +1615,47 @@ static bool rockchip_rknn_depthwise_int32_layout(
 
 static bool rockchip_rknn_strided_output_layout_valid(
     const RockchipRKNNTensorView *view, size_t element_bytes);
+
+static bool rockchip_rknn_dpu_rdma_int8_to_fp16_is_supported(
+    const RockchipRKNNPipelineTask *task)
+{
+    const RockchipRKNNDPUConfig *dpu = &task->dpu;
+    const RockchipRKNNDpuRdmaConfig *rdma = &task->dpu_rdma;
+    uint64_t surface_add = (uint64_t)dpu->output.width *
+                           dpu->output.height * sizeof(uint16_t);
+
+    return dpu->output.width && dpu->output.height &&
+           dpu->output_channels_valid &&
+           dpu->output_channels_valid <= dpu->output.channels &&
+           rockchip_rknn_dpu_feature_mode_is_supported(
+               dpu->feature_mode, 0, true) &&
+           dpu->data_format == (2U << 29) &&
+           !dpu->offset_pend && !dpu->output_notch_0 &&
+           !dpu->output_notch_1 && !dpu->minmax_ctl &&
+           dpu->wdma_channels == dpu->output.channels &&
+           dpu->wdma_width == dpu->output.width &&
+           dpu->wdma_height == dpu->output.height &&
+           dpu->bs_cfg == 0x53 &&
+           dpu->bs_ow_cfg == ROCKCHIP_RKNN_DPU_BS_OW_CFG_RDMA &&
+           dpu->bs_ow_op == ROCKCHIP_RKNN_DPU_BS_OW_OP_SUPPORTED &&
+           dpu->bn_cfg == 0x53 && dpu->ew_cfg == 0x383 &&
+           !dpu->out_cvt_offset && dpu->out_cvt_scale == 1 &&
+           !dpu->out_cvt_shift && !dpu->out_cvt_type &&
+           dpu->out_fp32_to_fp16 &&
+           surface_add <= UINT32_MAX >> 4 &&
+           dpu->surface_add == surface_add << 4 &&
+           rockchip_rknn_strided_output_layout_valid(
+               &dpu->output, sizeof(uint16_t)) &&
+           rdma->width == dpu->output.width &&
+           rdma->height == dpu->output.height &&
+           rdma->channels == dpu->output.channels &&
+           !rdma->brdma_cfg &&
+           rdma->erdma_cfg == ROCKCHIP_RKNN_DPU_ERDMA_DISABLE &&
+           rockchip_rknn_dpu_rdma_main_int8_is_supported(
+               rdma->feature_mode) &&
+           !rdma->src_dma_cfg && !rdma->surface_notch && !rdma->pad_cfg &&
+           rdma->weight == 0x01010101;
+}
 
 static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
     const RockchipRKNNPipelineTask *task,
@@ -1625,6 +1725,15 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
         *reason = "ppu-int4-max-pool";
         return ROCKCHIP_RKNN_EXECUTION_PPU_INT4_MAX_POOL;
     }
+    if (task->enabled_blocks == (ROCKCHIP_RKNN_BLOCK_DPU |
+                                 ROCKCHIP_RKNN_BLOCK_DPU_RDMA)) {
+        if (!rockchip_rknn_dpu_rdma_int8_to_fp16_is_supported(task)) {
+            *reason = "dpu-rdma-int8-fp16-control";
+            return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
+        }
+        *reason = "dpu-rdma-int8-fp16";
+        return ROCKCHIP_RKNN_EXECUTION_DPU_RDMA_INT8_TO_FP16;
+    }
     if (task->enabled_blocks != dpu_blocks &&
         task->enabled_blocks !=
             (dpu_blocks | ROCKCHIP_RKNN_BLOCK_DPU_RDMA)) {
@@ -1632,7 +1741,7 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
         return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
     }
     if (!rockchip_rknn_dpu_feature_mode_is_supported(
-            task->dpu.feature_mode, task->core.depthwise ? 3 : 0)) {
+            task->dpu.feature_mode, task->core.depthwise ? 3 : 0, false)) {
         *reason = "dpu-feature-mode";
         return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
     }
@@ -1928,6 +2037,16 @@ static bool rockchip_rknn_mac_budget_valid(const RockchipRKNNCoreState *s,
     }
     return extra <= UINT64_MAX - macs &&
            macs + extra <= s->functional_max_mac_operations;
+}
+
+static bool rockchip_rknn_dpu_work_budget_valid(
+    const RockchipRKNNCoreState *s, uint32_t width, uint32_t height,
+    uint32_t channels)
+{
+    uint64_t work_items;
+
+    return rockchip_rknn_u64_mul3(width, height, channels, &work_items) &&
+           work_items <= s->functional_max_mac_operations;
 }
 
 static bool rockchip_rknn_dma_length_valid(size_t length)
@@ -2230,9 +2349,7 @@ static Int128 rockchip_rknn_ew_operand_cvt(
 
 static bool rockchip_rknn_fetch_pipeline_task(
     RockchipRKNNCoreState *s, uint32_t index, uint32_t iova,
-    uint32_t command_count,
-    const RockchipRKNNDomainRuntimeState runtime[
-        ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT])
+    uint32_t command_count)
 {
     g_autofree RockchipRKNNRegisterFile *file =
         g_new0(RockchipRKNNRegisterFile, 1);
@@ -2250,7 +2367,9 @@ static bool rockchip_rknn_fetch_pipeline_task(
     memset(&s->pending_dpu_stage, 0, sizeof(s->pending_dpu_stage));
     s->pending_pipeline_decoded = false;
     s->pending_domain_runtime_valid = false;
-    rockchip_rknn_register_file_init(file, runtime);
+    memset(s->pending_register_writes, 0,
+           sizeof(s->pending_register_writes));
+    rockchip_rknn_register_file_init(file, &s->slave_file);
     if (!rockchip_rknn_fetch_register_file(s, file, iova, command_count)) {
         trace_rockchip_rknn_task_fetch_error(s->core_index, index,
                                               "regcmd-fetch");
@@ -2258,6 +2377,7 @@ static bool rockchip_rknn_fetch_pipeline_task(
     }
     memcpy(s->pending_domain_runtime, file->runtime,
            sizeof(file->runtime));
+    s->pending_file = *file;
     s->pending_domain_runtime_valid = true;
     task.enabled_blocks = file->enabled_blocks;
     decoded = rockchip_rknn_decode_pipeline(s, &task, &stage, file);
@@ -2340,8 +2460,7 @@ static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
     }
 
     s->pending_task_count = task_count;
-    if (!rockchip_rknn_fetch_pipeline_task(s, 0, iova, command_count,
-                                            s->domain_runtime)) {
+    if (!rockchip_rknn_fetch_pipeline_task(s, 0, iova, command_count)) {
         s->pending_task_count = 0;
         s->pending_fetch_error = true;
     }
@@ -2370,12 +2489,15 @@ static void rockchip_rknn_prepare_slave_pipeline(RockchipRKNNCoreState *s,
     s->pending_final_ppu_bank = 0;
     s->pending_dma_error_bits = 0;
     s->slave_file.enabled_blocks = enabled_blocks & 0x7f;
-    memcpy(s->pending_domain_runtime, s->slave_file.runtime,
-           sizeof(s->slave_file.runtime));
+    memset(s->pending_register_writes, 0,
+           sizeof(s->pending_register_writes));
+    s->pending_file = s->slave_file;
+    memcpy(s->pending_domain_runtime, s->pending_file.runtime,
+           sizeof(s->pending_file.runtime));
     s->pending_domain_runtime_valid = true;
-    task.enabled_blocks = s->slave_file.enabled_blocks;
+    task.enabled_blocks = s->pending_file.enabled_blocks;
     *s->pending_pipeline = task;
-    if (rockchip_rknn_decode_pipeline(s, &task, &stage, &s->slave_file)) {
+    if (rockchip_rknn_decode_pipeline(s, &task, &stage, &s->pending_file)) {
         *s->pending_pipeline = task;
         s->pending_dpu_stage = stage;
         s->pending_pipeline_decoded = true;
@@ -3092,6 +3214,85 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_fp16(
     return ROCKCHIP_RKNN_EXECUTION_OK;
 }
 
+static RockchipRKNNExecutionResult
+rockchip_rknn_execute_dpu_rdma_int8_to_fp16(
+    RockchipRKNNCoreState *s, const RockchipRKNNPipelineTask *task)
+{
+    const RockchipRKNNDpuRdmaConfig *rdma = &task->dpu_rdma;
+    const RockchipRKNNTensorView *output_view = &task->dpu.output;
+    g_autofree int8_t *input = NULL;
+    g_autofree uint16_t *output = NULL;
+    size_t input_storage_channels;
+    size_t output_storage_channels;
+    size_t input_values;
+    size_t output_values;
+    size_t input_bytes;
+    size_t output_bytes;
+    uint64_t host_bytes = 0;
+
+    if (!rockchip_rknn_dpu_work_budget_valid(
+            s, output_view->width, output_view->height,
+            task->dpu.output_channels_valid) ||
+        !rockchip_rknn_size_round_up(rdma->channels, 16,
+                                     &input_storage_channels) ||
+        !rockchip_rknn_size_round_up(output_view->channels,
+                                     output_view->atom,
+                                     &output_storage_channels) ||
+        !rockchip_rknn_size_mul3(rdma->width, rdma->height,
+                                 input_storage_channels, &input_values) ||
+        !rockchip_rknn_size_mul3(output_view->width, output_view->height,
+                                 output_storage_channels, &output_values) ||
+        !rockchip_rknn_size_mul(input_values, sizeof(*input), &input_bytes) ||
+        !rockchip_rknn_size_mul(output_values, sizeof(*output),
+                                &output_bytes) ||
+        !rockchip_rknn_iova_length_valid(rdma->src_iova, input_bytes) ||
+        !rockchip_rknn_strided_output_layout_valid(
+            output_view, sizeof(*output)) ||
+        !rockchip_rknn_host_budget_add(s, &host_bytes, input_bytes) ||
+        !rockchip_rknn_host_budget_add(s, &host_bytes, output_bytes)) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
+
+    if (!rockchip_rknn_iommu_range_mapped(s, rdma->src_iova,
+                                           input_bytes, false)) {
+        return ROCKCHIP_RKNN_EXECUTION_DMA_READ_FAULT;
+    }
+
+    input = g_try_malloc(input_bytes);
+    output = g_try_malloc0(output_bytes);
+    if (!input || !output) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
+    if (!rockchip_rknn_iommu_dma(s, rdma->src_iova, input,
+                                 input_bytes, false)) {
+        return ROCKCHIP_RKNN_EXECUTION_DMA_READ_FAULT;
+    }
+
+    for (unsigned int row = 0; row < output_view->height; row++) {
+        for (unsigned int column = 0; column < output_view->width; column++) {
+            for (unsigned int channel = 0;
+                 channel < task->dpu.output_channels_valid; channel++) {
+                size_t input_index = rockchip_rknn_feature_index(
+                    rdma->width, rdma->height, 16, channel, row, column);
+                size_t output_index = rockchip_rknn_feature_index(
+                    output_view->width, output_view->height,
+                    output_view->atom, channel, row, column);
+                float_status status = rockchip_rknn_fp16_status();
+                float32 value = int32_to_float32(input[input_index], &status);
+
+                output[output_index] = cpu_to_le16(float16_val(
+                    float32_to_float16(value, true, &status)));
+            }
+        }
+    }
+
+    if (!rockchip_rknn_write_strided_output(
+            s, output_view, output, sizeof(*output))) {
+        return ROCKCHIP_RKNN_EXECUTION_DMA_WRITE_FAULT;
+    }
+    return ROCKCHIP_RKNN_EXECUTION_OK;
+}
+
 static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     RockchipRKNNCoreState *s, const RockchipRKNNPipelineTask *task,
     const RockchipRKNNDPUStageSnapshot *stage,
@@ -3103,6 +3304,9 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     }
     if (mode == ROCKCHIP_RKNN_EXECUTION_DPU_FP16) {
         return rockchip_rknn_execute_fp16(s, task);
+    }
+    if (mode == ROCKCHIP_RKNN_EXECUTION_DPU_RDMA_INT8_TO_FP16) {
+        return rockchip_rknn_execute_dpu_rdma_int8_to_fp16(s, task);
     }
     const bool int8_qd_brdma =
         mode == ROCKCHIP_RKNN_EXECUTION_DPU_INT8_QD_BRDMA;
@@ -3641,12 +3845,57 @@ static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s)
     };
     uint32_t enabled_blocks = s->pending_pipeline->enabled_blocks;
 
-    memcpy(s->domain_runtime, s->pending_domain_runtime,
-           sizeof(s->domain_runtime));
+    for (unsigned int domain = 0;
+         domain < ROCKCHIP_RKNN_DOMAIN_COUNT; domain++) {
+        for (unsigned int bank = 0; bank < 2; bank++) {
+            RockchipRKNNRegisterBank *destination =
+                &s->slave_file.domain[domain].bank[bank];
+            const RockchipRKNNRegisterBank *source =
+                &s->pending_file.domain[domain].bank[bank];
 
+            for (unsigned int index = 0;
+                 index < ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX; index++) {
+                uint32_t bit = BIT(index % 32);
+                size_t word = ((domain * 2 + bank) *
+                               ROCKCHIP_RKNN_PRESENT_R_MAX) + index / 32;
+
+                if (s->pending_register_writes[word] & bit) {
+                    destination->regs[index] = source->regs[index];
+                    destination->present[index / 32] |= bit;
+                }
+            }
+        }
+    }
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
+        RockchipRKNNDomainRuntimeState committed =
+            s->pending_domain_runtime[i];
+        uint32_t pointer_mask = 0;
+
+        if (i != ROCKCHIP_RKNN_DOMAIN_PC) {
+            unsigned int pointer_index = A_CNA_S_POINTER / sizeof(uint32_t);
+
+            for (unsigned int bank = 0; bank < 2; bank++) {
+                size_t word = ((i * 2 + bank) *
+                               ROCKCHIP_RKNN_PRESENT_R_MAX) +
+                              pointer_index / 32;
+
+                pointer_mask |= s->pending_register_writes[word] &
+                                BIT(pointer_index % 32);
+            }
+        }
         if (enabled_blocks & domain_blocks[i]) {
-            rockchip_rknn_commit_domain_runtime(&s->domain_runtime[i]);
+            rockchip_rknn_commit_domain_runtime(&committed);
+        }
+        if (pointer_mask) {
+            s->domain_runtime[i] = committed;
+        } else {
+            s->domain_runtime[i] = s->slave_file.runtime[i];
+            if (enabled_blocks & domain_blocks[i]) {
+                s->domain_runtime[i].executor_bank =
+                    committed.executor_bank;
+            }
+            s->domain_runtime[i].pointer_value =
+                rockchip_rknn_encode_pointer_state(&s->domain_runtime[i]);
         }
     }
 
@@ -3659,6 +3908,13 @@ static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s)
     s->ppu_rdma_regs[R_PPU_RDMA_S_POINTER] =
         rockchip_rknn_encode_pointer_state(
             &s->domain_runtime[ROCKCHIP_RKNN_DOMAIN_PPU_RDMA]);
+    memcpy(s->slave_file.runtime, s->domain_runtime,
+           sizeof(s->slave_file.runtime));
+    for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
+        s->slave_file.domain[i].write_bank =
+            i == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
+            s->slave_file.runtime[i].pointer_bank;
+    }
 }
 
 static const char *rockchip_rknn_regcmd_unhandled_kind(uint64_t raw,
@@ -3787,7 +4043,7 @@ static void rockchip_rknn_complete(void *opaque)
             s->pending_task_index < s->pending_task_count &&
             !rockchip_rknn_fetch_pipeline_task(
                 s, s->pending_task_index, s->pending_next_iova,
-                s->pending_next_command_count, s->domain_runtime)) {
+                s->pending_next_command_count)) {
             s->pending_fetch_error = true;
         }
         task_finished = s->pending_fetch_error ||
@@ -3821,14 +4077,6 @@ static void rockchip_rknn_complete(void *opaque)
         s->pc_regs[R_PC_TASK_STATUS] = slave_submission ? 0x00005000 :
             s->pc_regs[R_PC_TASK_CON] & ROCKCHIP_RKNN_TASK_NUMBER_MASK;
     }
-    if (slave_submission) {
-        memcpy(s->slave_file.runtime, s->domain_runtime,
-               sizeof(s->slave_file.runtime));
-        for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
-            s->slave_file.domain[i].write_bank =
-                s->slave_file.runtime[i].pointer_bank;
-        }
-    }
     completed_success = !s->pending_fetch_error &&
         !s->pending_execution_error && task_finished &&
         (s->functional ? s->pending_task_count : true);
@@ -3856,6 +4104,8 @@ static void rockchip_rknn_complete(void *opaque)
     s->pending_final_ppu_success = false;
     s->pending_final_ppu_bank = 0;
     s->pending_dma_error_bits = 0;
+    memset(s->pending_register_writes, 0,
+           sizeof(s->pending_register_writes));
     s->pending_slave = false;
     s->busy = false;
     s->pc_regs[R_PC_OPERATION_ENABLE] &= ~R_PC_OPERATION_ENABLE_OP_EN_MASK;
@@ -4470,7 +4720,7 @@ static void rockchip_rknn_slave_domain_write(
         rockchip_rknn_lut_write(s, rel, value);
     }
     rockchip_rknn_register_write(&s->slave_file, targets[domain],
-                                 bases[domain] + rel, value);
+                                 bases[domain] + rel, value, NULL);
 }
 
 static uint64_t rockchip_rknn_cna_read(void *opaque, hwaddr addr,
@@ -4710,6 +4960,9 @@ static void rockchip_rknn_reset(DeviceState *dev)
     memset(s->domain_runtime, 0, sizeof(s->domain_runtime));
     memset(s->pending_domain_runtime, 0, sizeof(s->pending_domain_runtime));
     memset(&s->slave_file, 0, sizeof(s->slave_file));
+    memset(&s->pending_file, 0, sizeof(s->pending_file));
+    memset(s->pending_register_writes, 0,
+           sizeof(s->pending_register_writes));
     memset(s->lut, 0, sizeof(s->lut));
     s->lut_access_cfg = 0;
     s->lut_cfg = 0;
@@ -5157,6 +5410,12 @@ static const VMStateDescription vmstate_rockchip_rknn = {
         VMSTATE_STRUCT(slave_file, RockchipRKNNCoreState, 0,
                        vmstate_rockchip_rknn_register_file,
                        RockchipRKNNRegisterFile),
+        VMSTATE_STRUCT(pending_file, RockchipRKNNCoreState, 0,
+                       vmstate_rockchip_rknn_register_file,
+                       RockchipRKNNRegisterFile),
+        VMSTATE_UINT32_ARRAY(pending_register_writes,
+                             RockchipRKNNCoreState,
+                             ROCKCHIP_RKNN_PENDING_WRITE_R_MAX),
         VMSTATE_BOOL(pending_slave, RockchipRKNNCoreState),
         VMSTATE_UINT16_2DARRAY(lut, RockchipRKNNCoreState, 2,
                                ROCKCHIP_RKNN_LUT_ENTRIES),
