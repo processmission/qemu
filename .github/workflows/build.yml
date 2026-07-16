@@ -87,8 +87,10 @@ jobs:
         include:
           - arch: x86_64
             image: ubuntu-24.04
+            configure_options: ""
           - arch: aarch64
             image: ubuntu-24.04-arm
+            configure_options: --disable-docs
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
@@ -97,7 +99,9 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }}
+          ${{ matrix.configure_options }} &&
+          ninja -C build install'
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
