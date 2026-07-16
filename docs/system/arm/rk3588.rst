@@ -124,6 +124,13 @@ features use eight-channel FP16 atoms, conversion is round-to-nearest-even,
 and destination padding lanes are zero.  BS, BN, EW, BRDMA, and ERDMA must be
 bypassed for this mode; unsupported flying-mode, precision, converter,
 padding, notch, and layout controls fail before DMA.
+The main-RDMA FP16 BS path consumes FP16 input, adds the FP32 ``BS_ALU_CFG``
+operand, multiplies by the FP16 operand in ``BS_MUL_CFG``, and converts once
+to FP16 at writeback.  The ALU and multiplier bypass controls are modeled;
+unsupported source, truncate, shift, ReLU, BN, EW, converter, and RDMA
+layout controls fail before DMA.  Input and output dimensions, storage
+channels, valid channels, surface stride, and IOVA addresses are derived
+from registers and bounded by the functional backend's resource limits.
 The DPU-RDMA FP16 LUT profile is also register-driven.  It accepts FP16 input
 surfaces, applies the decoded BN FP16 multiplier and FP32 add operand, selects
 the LE or LO table using the configured LUT boundaries and five-bit index
