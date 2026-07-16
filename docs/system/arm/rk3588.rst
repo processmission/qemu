@@ -81,6 +81,10 @@ An experimental functional mode is available with
 or slave-mode CNA/CORE/DPU MMIO writes into banked register files, then decodes
 an immutable hardware-pipeline task.  Slave mode is selected with
 ``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
+PC task descriptors are incremental: register values in both hardware banks
+persist after completion, so a later sparse descriptor inherits fields that it
+does not rewrite.  The persistent banks and the in-flight task snapshot are
+both migration state.
 The current integer backend executes signed INT8 CNA/MAC pipelines with
 signed INT8 and INT32 DPU output.  It covers width-one Matmul-style surfaces,
 two-dimensional 1x1 direct convolution with stride one and no padding, and
@@ -101,6 +105,14 @@ register-derived.  The current FP16 profile requires direct CNA/CORE/DPU
 execution, bypassed BS/BN/EW stages, zero ``PAD_CON1``, and a destination
 surface stride large enough for one complete surface; unsupported controls
 fail explicitly rather than being silently ignored.
+The DPU-only main-RDMA path also executes signed INT8 feature data to FP16
+writeback.  It derives dimensions, valid and storage channels, source and
+destination addresses, and destination surface stride from the DPU and
+DPU-RDMA registers.  Source features use 16-channel INT8 atoms, destination
+features use eight-channel FP16 atoms, conversion is round-to-nearest-even,
+and destination padding lanes are zero.  BS, BN, EW, BRDMA, and ERDMA must be
+bypassed for this mode; unsupported flying-mode, precision, converter,
+padding, notch, and layout controls fail before DMA.
 The modeled data path includes CORE round-to-nearest-even truncate, immediate
 DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
 converter's two add/multiply orderings, signed offset, scale, shift, rounding,
@@ -176,7 +188,8 @@ IOMMU and stage status behavior.  Operator controls that are not implemented
 yet are reported as explicit execution capability errors rather than being
 treated as model or shape restrictions.  Functional execution defaults to
 QEMU host-safety ceilings of 256 MiB of aggregate temporary buffers,
-``2^24`` MAC operations per DPU task, and ``2^24`` work items per PPU task.
+``2^26`` MAC operations or element conversions per DPU task, and ``2^24``
+work items per PPU task.
 These are implementation safety boundaries rather than RK3588 shape limits;
 tasks exceeding them fail before allocation or DMA.  PC mode streams
 sequential task chains through one pending task snapshot and schedules one
