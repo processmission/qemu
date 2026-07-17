@@ -644,6 +644,14 @@ static void rockchip_rknn_set_pointer_state(
 
 }
 
+static unsigned int rockchip_rknn_domain_write_bank(
+    const RockchipRKNNDomainRuntimeState *runtime)
+{
+    return runtime->pointer_bank ^
+           (runtime->pointer_pingpong && runtime->pingpong_mode ?
+            runtime->executor_bank : 0);
+}
+
 static bool rockchip_rknn_register_write(
     RockchipRKNNRegisterFile *file, uint32_t target, uint32_t reg,
     uint32_t value,
@@ -672,7 +680,7 @@ static bool rockchip_rknn_register_write(
         RockchipRKNNDomainRuntimeState *runtime = &file->runtime[domain];
 
         rockchip_rknn_set_pointer_state(runtime, value);
-        state->write_bank = runtime->pointer_bank;
+        state->write_bank = rockchip_rknn_domain_write_bank(runtime);
         value = runtime->pointer_value;
     }
     bank_index = domain == ROCKCHIP_RKNN_DOMAIN_PC ? 0 : state->write_bank;
@@ -695,7 +703,7 @@ static void rockchip_rknn_register_file_init(
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
         file->runtime[i] = persistent->runtime[i];
         file->domain[i].write_bank = i == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
-                                     file->runtime[i].pointer_bank;
+            rockchip_rknn_domain_write_bank(&file->runtime[i]);
     }
 }
 
@@ -1618,6 +1626,13 @@ static bool rockchip_rknn_cna_interleaved_input(
            (cna->nonalign_dma || cna->group_line_off || cna->argb_in);
 }
 
+static uint32_t rockchip_rknn_cna_execution_channels(
+    const RockchipRKNNCNAConfig *cna)
+{
+    return rockchip_rknn_cna_interleaved_input(cna) ?
+        cna->input_channels_valid : cna->input.channels;
+}
+
 static bool rockchip_rknn_cna_input_mode_is_supported(
     const RockchipRKNNCNAConfig *cna)
 {
@@ -2452,7 +2467,8 @@ static bool rockchip_rknn_mac_budget_valid(const RockchipRKNNCoreState *s,
     uint64_t kernel_area;
     uint64_t extra = 0;
     uint32_t qd_channels = task->core.depthwise ?
-        task->dpu.output_channels_valid : task->cna.input_channels_valid;
+        task->dpu.output_channels_valid :
+        rockchip_rknn_cna_execution_channels(&task->cna);
 
     if (!rockchip_rknn_u64_mul(task->cna.kernel_width,
                                task->cna.kernel_height, &kernel_area) ||
@@ -2460,7 +2476,8 @@ static bool rockchip_rknn_mac_budget_valid(const RockchipRKNNCoreState *s,
                                 task->dpu.output_channels_valid, &macs) ||
         !rockchip_rknn_u64_mul(macs, kernel_area, &macs) ||
         (!task->core.depthwise &&
-         !rockchip_rknn_u64_mul(macs, task->cna.input_channels_valid,
+         !rockchip_rknn_u64_mul(
+             macs, rockchip_rknn_cna_execution_channels(&task->cna),
                                 &macs))) {
         return false;
     }
@@ -2595,19 +2612,21 @@ static size_t rockchip_rknn_feature_index(size_t width, size_t height,
 }
 
 static size_t rockchip_rknn_weight_index(size_t channels,
-                                         size_t input_atom,
-                                         size_t output_atom,
+                                         size_t outputs,
                                          size_t kernel_area,
                                          size_t output, size_t kernel,
                                          size_t channel)
 {
-    size_t input_groups = DIV_ROUND_UP(channels, input_atom);
+    size_t input_group = channel / 32 * 32;
+    size_t output_group = output / 32 * 32;
+    size_t input_atom = MIN(channels - input_group, (size_t)32);
+    size_t output_atom = MIN(outputs - output_group, (size_t)32);
 
-    return ((((output / output_atom) * input_groups +
-              channel / input_atom) *
-             kernel_area +
-             kernel) * output_atom + output % output_atom) * input_atom +
-           channel % input_atom;
+    return output_group * channels * kernel_area +
+           input_group * output_atom * kernel_area +
+           kernel * output_atom * input_atom +
+           (output - output_group) * input_atom +
+           channel - input_group;
 }
 
 static size_t rockchip_rknn_fp16_weight_index(
@@ -2953,18 +2972,43 @@ static void rockchip_rknn_prepare_slave_pipeline(RockchipRKNNCoreState *s,
     }
 }
 
+static int64_t rockchip_rknn_floor_div_pow2(int64_t value,
+                                            unsigned int shift)
+{
+    uint64_t divisor;
+    uint64_t magnitude;
+    uint64_t quotient;
+
+    if (!shift) {
+        return value;
+    }
+    if (shift >= 63) {
+        return value < 0 ? -1 : 0;
+    }
+    divisor = UINT64_C(1) << shift;
+    if (value >= 0) {
+        return value / divisor;
+    }
+    magnitude = -(uint64_t)value;
+    quotient = magnitude / divisor;
+    if (magnitude % divisor) {
+        quotient++;
+    }
+    return -(int64_t)quotient;
+}
+
 static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
                                        const RockchipRKNNDPUConfig *dpu,
                                        Int128 value)
 {
     int64_t input = int128_getlo(rockchip_rknn_saturate_i32(value));
-    int64_t start, end, offset;
+    int64_t start, end;
     int64_t lower, upper, interpolated;
+    uint64_t fraction;
+    uint64_t offset;
     unsigned int table;
     unsigned int index;
     unsigned int index_shift;
-    unsigned int fraction;
-    unsigned int denominator;
 
     if (input < 0) {
         table = 0;
@@ -2980,26 +3024,19 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
     } else if (input >= end) {
         index = ROCKCHIP_RKNN_LUT_ENTRIES - 1;
     } else {
-        offset = input - start;
+        offset = (uint64_t)(input - start);
         index_shift = extract32(dpu->lut_info,
                                 table ? 16 : 8, 8);
-        if (index_shift >= 31) {
-            return int128_makes64((int16_t)s->lut[table][0]);
-        }
-        denominator = 1U << index_shift;
-        index = offset >> index_shift;
+        index = index_shift >= 64 ? 0 : offset >> index_shift;
         if (index >= ROCKCHIP_RKNN_LUT_ENTRIES - 1) {
             index = ROCKCHIP_RKNN_LUT_ENTRIES - 1;
         } else {
-            fraction = offset & (denominator - 1);
+            fraction = index_shift >= 64 ? offset :
+                offset & ((UINT64_C(1) << index_shift) - 1);
             lower = (int16_t)s->lut[table][index];
             upper = (int16_t)s->lut[table][index + 1];
-            interpolated = (lower * (denominator - fraction) +
-                            upper * fraction);
-            if (interpolated < 0) {
-                interpolated -= denominator - 1;
-            }
-            interpolated /= denominator;
+            interpolated = lower + rockchip_rknn_floor_div_pow2(
+                (upper - lower) * (int64_t)fraction, index_shift);
             return int128_makes64(interpolated);
         }
     }
@@ -4376,8 +4413,6 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     size_t output_values;
     size_t output_bytes;
     size_t weight_storage_channels;
-    size_t weight_input_atom;
-    size_t weight_output_atom;
     size_t weight_kernel_area;
     size_t weight_channels;
     size_t output_storage_channels;
@@ -4459,9 +4494,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     }
     weight_storage_channels = task->cna.weight_bytes_per_kernel /
                               weight_kernel_area;
-    weight_input_atom = weight_storage_channels <= 16 ? 16 : 32;
-    weight_output_atom = task->cna.weight_kernels <= 16 ? 16 : 32;
-    if (weight_storage_channels < task->cna.input_channels_valid) {
+    if (weight_storage_channels <
+        rockchip_rknn_cna_execution_channels(&task->cna)) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
     if (!rockchip_rknn_size_mul(task->cna.weight_kernels,
@@ -4470,16 +4504,16 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
         logical_weight_bytes != task->cna.weight_bytes) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
+    rounded_weight_channels = weight_storage_channels;
+    rounded_weight_kernels = task->cna.weight_kernels;
     if (task->core.depthwise) {
         required_weight_bytes = logical_weight_bytes;
-    } else if (!rockchip_rknn_size_round_up(weight_storage_channels,
-                                            weight_input_atom,
+    } else if (!rockchip_rknn_size_round_up(weight_storage_channels, 16,
                                             &rounded_weight_channels) ||
                !rockchip_rknn_size_mul(rounded_weight_channels,
                                        weight_kernel_area,
                                        &weight_channels) ||
-               !rockchip_rknn_size_round_up(task->cna.weight_kernels,
-                                            weight_output_atom,
+               !rockchip_rknn_size_round_up(task->cna.weight_kernels, 16,
                                             &rounded_weight_kernels) ||
                !rockchip_rknn_size_mul(rounded_weight_kernels,
                                        weight_channels,
@@ -4644,7 +4678,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                            task->cna.pad_left +
                                            kernel_column;
                         for (unsigned int channel = 0;
-                             channel < task->cna.input_channels_valid;
+                             channel < rockchip_rknn_cna_execution_channels(
+                                           &task->cna);
                              channel++) {
                             int8_t input_value =
                                 rockchip_rknn_cna_padding_value(
@@ -4688,7 +4723,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                         unsigned int first_channel =
                             task->core.depthwise ? out : 0;
                         unsigned int last_channel = task->core.depthwise ?
-                            out + 1 : task->cna.input_channels_valid;
+                            out + 1 : rockchip_rknn_cna_execution_channels(
+                                          &task->cna);
 
                         for (unsigned int channel = first_channel;
                              channel < last_channel; channel++) {
@@ -4701,13 +4737,17 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                             size_t weight_index = task->core.depthwise ?
                                 kernel * weight_storage_channels + channel :
                                 rockchip_rknn_weight_index(
-                                    weight_storage_channels,
-                                    weight_input_atom,
-                                    weight_output_atom,
+                                    rounded_weight_channels,
+                                    rounded_weight_kernels,
                                     task->cna.kernel_width *
                                     task->cna.kernel_height,
                                     out, kernel, channel);
-                            int32_t weight_value = weights[weight_index];
+                            int32_t weight_value;
+
+                            if (weight_index >= weight_bytes) {
+                                return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+                            }
+                            weight_value = weights[weight_index];
 
                             if (mode ==
                                 ROCKCHIP_RKNN_EXECUTION_DPU_INT8_BRDMA) {
@@ -4975,7 +5015,7 @@ static void rockchip_rknn_commit_runtime(RockchipRKNNCoreState *s)
     for (unsigned int i = 0; i < ROCKCHIP_RKNN_DOMAIN_COUNT; i++) {
         s->slave_file.domain[i].write_bank =
             i == ROCKCHIP_RKNN_DOMAIN_PC ? 0 :
-            s->slave_file.runtime[i].pointer_bank;
+            rockchip_rknn_domain_write_bank(&s->slave_file.runtime[i]);
     }
 }
 
