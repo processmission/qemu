@@ -2596,15 +2596,17 @@ static size_t rockchip_rknn_feature_index(size_t width, size_t height,
 
 static size_t rockchip_rknn_weight_index(size_t channels,
                                          size_t input_atom,
+                                         size_t output_atom,
                                          size_t kernel_area,
                                          size_t output, size_t kernel,
                                          size_t channel)
 {
     size_t input_groups = DIV_ROUND_UP(channels, input_atom);
 
-    return ((((output / 32) * input_groups + channel / input_atom) *
+    return ((((output / output_atom) * input_groups +
+              channel / input_atom) *
              kernel_area +
-             kernel) * 32 + output % 32) * input_atom +
+             kernel) * output_atom + output % output_atom) * input_atom +
            channel % input_atom;
 }
 
@@ -2956,9 +2958,13 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
                                        Int128 value)
 {
     int64_t input = int128_getlo(rockchip_rknn_saturate_i32(value));
-    int64_t start, end, offset, span;
+    int64_t start, end, offset;
+    int64_t lower, upper, interpolated;
     unsigned int table;
     unsigned int index;
+    unsigned int index_shift;
+    unsigned int fraction;
+    unsigned int denominator;
 
     if (input < 0) {
         table = 0;
@@ -2975,8 +2981,27 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
         index = ROCKCHIP_RKNN_LUT_ENTRIES - 1;
     } else {
         offset = input - start;
-        span = end - start;
-        index = offset * (ROCKCHIP_RKNN_LUT_ENTRIES - 1) / span;
+        index_shift = extract32(dpu->lut_info,
+                                table ? 16 : 8, 8);
+        if (index_shift >= 31) {
+            return int128_makes64((int16_t)s->lut[table][0]);
+        }
+        denominator = 1U << index_shift;
+        index = offset >> index_shift;
+        if (index >= ROCKCHIP_RKNN_LUT_ENTRIES - 1) {
+            index = ROCKCHIP_RKNN_LUT_ENTRIES - 1;
+        } else {
+            fraction = offset & (denominator - 1);
+            lower = (int16_t)s->lut[table][index];
+            upper = (int16_t)s->lut[table][index + 1];
+            interpolated = (lower * (denominator - fraction) +
+                            upper * fraction);
+            if (interpolated < 0) {
+                interpolated -= denominator - 1;
+            }
+            interpolated /= denominator;
+            return int128_makes64(interpolated);
+        }
     }
     if (table == 1 && input > end && dpu->lut_lo_slope_scale) {
         int64_t delta = input - end;
@@ -3311,8 +3336,7 @@ static int8_t rockchip_rknn_cna_padding_value(
 {
     uint8_t raw = cna->pad_value;
 
-    return rockchip_rknn_cna_interleaved_input(cna) ?
-        rockchip_rknn_cna_convert_input(cna, channel, raw) : (int8_t)raw;
+    return (int8_t)raw;
 }
 
 static bool rockchip_rknn_read_strided_input(
@@ -4353,6 +4377,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     size_t output_bytes;
     size_t weight_storage_channels;
     size_t weight_input_atom;
+    size_t weight_output_atom;
     size_t weight_kernel_area;
     size_t weight_channels;
     size_t output_storage_channels;
@@ -4434,8 +4459,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     }
     weight_storage_channels = task->cna.weight_bytes_per_kernel /
                               weight_kernel_area;
-    weight_input_atom = rockchip_rknn_cna_interleaved_input(&task->cna) ?
-                        16 : 32;
+    weight_input_atom = weight_storage_channels <= 16 ? 16 : 32;
+    weight_output_atom = task->cna.weight_kernels <= 16 ? 16 : 32;
     if (weight_storage_channels < task->cna.input_channels_valid) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
@@ -4453,7 +4478,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                !rockchip_rknn_size_mul(rounded_weight_channels,
                                        weight_kernel_area,
                                        &weight_channels) ||
-               !rockchip_rknn_size_round_up(task->cna.weight_kernels, 32,
+               !rockchip_rknn_size_round_up(task->cna.weight_kernels,
+                                            weight_output_atom,
                                             &rounded_weight_kernels) ||
                !rockchip_rknn_size_mul(rounded_weight_kernels,
                                        weight_channels,
@@ -4677,6 +4703,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                 rockchip_rknn_weight_index(
                                     weight_storage_channels,
                                     weight_input_atom,
+                                    weight_output_atom,
                                     task->cna.kernel_width *
                                     task->cna.kernel_height,
                                     out, kernel, channel);
