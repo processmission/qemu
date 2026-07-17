@@ -132,14 +132,15 @@ features use eight-channel FP16 atoms, conversion is round-to-nearest-even,
 and destination padding lanes are zero.  BS, BN, EW, BRDMA, and ERDMA must be
 bypassed for this mode; unsupported flying-mode, precision, converter,
 padding, notch, and layout controls fail before DMA.
-The same main-RDMA frontend executes neutral INT8 DPU bypass.  It copies
-register-derived spatial surfaces from 16-channel INT8 input atoms to
-16-channel INT8 output atoms, preserves all valid lanes, and clears storage
-lanes beyond ``OUTPUT_CHANNELS_VALID``.  Source and destination may overlap:
-the complete input is read before writeback, matching the LUT-programming
-descriptors that use an in-place dummy surface operation.  LUT writes remain
-ordinary register side effects and are therefore available to later sparse
-descriptors without a task-number or model-specific initialization path.
+The same main-RDMA frontend executes a composable integer pipeline over
+16-channel INT8 atoms.  The main input passes through decoded BS, bypassed BN,
+optional ERDMA-backed EW addition, and ``OUT_CVT`` stages before saturating to
+INT8.  Register operands, signed multiplier shifts, both EW converter orders,
+EW truncation, output rounding, valid channels, and destination surfaces are
+applied from their control fields; unsupported active sources and modes fail
+before DMA.  Neutral controls reduce this path to an exact copy.  Source,
+ERDMA, and destination may overlap because all inputs are read before
+writeback.  Storage lanes beyond ``OUTPUT_CHANNELS_VALID`` are cleared.
 The main-RDMA frontend also implements the board-validated INT16 unpool mode.
 For ``SRC_DMA_CFG=0x1249``, each eight-lane INT16 source atom is preserved as
 its 16 raw little-endian bytes, exposed as one 16-lane INT8 output atom, and
