@@ -140,6 +140,12 @@ the complete input is read before writeback, matching the LUT-programming
 descriptors that use an in-place dummy surface operation.  LUT writes remain
 ordinary register side effects and are therefore available to later sparse
 descriptors without a task-number or model-specific initialization path.
+The main-RDMA frontend also implements the board-validated INT16 unpool mode.
+For ``SRC_DMA_CFG=0x1249``, each eight-lane INT16 source atom is preserved as
+its 16 raw little-endian bytes, exposed as one 16-lane INT8 output atom, and
+repeated twice in both spatial directions.  Tensor dimensions, channel
+counts, and DMA addresses remain register-derived; unsupported unpool,
+padding, notch, stage, or conversion controls fail before DMA.
 The main-RDMA FP16 pipeline composes decoded BS and EW stages in hardware
 order.  BS can add the FP32 ``BS_ALU_CFG`` operand and multiply by the FP16
 operand in ``BS_MUL_CFG``; EW can independently bypass or consume an ERDMA
