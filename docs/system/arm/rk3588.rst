@@ -100,11 +100,11 @@ two-dimensional 1x1 direct convolution with stride one and no padding, and
 The stride-one profile also covers the hardware-observed asymmetric case with
 left/bottom padding but no top/right padding.
 INT8 depthwise convolution is executed when CNA and DPU select convolution
-mode 3 and CORE enables depthwise operation.  Compact weights are consumed in
-kernel-row, kernel-column, channel order, and each output channel multiplies
-only the corresponding input channel.  CNA ``PAD_CON1`` supplies the input
-domain padding value; interleaved input converts it through the per-channel
-CVT path before convolution.
+mode 3 and CORE enables depthwise operation.  Compact weights use 64-channel
+groups, with kernel-row, kernel-column, channel order inside each group, and
+each output channel multiplies only the corresponding input channel.  CNA
+``PAD_CON1`` supplies the input domain padding value; interleaved input
+converts it through the per-channel CVT path before convolution.
 The functional backend also executes the board-validated FP16 Matmul profile:
 inputs and weights are FP16, accumulation is FP32, and DPU writeback is either
 FP16 or FP32.  FP16 grouped weights use the hardware's 16-output-channel
@@ -159,7 +159,8 @@ profile signatures.  Unsupported source, truncate, shift, ReLU, converter,
 and RDMA layout controls fail before DMA.  Input and output dimensions,
 storage channels, valid channels, surface stride, and IOVA addresses are
 derived from registers and bounded by the functional backend's resource
-limits.
+limits.  ``CORE.QUANTIFY`` and BS operand-source controls do not alter FP16
+execution while the BS stage is bypassed.
 The DPU-RDMA FP16 LUT profile is also register-driven.  It accepts FP16 input
 surfaces, applies the decoded BN FP16 multiplier and FP32 add operand, selects
 the LE or LO table using the configured LUT boundaries and five-bit index
@@ -174,6 +175,9 @@ being treated as this profile.  Tensor dimensions and valid/storage channels
 remain register-derived: all valid FP16 lanes are converted, including the
 board-observed 1,008-lane softmax stage, while non-valid storage tail lanes
 are written as zero.
+The standalone raw16 tail profile preserves its one valid FP16 lane and fills
+the other seven storage lanes with the 16-bit ``DPU_OFFSET_PEND`` value, as
+used by the MobileNet softmax prelude.
 The DPU-RDMA FP16 min/max profile scans all storage channels, including
 partial-channel padding lanes.  ``MINMAX_CTL`` selects the global minimum or
 maximum; when probability-only mode is clear, the second raw16 result word is
@@ -213,7 +217,10 @@ channel across multiple 32-channel groups and broadcasts it across spatial
 positions before BN and EW.  Its convolution weight is the signed packed
 weight plus ``BS_OW_OP``; ``BS_OW_OP`` is not a post-accumulation divisor.
 Compact input and output tails use the exact decoded weight byte count rather
-than a rounded host-side allocation.
+than a rounded host-side allocation.  Compact FP16 output is contiguous; the
+ordinary multi-surface stride field does not alter that compact layout.
+Compact FP16 weights and output can be combined with ordinary planar input;
+input feature layout is decoded independently from weight/output layout.
 BS/BN RELUX are functionally modeled when their respective ``*_RELUX_EN``
 bit is set, using the signed INT32 clamp interval ``[0, *_RELUX_CMP_VALUE]``.
 EW RELUX is modeled for the validated ``0x20580`` immediate-add configuration

@@ -1478,7 +1478,6 @@ static void test_rk3588_rknpu_matmul_fp16_control_mutations(void)
         { "output-conversion", 0x1001, 0x4084, 1 },
         { "output-stride", 0x1001, 0x4024, 0 },
         { "pad-value", 0x0201, 0x1184, 0x3c00 },
-        { "bs-ow-mode", 0x1001, 0x4050, 0x124 },
         { "cna-convolution-mode", 0x0201, 0x100c, 0x121 },
         { "core-process-precision", 0x0801, 0x3010, 0x101 },
     };
@@ -1520,6 +1519,8 @@ static void test_rk3588_rknpu_matmul_fp16_offset_pend(void)
 
     rk3588_rknn_make_fp16_matmul_data(input, weights);
     rk3588_rknn_make_fp16_matmul_regcmd(commands, 2);
+    rk3588_rknn_patch_fp16_regcmd(commands, 0x0801, 0x3010, 0x200);
+    rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4050, 0x126);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4014, 0xfbff);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x403c,
                                   (7U << 16) | 15);
@@ -1580,7 +1581,7 @@ static void test_rk3588_rknpu_fp16_compact_broadcast(void)
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0801, 0x3014, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0801, 0x3018, 7);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x400c, 0x1e4);
-    rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4024, 0);
+    rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4024, 0x10);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4030, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4034, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x403c,
@@ -1629,7 +1630,7 @@ static void test_rk3588_rknpu_fp16_compact_reduction(void)
     memset(output, 0xa5, sizeof(output));
     rk3588_rknn_make_fp16_matmul_regcmd(commands, 2);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0201, 0x100c,
-                                  0x60008120);
+                                  0x120);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0201, 0x1020,
                                   (1U << 16) | 1);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0201, 0x1024,
@@ -1653,7 +1654,7 @@ static void test_rk3588_rknpu_fp16_compact_reduction(void)
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0801, 0x3014, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x0801, 0x3018, 15);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x400c, 0x1e4);
-    rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4024, 0);
+    rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4024, 0x10);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4030, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x4034, 0);
     rk3588_rknn_patch_fp16_regcmd(commands, 0x1001, 0x403c, 15);
@@ -1990,7 +1991,7 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_divide(void)
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x4078, 0x87654321);
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x407c, 0x3c00);
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x4080, 0);
-    PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x4084, 0x00010001);
+    PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x4084, 1);
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x4088, 0);
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU, 0x40c0, 0x10);
     PATCH_DIV(RKNN_REGCMD_TARGET_DPU_RDMA, 0x500c, 0);
@@ -2049,6 +2050,7 @@ static void test_rk3588_rknpu_dpu_rdma_raw16_tail(void)
                              (_reg), (_value))
     PATCH_TAIL(RKNN_REGCMD_TARGET_DPU, 0x400c, 0x1e5);
     PATCH_TAIL(RKNN_REGCMD_TARGET_DPU, 0x4010, 0x24000001);
+    PATCH_TAIL(RKNN_REGCMD_TARGET_DPU, 0x4014, 0xfbff);
     PATCH_TAIL(RKNN_REGCMD_TARGET_DPU, 0x4020,
                RK3588_RKNN_MATMUL_OUTPUT_IOVA);
     PATCH_TAIL(RKNN_REGCMD_TARGET_DPU, 0x4024, 0x10);
@@ -2089,7 +2091,7 @@ static void test_rk3588_rknpu_dpu_rdma_raw16_tail(void)
                   output, sizeof(output));
     g_assert_cmphex(le16_to_cpu(output[0]), ==, le16_to_cpu(input[0]));
     for (unsigned int index = 1; index < ARRAY_SIZE(output); index++) {
-        g_assert_cmphex(le16_to_cpu(output[index]), ==, 0);
+        g_assert_cmphex(le16_to_cpu(output[index]), ==, 0xfbff);
     }
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                 RKNN_PC_TASK_STATUS), ==,
@@ -8118,6 +8120,90 @@ static void test_rk3588_rknpu_depthwise_int8_qd(void)
     qtest_quit(qts);
 }
 
+static void test_rk3588_rknpu_depthwise_int8_grouped_weights(void)
+{
+    enum {
+        CHANNELS = 128,
+        SURFACES = CHANNELS / 16,
+        WEIGHT_BYTES = CHANNELS * 9,
+        BS_BYTES = CHANNELS / 8 * 0x40,
+    };
+    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    int8_t input[SURFACES * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE] = {};
+    int8_t weights[WEIGHT_BYTES] = {};
+    uint8_t bs[BS_BYTES] = {};
+    uint16_t multiplier = cpu_to_le16(32);
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+    size_t index;
+
+    rk3588_rknn_make_depthwise_int8_regcmd(commands);
+#define PATCH_DEPTHWISE_GROUP(_target, _reg, _value) do {             \
+    index = rk3588_rknn_find_regcmd(                                  \
+        commands, ARRAY_SIZE(commands), (_target), (_reg));           \
+    commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
+} while (0)
+    PATCH_DEPTHWISE_GROUP(0x0201, 0x1024,
+                          ((CHANNELS - 1) << 16) | CHANNELS);
+    PATCH_DEPTHWISE_GROUP(0x0201, 0x1030, WEIGHT_BYTES);
+    PATCH_DEPTHWISE_GROUP(0x0201, 0x1034, WEIGHT_BYTES);
+    PATCH_DEPTHWISE_GROUP(0x0201, 0x1088, CHANNELS);
+    PATCH_DEPTHWISE_GROUP(0x0801, 0x3018, CHANNELS - 1);
+    PATCH_DEPTHWISE_GROUP(0x1001, 0x403c,
+                          ((CHANNELS - 1) << 16) | (CHANNELS - 1));
+    PATCH_DEPTHWISE_GROUP(0x1001, 0x4058, CHANNELS - 1);
+    PATCH_DEPTHWISE_GROUP(0x2001, 0x5014, CHANNELS - 1);
+#undef PATCH_DEPTHWISE_GROUP
+
+    input[4 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE + 16] = 1;
+    weights[64 * 9 + 64] = 7;
+    memcpy(bs + 8 * 0x40 + 0x30, &multiplier, sizeof(multiplier));
+
+    qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
+                 RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
+    for (unsigned int page = 0;
+         page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+        qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
+                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     RK_IOMMU_PTE_RW);
+    }
+    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
+                   sizeof(commands));
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                       RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA),
+                   input, sizeof(input));
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                       RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+                   weights, sizeof(weights));
+    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+                       RK3588_RKNN_MOBILENET_TASK6_BS_IOVA),
+                   bs, sizeof(bs));
+    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
+                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+                 0xa5,
+                 SURFACES * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+                 RK3588_RKNN_MATMUL_DTE_ADDR);
+    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+                 RK_IOMMU_CMD_ENABLE_PAGING);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
+                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 rk3588_rknn_register_amount(ARRAY_SIZE(commands)));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+
+    g_assert_cmpint((int8_t)qtest_readb(
+                        qts, rk3588_rknn_mobilenet_task6_addr(
+                                 RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+                                 4 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE +
+                                 (RK3588_RKNN_DEPTHWISE_INT8_WIDTH + 1) * 16),
+                    ==, 7);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                    RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    qtest_quit(qts);
+}
+
 static void test_rk3588_rknpu_depthwise_int8_surface_add(void)
 {
     uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
@@ -10549,7 +10635,7 @@ static void test_rk3588_rknpu_mobilenet_control_graph(void)
         uint32_t raw_status;
         bool ppu_terminal;
     } roots[] = {
-        { 0xffc35bc0, 50, 130, RKNN_TASK_STATUS_FETCH_ERROR | 41,
+        { 0xffc35bc0, 50, 130, RKNN_TASK_STATUS_FETCH_ERROR | 49,
           RKNN_DMA_READ_ERROR, false },
         { 0xffc43240, 34, 126, RKNN_TASK_STATUS_SUCCESS,
           RKNN_PPU_STAGE_INTERRUPT_BITS | RKNN_PPU_BANK0_INTERRUPT |
@@ -13278,6 +13364,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_depthwise_int32_board_golden);
     qtest_add_func("/rk3588/rknpu-depthwise-int8-qd",
                    test_rk3588_rknpu_depthwise_int8_qd);
+    qtest_add_func("/rk3588/rknpu-depthwise-int8-grouped-weights",
+                   test_rk3588_rknpu_depthwise_int8_grouped_weights);
     qtest_add_func("/rk3588/rknpu-depthwise-int8-surface-add",
                    test_rk3588_rknpu_depthwise_int8_surface_add);
     qtest_add_func("/rk3588/rknpu-depthwise-int8-control-mutations",
