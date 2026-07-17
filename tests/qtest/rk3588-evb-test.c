@@ -477,6 +477,16 @@ static QTestState *rk3588_qtest_start_rknpu_matmul(void)
                       "-smp 1 -m 512M");
 }
 
+static QTestState *rk3588_qtest_start_rknpu_matmul_max_macs(uint64_t max_macs)
+{
+    return qtest_initf(
+        "-machine " RK3588_EVB_MACHINE
+        ",rknpu=on,rknpu-functional=on -smp 1 -m 512M "
+        "-global driver=rockchip.rk3588-rknn-core,"
+        "property=functional-max-mac-operations,value=%" PRIu64,
+        max_macs);
+}
+
 static QTestState *rk3588_qtest_start_rknpu_matmul_trace(
     const char *trace, const char *event)
 {
@@ -3631,7 +3641,8 @@ static void test_rk3588_rknpu_dpu_rdma_conversion_budget(void)
     rk3588_rknn_make_dpu_rdma_fp16_input(input);
     for (unsigned int index = 0; index < ARRAY_SIZE(cases); index++) {
         uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
-        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul_max_macs(
+            UINT64_C(1) << 26);
 
         g_test_message("DPU-RDMA conversion budget: %s",
                        cases[index].name);
@@ -12233,6 +12244,9 @@ static void test_rk3588_rknpu_ppu_field_semantics(void)
         { "padding-value-0", 0x4001, 0x6044, 1, false },
         { "padding-value-1", 0x4001, 0x6048, 1, false },
         { "index-output", 0x4001, 0x6024, 0x400a0011, false },
+        { "inactive-index-add", 0x4001, 0x6084, 0x1900, true },
+        { "process-precision", 0x4001, 0x6084, 0x11, false },
+        { "dpu-fly-in", 0x4001, 0x6084, 0x18, false },
         { "misc-control", 0x4001, 0x60dc, 2, false },
     };
 

@@ -258,7 +258,7 @@ IOMMU and stage status behavior.  Operator controls that are not implemented
 yet are reported as explicit execution capability errors rather than being
 treated as model or shape restrictions.  Functional execution defaults to
 QEMU host-safety ceilings of 256 MiB of aggregate temporary buffers,
-``2^26`` MAC operations or element conversions per DPU task, and ``2^24``
+``2^28`` MAC operations or element conversions per DPU task, and ``2^24``
 work items per PPU task.
 These are implementation safety boundaries rather than RK3588 shape limits;
 tasks exceeding them fail before allocation or DMA.  PC mode streams
