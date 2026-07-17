@@ -6084,6 +6084,133 @@ static void test_rk3588_rknpu_mobilenet_task6_hardware_golden(void)
     qtest_quit(qts);
 }
 
+static void rk3588_rknn_enable_int8_qd_erdma(uint64_t commands[],
+                                             bool valid_notch)
+{
+    const uint32_t spatial = RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+                             RK3588_RKNN_MOBILENET_TASK6_HEIGHT;
+    size_t index;
+
+#define PATCH_QD_ERDMA(_target, _reg, _value) do {                   \
+    index = rk3588_rknn_find_regcmd(                                 \
+        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,              \
+        (_target), (_reg));                                          \
+    commands[index] = rk3588_rknn_regcmd(                            \
+        (_target), (_reg), (_value));                                \
+} while (0)
+    PATCH_QD_ERDMA(0x1001, 0x4070, 0x904202c0);
+    PATCH_QD_ERDMA(0x1001, 0x4074, 0);
+    PATCH_QD_ERDMA(0x1001, 0x4078, 1);
+    PATCH_QD_ERDMA(0x2001, 0x5018,
+                   RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    PATCH_QD_ERDMA(0x2001, 0x5034, 0x40000004);
+    PATCH_QD_ERDMA(
+        0x2001, 0x5038,
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA + spatial * 16);
+    PATCH_QD_ERDMA(0x2001, 0x5040, spatial << 4);
+    PATCH_QD_ERDMA(0x2001, 0x5044, 0x7d00);
+    PATCH_QD_ERDMA(0x2001, 0x504c,
+                   (spatial + !valid_notch) << 4);
+    PATCH_QD_ERDMA(0x2001, 0x506c, spatial << 4);
+#undef PATCH_QD_ERDMA
+}
+
+static void test_rk3588_rknpu_int8_qd_brdma_erdma(void)
+{
+    const size_t operand_bytes =
+        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+    g_autofree uint64_t *commands = NULL;
+    g_autofree void *input = NULL;
+    g_autofree void *weights = NULL;
+    g_autofree void *bs = NULL;
+    g_autofree void *expected = NULL;
+    g_autofree uint8_t *actual = NULL;
+    gsize command_bytes;
+    gsize input_length;
+    gsize weights_length;
+    gsize bs_length;
+    gsize output_length;
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+    rk3588_rknn_load_mobilenet_task6_file(
+        "regcmd.bin", (void **)&commands, &command_bytes);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "input-int8-feature.bin", &input, &input_length);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "weights-int8.bin", &weights, &weights_length);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "bs-rdma.bin", &bs, &bs_length);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "output-int8-feature.bin", &expected, &output_length);
+    rk3588_rknn_enable_int8_qd_erdma(commands, true);
+    rk3588_rknn_prepare_mobilenet_task6(
+        qts, commands, command_bytes / sizeof(*commands),
+        input, input_length, weights, weights_length, bs, bs_length,
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
+    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
+                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+                 0, operand_bytes);
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    actual = g_malloc(output_length);
+    for (unsigned int surface = 0;
+         surface < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS /
+                   RK3588_RKNN_MOBILENET_TASK6_ATOM; surface++) {
+        qtest_memread(
+            qts,
+            rk3588_rknn_mobilenet_task6_addr(
+                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+                surface * RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES,
+            actual + surface * output_length / 4, output_length / 4);
+    }
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    for (size_t offset = 0; offset < output_length; offset++) {
+        if (actual[offset] != ((uint8_t *)expected)[offset]) {
+            g_error("QD+ERDMA output mismatch at %zu: actual=%d "
+                    "expected=%d", offset, (int8_t)actual[offset],
+                    (int8_t)((uint8_t *)expected)[offset]);
+        }
+    }
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_int8_qd_brdma_erdma_controls(void)
+{
+    g_autofree uint64_t *commands = NULL;
+    g_autofree void *input = NULL;
+    g_autofree void *weights = NULL;
+    g_autofree void *bs = NULL;
+    gsize command_bytes;
+    gsize input_length;
+    gsize weights_length;
+    gsize bs_length;
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+    rk3588_rknn_load_mobilenet_task6_file(
+        "regcmd.bin", (void **)&commands, &command_bytes);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "input-int8-feature.bin", &input, &input_length);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "weights-int8.bin", &weights, &weights_length);
+    rk3588_rknn_load_mobilenet_task6_file(
+        "bs-rdma.bin", &bs, &bs_length);
+    rk3588_rknn_enable_int8_qd_erdma(commands, false);
+    rk3588_rknn_prepare_mobilenet_task6(
+        qts, commands, command_bytes / sizeof(*commands),
+        input, input_length, weights, weights_length, bs, bs_length,
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_FETCH_ERROR | 1);
+    qtest_quit(qts);
+}
+
 static void test_rk3588_rknpu_int8_qd_brdma_uncaptured_height(void)
 {
     const uint32_t height = 6;
@@ -13310,6 +13437,10 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_matmul_hardware_golden);
     qtest_add_func("/rk3588/rknpu-mobilenet-task6-hardware-golden",
                    test_rk3588_rknpu_mobilenet_task6_hardware_golden);
+    qtest_add_func("/rk3588/rknpu-int8-qd-brdma-erdma",
+                   test_rk3588_rknpu_int8_qd_brdma_erdma);
+    qtest_add_func("/rk3588/rknpu-int8-qd-brdma-erdma-controls",
+                   test_rk3588_rknpu_int8_qd_brdma_erdma_controls);
     qtest_add_func("/rk3588/rknpu-rgb-cvt-convolution",
                    test_rk3588_rknpu_rgb_cvt_convolution);
     qtest_add_func("/rk3588/rknpu-rgb-cvt-control-mutations",
