@@ -144,9 +144,11 @@ writeback.  Storage lanes beyond ``OUTPUT_CHANNELS_VALID`` are cleared.
 The main-RDMA frontend also implements the board-validated INT16 unpool mode.
 For ``SRC_DMA_CFG=0x1249``, each eight-lane INT16 source atom is preserved as
 its 16 raw little-endian bytes, exposed as one 16-lane INT8 output atom, and
-repeated twice in both spatial directions.  Tensor dimensions, channel
-counts, and DMA addresses remain register-derived; unsupported unpool,
-padding, notch, stage, or conversion controls fail before DMA.
+repeated twice in both spatial directions.  All decoded input surfaces are
+consumed and written as consecutive output surfaces.  Tensor dimensions,
+channel counts, surface count, and DMA addresses remain register-derived;
+unsupported unpool, padding, notch, stage, or conversion controls fail before
+DMA.
 The main-RDMA FP16 pipeline composes decoded BS and EW stages in hardware
 order.  BS can add the FP32 ``BS_ALU_CFG`` operand and multiply by the FP16
 operand in ``BS_MUL_CFG``; EW can independently bypass or consume an ERDMA
@@ -208,7 +210,10 @@ multiple 32-channel groups, including notch progression, are read through
 the modeled IOMMU.  The
 validated BRDMA profile reads one signed INT32 BS add operand per output
 channel across multiple 32-channel groups and broadcasts it across spatial
-positions before BN and EW.
+positions before BN and EW.  Its convolution weight is the signed packed
+weight plus ``BS_OW_OP``; ``BS_OW_OP`` is not a post-accumulation divisor.
+Compact input and output tails use the exact decoded weight byte count rather
+than a rounded host-side allocation.
 BS/BN RELUX are functionally modeled when their respective ``*_RELUX_EN``
 bit is set, using the signed INT32 clamp interval ``[0, *_RELUX_CMP_VALUE]``.
 EW RELUX is modeled for the validated ``0x20580`` immediate-add configuration
@@ -272,11 +277,11 @@ status.  The property is off by default; when it is off the model performs no
 functional DMA reads or writes.  Other DPU-RDMA data modes, precisions, and
 notch layouts, as well as
 other PPU execution modes and cycle timing remain unimplemented.  The current
-PPU/RDMA executor handles signed INT4 identity and max-pooling semantics with
-per-surface DMA, row stride, padding, and channel-surface iteration.  Max pooling compares the signed high
-nibble and copies the first winning packed byte, so the low nibble is not an
-independently pooled channel.  Identity execution copies all 32 bytes without
-interpreting either nibble.  The PPU and PPU-RDMA windows expose their
+PPU/RDMA executor handles signed INT8 identity and max-pooling semantics with
+per-surface DMA, row stride, padding, and channel-surface iteration.  Max
+pooling compares complete signed bytes and copies the first winning byte.
+Identity execution copies all 32 bytes without arithmetic.  The PPU and
+PPU-RDMA windows expose their
 ``S_STATUS`` and ``S_POINTER`` registers.  Successful standalone completion
 reports task status ``0xf000``, raw stage status ``0xc0000000``, and the
 pointer-selected ``0x400`` or ``0x800`` low completion bit; those low bits are
