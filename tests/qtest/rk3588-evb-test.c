@@ -5518,8 +5518,7 @@ static int8_t rk3588_rknn_rgb_cvt_expected(
 
             for (unsigned int channel = 0;
                  channel < RK3588_RKNN_RGB_CVT_INPUT_CHANNELS; channel++) {
-                int converted = rk3588_rknn_rgb_cvt_convert(
-                    commands, channel, padding);
+                int converted = (int8_t)padding;
 
                 if (input_row < RK3588_RKNN_RGB_CVT_INPUT_HEIGHT &&
                     input_column < RK3588_RKNN_RGB_CVT_INPUT_WIDTH) {
@@ -6313,6 +6312,186 @@ static void test_rk3588_rknpu_int8_qd_brdma_layout_controls(void)
                         RKNN_TASK_STATUS_FETCH_ERROR | 1);
         g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                     RKNN_PC_INTERRUPT_RAW_STATUS), ==, 0);
+        qtest_quit(qts);
+    }
+}
+
+static void rk3588_rknn_make_int8_brdma_regcmd(uint64_t commands[],
+                                               size_t command_count)
+{
+    const unsigned int valid_channels =
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS - 1;
+    size_t index;
+
+#define PATCH_INT8_BRDMA(_target, _reg, _value) do {                 \
+    index = rk3588_rknn_find_regcmd(                                 \
+        commands, command_count, (_target), (_reg));                 \
+    commands[index] = rk3588_rknn_regcmd(                            \
+        (_target), (_reg), (_value));                                \
+} while (0)
+    PATCH_INT8_BRDMA(0x1001, 0x403c,
+                     ((valid_channels - 1) << 16) |
+                     (RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS - 1));
+    PATCH_INT8_BRDMA(0x1001, 0x4040, 0x20150);
+    PATCH_INT8_BRDMA(0x1001, 0x4048, 0);
+    PATCH_INT8_BRDMA(0x1001, 0x4050, 0x124);
+    PATCH_INT8_BRDMA(0x1001, 0x4054, 128);
+    PATCH_INT8_BRDMA(0x1001, 0x4080, 0);
+    PATCH_INT8_BRDMA(0x1001, 0x4084, 1);
+    PATCH_INT8_BRDMA(0x1001, 0x4088, 0);
+#undef PATCH_INT8_BRDMA
+}
+
+static void rk3588_rknn_make_int8_brdma_data(uint8_t input[],
+                                              size_t input_length,
+                                              uint8_t weights[],
+                                              size_t weights_length,
+                                              uint8_t bs[], size_t bs_length)
+{
+    memset(input, 1, input_length);
+    memset(weights, 127, weights_length);
+    memset(bs, 0, bs_length);
+    for (unsigned int channel = 0;
+         channel < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS; channel++) {
+        int32_t expected = (int32_t)channel + 10;
+
+        stl_le_p(bs + channel * sizeof(uint32_t), expected * 128 + 32);
+    }
+}
+
+static void test_rk3588_rknpu_int8_brdma(void)
+{
+    const size_t input_length =
+        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
+        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+    const size_t weights_length =
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+    const size_t bs_length =
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8;
+    const size_t output_length =
+        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+    g_autofree uint64_t *commands = NULL;
+    g_autofree uint8_t *input = g_malloc(input_length);
+    g_autofree uint8_t *weights = g_malloc(weights_length);
+    g_autofree uint8_t *bs = g_malloc(bs_length);
+    g_autofree uint8_t *output = g_malloc(output_length);
+    gsize command_bytes;
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+    rk3588_rknn_load_mobilenet_task6_file(
+        "regcmd.bin", (void **)&commands, &command_bytes);
+    rk3588_rknn_make_int8_brdma_regcmd(
+        commands, command_bytes / sizeof(*commands));
+    rk3588_rknn_make_int8_brdma_data(
+        input, input_length, weights, weights_length, bs, bs_length);
+    rk3588_rknn_prepare_mobilenet_task6(
+        qts, commands, command_bytes / sizeof(*commands),
+        input, input_length, weights, weights_length, bs, bs_length,
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 2);
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    rk3588_rknn_read_mobilenet_task6_output(
+        qts, output, output_length, RK3588_RKNN_MOBILENET_TASK6_HEIGHT);
+
+    for (unsigned int row = 0;
+         row < RK3588_RKNN_MOBILENET_TASK6_HEIGHT; row++) {
+        for (unsigned int column = 0;
+             column < RK3588_RKNN_MOBILENET_TASK6_WIDTH; column++) {
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+                 channel++) {
+                size_t output_index = rk3588_rknn_spatial_feature_index(
+                    RK3588_RKNN_MOBILENET_TASK6_WIDTH,
+                    RK3588_RKNN_MOBILENET_TASK6_HEIGHT,
+                    RK3588_RKNN_MOBILENET_TASK6_ATOM,
+                    channel, row, column);
+                int8_t expected = channel + 1 ==
+                    RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS ?
+                    0 : (int32_t)channel + 10;
+
+                if ((int8_t)output[output_index] != expected) {
+                    g_error("INT8 BRDMA output mismatch at %u,%u,%u: "
+                            "actual=%d expected=%d index=%zu",
+                            row, column, channel,
+                            (int8_t)output[output_index], expected,
+                            output_index);
+                }
+            }
+        }
+    }
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_int8_brdma_controls(void)
+{
+    static const struct {
+        uint32_t target;
+        uint32_t reg;
+        uint32_t value;
+    } cases[] = {
+        { 0x1001, 0x4050, 0x125 },
+        { 0x1001, 0x4050, 0x126 },
+        { 0x2001, 0x501c, 0 },
+        { 0x2001, 0x501c, 0xe },
+        { 0x2001, 0x5034, 0 },
+        { 0x2001, 0x5044, 0x7811 },
+        { 0x2001, 0x5068, 0x01010100 },
+    };
+    const size_t input_length =
+        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
+        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+    const size_t weights_length =
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+    const size_t bs_length =
+        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8;
+    g_autofree uint64_t *original_commands = NULL;
+    g_autofree uint8_t *input = g_malloc(input_length);
+    g_autofree uint8_t *weights = g_malloc(weights_length);
+    g_autofree uint8_t *bs = g_malloc(bs_length);
+    gsize command_bytes;
+
+    rk3588_rknn_load_mobilenet_task6_file(
+        "regcmd.bin", (void **)&original_commands, &command_bytes);
+    rk3588_rknn_make_int8_brdma_data(
+        input, input_length, weights, weights_length, bs, bs_length);
+    for (unsigned int case_index = 0;
+         case_index < ARRAY_SIZE(cases); case_index++) {
+        g_autofree uint64_t *commands = g_memdup2(
+            original_commands, command_bytes);
+        QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+        size_t index;
+
+        rk3588_rknn_make_int8_brdma_regcmd(
+            commands, command_bytes / sizeof(*commands));
+        index = rk3588_rknn_find_regcmd(
+            commands, command_bytes / sizeof(*commands),
+            cases[case_index].target, cases[case_index].reg);
+        rk3588_rknn_prepare_mobilenet_task6(
+            qts, commands, command_bytes / sizeof(*commands),
+            input, input_length, weights, weights_length, bs, bs_length,
+            RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 2);
+        commands[index] = rk3588_rknn_regcmd(
+            cases[case_index].target, cases[case_index].reg,
+            cases[case_index].value);
+        qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR,
+                       commands, command_bytes);
+        rk3588_rknn_start_matmul(qts);
+        qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+        g_assert_cmphex(qtest_readb(
+            qts, rk3588_rknn_mobilenet_task6_addr(
+                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA)), ==, 0xa5);
+        g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                    RKNN_PC_TASK_STATUS), ==,
+                        RKNN_TASK_STATUS_FETCH_ERROR | 1);
         qtest_quit(qts);
     }
 }
@@ -9633,10 +9812,7 @@ static void test_rk3588_rknpu_matmul_partial_channels(void)
     }
     for (unsigned int out = 0; out < TEST_N_VALID; out++) {
         for (unsigned int channel = 0; channel < TEST_K_VALID; channel++) {
-            size_t weight_index =
-                (channel / 32 * 32) * 32 +
-                (out / 32) * 32 * 32 + channel % 32 +
-                (out % 32) * 32;
+            size_t weight_index = (out % 32) * 16 + channel % 16;
 
             weights[weight_index] =
                 ((out * 19 + channel * 7 + 5) % 29) - 14;
@@ -12818,6 +12994,10 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_int8_qd_brdma_partial_channels);
     qtest_add_func("/rk3588/rknpu-int8-qd-brdma-layout-controls",
                    test_rk3588_rknpu_int8_qd_brdma_layout_controls);
+    qtest_add_func("/rk3588/rknpu-int8-brdma",
+                   test_rk3588_rknpu_int8_brdma);
+    qtest_add_func("/rk3588/rknpu-int8-brdma-controls",
+                   test_rk3588_rknpu_int8_brdma_controls);
     qtest_add_func("/rk3588/rknpu-weight-size0-semantics",
                    test_rk3588_rknpu_weight_size0_semantics);
     qtest_add_func("/rk3588/rknpu-large-shape-safe-failure",
