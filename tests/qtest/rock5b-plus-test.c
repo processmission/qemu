@@ -14,7 +14,10 @@
 #define RK3588_RAM_BASE 0x00200000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
 #define RK3588_CRYPTO_BASE 0xfe370000ULL
+#define RK3588_PCIE3X4_APB_BASE 0xfe150000ULL
 #define RK3588_PCIE3X4_DBI_BASE 0xa40000000ULL
+#define RK3588_PCIE3X2_APB_BASE 0xfe160000ULL
+#define RK3588_PCIE3X2_DBI_BASE 0xa40400000ULL
 #define RK3588_GMAC0_BASE 0xfe1b0000ULL
 #define RK3588_GMAC1_BASE 0xfe1c0000ULL
 #define RK3588_SDMMC_BASE 0xfe2c0000ULL
@@ -32,6 +35,7 @@
 #define RK3588_LPDDR5 9
 
 #define DWC_PCIE_VENDOR_DEVICE 0x0000
+#define DWC_PCIE_LTSSM_STATUS 0x0300
 #define DWMAC4_MAC_VERSION 0x0110
 #define DWMAC4_SNPSVER_0x51 0x00000051
 #define DW_MMC_VERID 0x006c
@@ -94,6 +98,21 @@ static void test_rock_5b_plus_machine_creation(void)
                           DWC_PCIE_VENDOR_DEVICE);
     g_assert_cmphex(pcie_id, !=, 0);
     g_assert_cmphex(pcie_id, !=, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X4_APB_BASE +
+                                DWC_PCIE_LTSSM_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X4_DBI_BASE +
+                                0x3ffffc), ==, 0);
+
+    pcie_id = qtest_readl(qts, RK3588_PCIE3X2_DBI_BASE +
+                          DWC_PCIE_VENDOR_DEVICE);
+    g_assert_cmphex(pcie_id, !=, 0);
+    g_assert_cmphex(pcie_id, !=, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X2_APB_BASE +
+                                DWC_PCIE_LTSSM_STATUS), ==, 0);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + 0x100010,
+                 UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X2_DBI_BASE +
+                                0x100010), ==, 0);
 
     g_assert_cmphex(qtest_readl(qts, RK3588_GICD_BASE + GICD_TYPER), !=, 0);
     g_assert_cmphex(qtest_readl(qts, RK3588_GICD_BASE + GICD_TYPER), !=,
