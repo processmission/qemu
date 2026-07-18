@@ -2309,6 +2309,11 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
         *reason = "dpu-stage-mode";
         return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
     }
+    if (ew_rdma_available &&
+        !rockchip_rknn_dpu_ew_uses_rdma(task->dpu.ew_cfg)) {
+        *reason = "dpu-rdma-unused";
+        return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
+    }
     if (task->dpu.output_precision == 0 && task->core.quantify &&
         task->enabled_blocks ==
             (dpu_blocks | ROCKCHIP_RKNN_BLOCK_DPU_RDMA) &&
@@ -2397,11 +2402,6 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
               rockchip_rknn_brdma_layout_is_supported(task) :
               rockchip_rknn_erdma_layout_is_supported(task))) {
             *reason = "dpu-brdma-layout";
-            return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
-        }
-        if (!erdma_disabled && !rockchip_rknn_dpu_ew_uses_rdma(
-                task->dpu.ew_cfg)) {
-            *reason = "dpu-rdma-unused";
             return ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
         }
         if (!erdma_disabled &&
@@ -3939,13 +3939,16 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
     size_t input_surface_bytes;
     size_t output_bytes;
     size_t output_surface_bytes;
+    uint64_t work_items;
     uint64_t host_bytes = 0;
 
     surfaces = input_height && !(rdma->height % input_height) ?
         rdma->height / input_height : 0;
-    if (!rockchip_rknn_dpu_work_budget_valid(
-            s, output_view->width, output_view->height,
-            task->dpu.output_channels_valid) ||
+    if (!rockchip_rknn_u64_mul3(
+            output_view->width, output_view->height,
+            task->dpu.output_channels_valid, &work_items) ||
+        !rockchip_rknn_u64_mul(work_items, surfaces, &work_items) ||
+        work_items > s->functional_max_mac_operations ||
         !rockchip_rknn_size_round_up(rdma->channels, 8,
                                      &input_storage_channels) ||
         !rockchip_rknn_size_round_up(output_view->channels, 16,
