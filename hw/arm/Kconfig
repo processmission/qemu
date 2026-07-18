@@ -227,6 +227,11 @@ config RK3588_EVB
     select SERIAL_MM
     select UNIMP
 
+config ROCK_5B_PLUS
+    bool
+    default y
+    depends on RK3588_EVB
+
 config S32K5
     bool
     default y
