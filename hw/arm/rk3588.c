@@ -59,8 +59,6 @@
 
 #include <libfdt.h>
 
-#define TYPE_RK3588_EVB_MACHINE MACHINE_TYPE_NAME("rk3588-evb")
-#define TYPE_RK3588S_ROC_PC_MACHINE MACHINE_TYPE_NAME("rk3588s-roc-pc")
 OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 
 #define RK3588_MAX_CPUS 8
@@ -234,50 +232,6 @@ typedef struct RK3588FITImage {
     uint64_t media_offset;
     uint32_t size;
 } RK3588FITImage;
-
-static const char * const rk3588_evb_compatible[] = {
-    "qemu,rk3588-evb",
-    "rockchip,rk3588-evb1-v10",
-    "rockchip,rk3588",
-};
-
-static const char * const rk3588s_roc_pc_compatible[] = {
-    "rockchip,rk3588s-firefly-roc-pc",
-    "firefly,rk3588s-roc-pc",
-    "rockchip,rk3588s",
-    "rockchip,rk3588",
-};
-
-static const RK3588BoardConfig rk3588_evb_board = {
-    .machine_name = "rk3588-evb",
-    .desc = "Rockchip RK3588 EVB (minimal)",
-    .ram_id = "rk3588-evb.ram",
-    .fdt_model = "QEMU Rockchip RK3588 EVB",
-    .fdt_compatible = rk3588_evb_compatible,
-    .fdt_compatible_count = ARRAY_SIZE(rk3588_evb_compatible),
-    .firmware_sd_unit = 0,
-    .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,
-    .dram_type = RK3588_DRAM_TYPE_LPDDR4X,
-    .gmac_mask = BIT(0) | BIT(1),
-    .pcie3x4_num_lanes = 4,
-    .default_zvm_ram = false,
-};
-
-static const RK3588BoardConfig rk3588s_roc_pc_board = {
-    .machine_name = "rk3588s-roc-pc",
-    .desc = "Firefly ROC-RK3588S-PC",
-    .ram_id = "rk3588s-roc-pc.ram",
-    .fdt_model = "Firefly ROC-RK3588S-PC",
-    .fdt_compatible = rk3588s_roc_pc_compatible,
-    .fdt_compatible_count = ARRAY_SIZE(rk3588s_roc_pc_compatible),
-    .firmware_sd_unit = 2,
-    .brom_bootsource = RK3588_BROM_BOOTSOURCE_SD,
-    .dram_type = RK3588_DRAM_TYPE_LPDDR4X,
-    .gmac_mask = BIT(0) | BIT(1),
-    .pcie3x4_num_lanes = 4,
-    .swap_gmac_aliases = true,
-    .default_zvm_ram = true,
-};
 
 struct RK3588MachineState {
     MachineState parent_obj;
@@ -3279,16 +3233,6 @@ void rk3588_machine_instance_configure(Object *obj,
     s->zvm_ram = board->default_zvm_ram;
 }
 
-static void rk3588_evb_machine_instance_init(Object *obj)
-{
-    rk3588_machine_instance_configure(obj, &rk3588_evb_board);
-}
-
-static void rk3588s_roc_pc_machine_instance_init(Object *obj)
-{
-    rk3588_machine_instance_configure(obj, &rk3588s_roc_pc_board);
-}
-
 void rk3588_machine_class_configure(ObjectClass *oc,
                                     const RK3588BoardConfig *board)
 {
@@ -3311,17 +3255,6 @@ void rk3588_machine_class_configure(ObjectClass *oc,
                                           "shared RAM windows");
 }
 
-static void rk3588_evb_machine_class_init(ObjectClass *oc, const void *data)
-{
-    rk3588_machine_class_configure(oc, &rk3588_evb_board);
-}
-
-static void rk3588s_roc_pc_machine_class_init(ObjectClass *oc,
-                                              const void *data)
-{
-    rk3588_machine_class_configure(oc, &rk3588s_roc_pc_board);
-}
-
 static const TypeInfo rk3588_machine_typeinfo = {
     .name = TYPE_RK3588_MACHINE,
     .parent = TYPE_MACHINE,
@@ -3330,25 +3263,9 @@ static const TypeInfo rk3588_machine_typeinfo = {
     .interfaces = aarch64_machine_interfaces,
 };
 
-static const TypeInfo rk3588_evb_machine_typeinfo = {
-    .name = TYPE_RK3588_EVB_MACHINE,
-    .parent = TYPE_RK3588_MACHINE,
-    .class_init = rk3588_evb_machine_class_init,
-    .instance_init = rk3588_evb_machine_instance_init,
-};
-
-static const TypeInfo rk3588s_roc_pc_machine_typeinfo = {
-    .name = TYPE_RK3588S_ROC_PC_MACHINE,
-    .parent = TYPE_RK3588_MACHINE,
-    .class_init = rk3588s_roc_pc_machine_class_init,
-    .instance_init = rk3588s_roc_pc_machine_instance_init,
-};
-
 static void rk3588_machine_init_register_types(void)
 {
     type_register_static(&rk3588_machine_typeinfo);
-    type_register_static(&rk3588_evb_machine_typeinfo);
-    type_register_static(&rk3588s_roc_pc_machine_typeinfo);
 }
 
 type_init(rk3588_machine_init_register_types)

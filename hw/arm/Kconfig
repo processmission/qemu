@@ -206,13 +206,10 @@ config SBSA_REF
     select IDE_BUS
     select IDE_DEV
 
-config RK3588_EVB
+config RK3588
     bool
-    default y
-    depends on TCG && AARCH64
     select ARM_GIC
     select DEVICE_TREE
-    select DWMAC4
     select DW_MMC
     select DW_APB_UART_VENDOR
     select PCI_EXPRESS_DESIGNWARE
@@ -227,10 +224,25 @@ config RK3588_EVB
     select SERIAL_MM
     select UNIMP
 
+config RK3588_EVB
+    bool
+    default y
+    depends on TCG && AARCH64
+    select RK3588
+    select DWMAC4
+
+config RK3588S_ROC_PC
+    bool
+    default y
+    depends on TCG && AARCH64
+    select RK3588
+    select DWMAC4
+
 config ROCK_5B_PLUS
     bool
     default y
-    depends on RK3588_EVB
+    depends on TCG && AARCH64
+    select RK3588
     select ROCKCHIP_CRYPTO_V2
 
 config S32K5
