@@ -1,5 +1,5 @@
 /*
- * QTest for the local-only Rockchip RK3588 board machine models
+ * QTest for the Rockchip RK3588 EVB machine model
  *
  * Copyright (c) 2026 Chao Liu
  *
@@ -201,7 +201,6 @@
 #define GPIO_PIN0_SET (GPIO_PIN0_WE | GPIO_PIN0)
 #define GPIO_PIN0_CLEAR GPIO_PIN0_WE
 #define RK3588_EVB_MACHINE "rk3588-evb"
-#define RK3588S_ROC_PC_MACHINE "rk3588s-roc-pc"
 
 static QTestState *rk3588_qtest_start(unsigned int cpus)
 {
@@ -213,12 +212,6 @@ static QTestState *rk3588_qtest_start_zvm_ram(void)
 {
     return qtest_init("-machine " RK3588_EVB_MACHINE
                       ",zvm-ram=on -smp 1 -m 512M");
-}
-
-static QTestState *rk3588s_roc_pc_qtest_start(unsigned int cpus)
-{
-    return qtest_initf("-machine " RK3588S_ROC_PC_MACHINE
-                       " -smp %u -m 512M", cpus);
 }
 
 static void test_rk3588_machine_creation(void)
@@ -793,41 +786,12 @@ static void test_rk3588_zvm_ram(void)
     qtest_quit(qts);
 }
 
-static void test_rk3588s_roc_pc_machine_creation(void)
-{
-    QTestState *qts = rk3588s_roc_pc_qtest_start(1);
-
-    qtest_writel(qts, RK3588_RAM_BASE, 0x3588);
-    g_assert_cmphex(qtest_readl(qts, RK3588_RAM_BASE), ==, 0x3588);
-    g_assert_cmphex(qtest_readl(qts, RK3588_SDMMC_BASE + DW_MMC_VERID), ==,
-                    DW_MMC_VERID_270A);
-    g_assert_cmphex(qtest_readl(qts, RK3588_GMAC1_BASE + DWMAC4_MAC_VERSION),
-                    ==, DWMAC4_SNPSVER_0x51);
-
-    /*
-     * ROC-RK3588S-PC is the ZVM target board. Its machine default maps the
-     * fixed ZVM guest/shared RAM windows that are real RAM on the 8 GiB board.
-     */
-    qtest_writel(qts, RK3588_ZVM_SHARED_RAM_BASE + 0x408, 0xe7f00408);
-    g_assert_cmphex(qtest_readl(qts, RK3588_ZVM_SHARED_RAM_BASE + 0x408), ==,
-                    0xe7f00408);
-    qtest_writeq(qts, RK3588_ZVM_HIGH_RAM_BASE, 0x100000000ULL);
-    g_assert_cmphex(qtest_readq(qts, RK3588_ZVM_HIGH_RAM_BASE), ==,
-                    0x100000000ULL);
-
-    qtest_quit(qts);
-}
-
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
 
     if (!qtest_has_machine(RK3588_EVB_MACHINE)) {
         g_test_skip(RK3588_EVB_MACHINE " machine not available");
-        return 0;
-    }
-    if (!qtest_has_machine(RK3588S_ROC_PC_MACHINE)) {
-        g_test_skip(RK3588S_ROC_PC_MACHINE " machine not available");
         return 0;
     }
     if (!qtest_has_device("arm-gicv3")) {
@@ -843,20 +807,20 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    qtest_add_func("/rk3588/machine-creation", test_rk3588_machine_creation);
-    qtest_add_func("/rk3588/smp-creation", test_rk3588_smp_creation);
-    qtest_add_func("/rk3588/peripheral-mmio", test_rk3588_peripheral_mmio);
-    qtest_add_func("/rk3588/sdmmc-scmi", test_rk3588_sdmmc_scmi);
-    qtest_add_func("/rk3588/firmware-registers",
+    qtest_add_func("/rk3588-evb/machine-creation",
+                   test_rk3588_machine_creation);
+    qtest_add_func("/rk3588-evb/smp-creation", test_rk3588_smp_creation);
+    qtest_add_func("/rk3588-evb/peripheral-mmio",
+                   test_rk3588_peripheral_mmio);
+    qtest_add_func("/rk3588-evb/sdmmc-scmi", test_rk3588_sdmmc_scmi);
+    qtest_add_func("/rk3588-evb/firmware-registers",
                    test_rk3588_firmware_registers);
-    qtest_add_func("/rk3588/usb2-host-firmware-windows",
+    qtest_add_func("/rk3588-evb/usb2-host-firmware-windows",
                    test_rk3588_usb2_host_firmware_windows);
-    qtest_add_func("/rk3588/its-lpi", test_rk3588_its_lpi);
-    qtest_add_func("/rk3588/pcie", test_rk3588_pcie);
-    qtest_add_func("/rk3588/gpio-bank", test_rk3588_gpio_bank);
-    qtest_add_func("/rk3588/zvm-ram", test_rk3588_zvm_ram);
-    qtest_add_func("/rk3588s-roc-pc/machine-creation",
-                   test_rk3588s_roc_pc_machine_creation);
+    qtest_add_func("/rk3588-evb/its-lpi", test_rk3588_its_lpi);
+    qtest_add_func("/rk3588-evb/pcie", test_rk3588_pcie);
+    qtest_add_func("/rk3588-evb/gpio-bank", test_rk3588_gpio_bank);
+    qtest_add_func("/rk3588-evb/zvm-ram", test_rk3588_zvm_ram);
 
     return g_test_run();
 }
