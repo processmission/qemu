@@ -206,6 +206,9 @@ config NXP_S32_MC_ME
 config LED
     bool
 
+config RK3588_ATF_DDR
+    bool
+
 config RK3588_CRU
     bool
 

@@ -182,6 +182,7 @@ system_ss.add(when: 'CONFIG_AVR_POWER', if_true: files('avr_power.c'))
 
 system_ss.add(when: 'CONFIG_MAC_VIA', if_true: files('mac_via.c'))
 
+system_ss.add(when: 'CONFIG_RK3588_ATF_DDR', if_true: files('rk3588_atf_ddr.c'))
 system_ss.add(when: 'CONFIG_RK3588_CRU', if_true: files('rk3588_cru.c'))
 system_ss.add(when: 'CONFIG_RK3588_DDR', if_true: files('rk3588_ddr.c'))
 system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
