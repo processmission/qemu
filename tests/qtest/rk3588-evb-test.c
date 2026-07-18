@@ -46,6 +46,8 @@
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC 0x0084
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC_VALUE 0x13579bdf
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
+#define RK3588_SYS_GRF_CORE_STATUS 0xfd58c38cULL
+#define RK3588_SYS_GRF_CORE_STATUS_ALL 0xf0
 #define RK3588_ATF_DDR_RUNTIME_ADDR 0x0008d000ULL
 #define RK3588_ATF_DDR_GLOBAL_PTR 0x0008d0a8ULL
 #define RK3588_ATF_TIMER_PTR 0x0008d0b0ULL
@@ -414,6 +416,8 @@ static void test_rk3588_firmware_registers(void)
     g_assert_cmphex(qtest_readl(qts, RK3588_PMU0_GRF_BASE +
                                 RK3588_PMU0_GRF_WARM_BOOT_MAGIC), ==,
                     RK3588_PMU0_GRF_WARM_BOOT_MAGIC_VALUE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SYS_GRF_CORE_STATUS), ==,
+                    RK3588_SYS_GRF_CORE_STATUS_ALL);
     g_assert_cmphex(qtest_readq(qts, RK3588_ATF_DDR_GLOBAL_PTR), ==,
                     RK3588_ATF_DDR_DESCRIPTOR);
     g_assert_cmphex(qtest_readq(qts, RK3588_ATF_TIMER_PTR), ==,

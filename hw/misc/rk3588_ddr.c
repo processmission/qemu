@@ -16,14 +16,16 @@
 
 #define RK3588_DDR_LEGACY_WORDS \
     (RK3588_DDR_LEGACY_MMIO_SIZE / sizeof(uint32_t))
+#define RK3588_DDR_LEGACY_PHY_WORDS \
+    (RK3588_DDR_LEGACY_PHY_MMIO_SIZE / sizeof(uint32_t))
+#define RK3588_DDR_LEGACY_PHY_AUX_WORDS \
+    (RK3588_DDR_LEGACY_PHY_AUX_MMIO_SIZE / sizeof(uint32_t))
 #define RK3588_DDR_GLOBAL_WORDS \
     (RK3588_DDR_GLOBAL_MMIO_SIZE / sizeof(uint32_t))
 #define RK3588_DDR_CHANNEL_WORDS \
     (RK3588_DDR_CHANNEL_MMIO_SIZE / sizeof(uint32_t))
 #define RK3588_DDRPHY_WORDS \
     (RK3588_DDRPHY_MMIO_SIZE / sizeof(uint32_t))
-#define RK3588_DDR_PHY_GATE_WORDS \
-    (RK3588_DDR_PHY_GATE_MMIO_SIZE / sizeof(uint32_t))
 
 #define RK3588_DDR_CTRL_BUSY_MASK       (BIT(31) | BIT(3))
 #define RK3588_DDR_STATUS_LOW_MASK      0x7
@@ -64,12 +66,14 @@ struct RK3588DDRState {
     RegisterInfoArray *reg_arrays[RK3588_DDR_MMIO_COUNT];
     RegisterInfo *regs_info[RK3588_DDR_MMIO_COUNT];
 
-    uint32_t legacy_regs[RK3588_DDR_LEGACY_WORDS];
+    uint32_t legacy_regs[RK3588_DDR_LEGACY_WINDOW_COUNT]
+                        [RK3588_DDR_LEGACY_WORDS];
+    uint32_t legacy_phy_regs[RK3588_DDR_LEGACY_PHY_WORDS];
+    uint32_t legacy_phy_aux_regs[RK3588_DDR_LEGACY_PHY_AUX_WORDS];
     uint32_t global_regs[RK3588_DDR_GLOBAL_WORDS];
     uint32_t channel_regs[RK3588_DDR_CHANNEL_COUNT]
                          [RK3588_DDR_CHANNEL_WORDS];
     uint32_t ddrphy_regs[RK3588_DDRPHY_WORDS];
-    uint32_t phy_gate_regs[RK3588_DDR_PHY_GATE_WORDS];
 
     bool gate_done;
     bool last_phy_gate;
@@ -178,6 +182,8 @@ static void rk3588_ddr_phy_gate_post_write(RegisterInfo *reg, uint64_t value)
 }
 
 static const RegisterAccessInfo rk3588_ddr_legacy_regs_info[] = {
+    { .name = "DDR_PHY_GATE_CTRL", .addr = A_DDR_PHY_GATE_CTRL,
+      .reset = UINT32_MAX, .post_write = rk3588_ddr_phy_gate_post_write },
     { .name = "CHANNEL_STATUS", .addr = A_CHANNEL_STATUS,
       .reset = UINT32_MAX,
       .post_read = rk3588_ddr_legacy_status_post_read },
@@ -245,11 +251,6 @@ static const RegisterAccessInfo rk3588_ddrphy_regs_info[] = {
       .reset = UINT32_MAX, .post_read = rk3588_ddrphy_status_post_read },
 };
 
-static const RegisterAccessInfo rk3588_ddr_phy_gate_regs_info[] = {
-    { .name = "DDR_PHY_GATE_CTRL", .addr = A_DDR_PHY_GATE_CTRL,
-      .reset = UINT32_MAX, .post_write = rk3588_ddr_phy_gate_post_write },
-};
-
 static unsigned int rk3588_ddr_window_index(RK3588DDRState *s,
                                              RegisterInfoArray *reg_array)
 {
@@ -265,8 +266,14 @@ static unsigned int rk3588_ddr_window_index(RK3588DDRState *s,
 static uint32_t *rk3588_ddr_window_regs(RK3588DDRState *s,
                                         unsigned int index)
 {
-    if (index == RK3588_DDR_MMIO_LEGACY) {
-        return s->legacy_regs;
+    if (index < RK3588_DDR_LEGACY_WINDOW_COUNT) {
+        return s->legacy_regs[index];
+    }
+    if (index == RK3588_DDR_MMIO_LEGACY_PHY) {
+        return s->legacy_phy_regs;
+    }
+    if (index == RK3588_DDR_MMIO_LEGACY_PHY_AUX) {
+        return s->legacy_phy_aux_regs;
     }
     if (index == RK3588_DDR_MMIO_GLOBAL) {
         return s->global_regs;
@@ -278,17 +285,19 @@ static uint32_t *rk3588_ddr_window_regs(RK3588DDRState *s,
     if (index == RK3588_DDR_MMIO_DDRPHY) {
         return s->ddrphy_regs;
     }
-    if (index == RK3588_DDR_MMIO_PHY_GATE) {
-        return s->phy_gate_regs;
-    }
-
     g_assert_not_reached();
 }
 
 static uint64_t rk3588_ddr_window_size(unsigned int index)
 {
-    if (index == RK3588_DDR_MMIO_LEGACY) {
+    if (index < RK3588_DDR_LEGACY_WINDOW_COUNT) {
         return RK3588_DDR_LEGACY_MMIO_SIZE;
+    }
+    if (index == RK3588_DDR_MMIO_LEGACY_PHY) {
+        return RK3588_DDR_LEGACY_PHY_MMIO_SIZE;
+    }
+    if (index == RK3588_DDR_MMIO_LEGACY_PHY_AUX) {
+        return RK3588_DDR_LEGACY_PHY_AUX_MMIO_SIZE;
     }
     if (index == RK3588_DDR_MMIO_GLOBAL) {
         return RK3588_DDR_GLOBAL_MMIO_SIZE;
@@ -300,10 +309,6 @@ static uint64_t rk3588_ddr_window_size(unsigned int index)
     if (index == RK3588_DDR_MMIO_DDRPHY) {
         return RK3588_DDRPHY_MMIO_SIZE;
     }
-    if (index == RK3588_DDR_MMIO_PHY_GATE) {
-        return RK3588_DDR_PHY_GATE_MMIO_SIZE;
-    }
-
     g_assert_not_reached();
 }
 
@@ -370,6 +375,19 @@ static uint64_t rk3588_ddr_read(void *opaque, hwaddr addr, unsigned int size)
         return 0;
     }
 
+    if (index <= RK3588_DDR_MMIO_LEGACY_PHY_AUX &&
+        size == sizeof(uint32_t) &&
+        (addr & 0xfff) == A_DDRPHY_STATUS) {
+        uint32_t *regs = rk3588_ddr_window_regs(s, index);
+        uint32_t value = rk3588_ddr_raw_read(regs, addr, size);
+        hwaddr ctrl = addr - A_DDRPHY_STATUS + A_DDRPHY_CTRL;
+
+        value &= ~RK3588_DDRPHY_STATUS_ACTIVE;
+        value |= rk3588_ddr_raw_read(regs, ctrl, size) &
+                 RK3588_DDRPHY_STATUS_ACTIVE;
+        return value;
+    }
+
     if (size == 4 && rk3588_ddr_find_register(reg_array, addr)) {
         return register_read_memory(reg_array, addr, size);
     }
@@ -426,10 +444,12 @@ static void rk3588_ddr_reset_hold(Object *obj, ResetType type)
     RK3588DDRState *s = RK3588_DDR(obj);
 
     memset(s->legacy_regs, 0xff, sizeof(s->legacy_regs));
+    memset(s->legacy_phy_regs, 0xff, sizeof(s->legacy_phy_regs));
+    memset(s->legacy_phy_aux_regs, 0xff,
+           sizeof(s->legacy_phy_aux_regs));
     memset(s->global_regs, 0xff, sizeof(s->global_regs));
     memset(s->channel_regs, 0xff, sizeof(s->channel_regs));
     memset(s->ddrphy_regs, 0xff, sizeof(s->ddrphy_regs));
-    memset(s->phy_gate_regs, 0xff, sizeof(s->phy_gate_regs));
 
     for (unsigned int i = 0; i < RK3588_DDR_MMIO_COUNT; i++) {
         for (unsigned int j = 0; j < s->reg_arrays[i]->num_elements; j++) {
@@ -447,8 +467,13 @@ static const VMStateDescription vmstate_rk3588_ddr = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(legacy_regs, RK3588DDRState,
-                             RK3588_DDR_LEGACY_WORDS),
+        VMSTATE_UINT32_2DARRAY(legacy_regs, RK3588DDRState,
+                              RK3588_DDR_LEGACY_WINDOW_COUNT,
+                              RK3588_DDR_LEGACY_WORDS),
+        VMSTATE_UINT32_ARRAY(legacy_phy_regs, RK3588DDRState,
+                             RK3588_DDR_LEGACY_PHY_WORDS),
+        VMSTATE_UINT32_ARRAY(legacy_phy_aux_regs, RK3588DDRState,
+                             RK3588_DDR_LEGACY_PHY_AUX_WORDS),
         VMSTATE_UINT32_ARRAY(global_regs, RK3588DDRState,
                              RK3588_DDR_GLOBAL_WORDS),
         VMSTATE_UINT32_2DARRAY(channel_regs, RK3588DDRState,
@@ -456,8 +481,6 @@ static const VMStateDescription vmstate_rk3588_ddr = {
                               RK3588_DDR_CHANNEL_WORDS),
         VMSTATE_UINT32_ARRAY(ddrphy_regs, RK3588DDRState,
                              RK3588_DDRPHY_WORDS),
-        VMSTATE_UINT32_ARRAY(phy_gate_regs, RK3588DDRState,
-                             RK3588_DDR_PHY_GATE_WORDS),
         VMSTATE_BOOL(gate_done, RK3588DDRState),
         VMSTATE_BOOL(last_phy_gate, RK3588DDRState),
         VMSTATE_BOOL(gate_bit5_clear, RK3588DDRState),
@@ -488,8 +511,20 @@ static void rk3588_ddr_init(Object *obj)
 {
     RK3588DDRState *s = RK3588_DDR(obj);
 
-    rk3588_ddr_init_window(s, RK3588_DDR_MMIO_LEGACY, s->legacy_regs,
-                           RK3588_DDR_LEGACY_MMIO_SIZE,
+    for (unsigned int i = 0; i < RK3588_DDR_LEGACY_WINDOW_COUNT; i++) {
+        rk3588_ddr_init_window(s, i, s->legacy_regs[i],
+                               RK3588_DDR_LEGACY_MMIO_SIZE,
+                               rk3588_ddr_legacy_regs_info,
+                               ARRAY_SIZE(rk3588_ddr_legacy_regs_info));
+    }
+    rk3588_ddr_init_window(s, RK3588_DDR_MMIO_LEGACY_PHY,
+                           s->legacy_phy_regs,
+                           RK3588_DDR_LEGACY_PHY_MMIO_SIZE,
+                           rk3588_ddr_legacy_regs_info,
+                           ARRAY_SIZE(rk3588_ddr_legacy_regs_info));
+    rk3588_ddr_init_window(s, RK3588_DDR_MMIO_LEGACY_PHY_AUX,
+                           s->legacy_phy_aux_regs,
+                           RK3588_DDR_LEGACY_PHY_AUX_MMIO_SIZE,
                            rk3588_ddr_legacy_regs_info,
                            ARRAY_SIZE(rk3588_ddr_legacy_regs_info));
     rk3588_ddr_init_window(s, RK3588_DDR_MMIO_GLOBAL, s->global_regs,
@@ -509,10 +544,6 @@ static void rk3588_ddr_init(Object *obj)
                            RK3588_DDRPHY_MMIO_SIZE,
                            rk3588_ddrphy_regs_info,
                            ARRAY_SIZE(rk3588_ddrphy_regs_info));
-    rk3588_ddr_init_window(s, RK3588_DDR_MMIO_PHY_GATE, s->phy_gate_regs,
-                           RK3588_DDR_PHY_GATE_MMIO_SIZE,
-                           rk3588_ddr_phy_gate_regs_info,
-                           ARRAY_SIZE(rk3588_ddr_phy_gate_regs_info));
 }
 
 static void rk3588_ddr_finalize(Object *obj)
