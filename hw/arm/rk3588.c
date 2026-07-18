@@ -88,6 +88,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
 #define RK3588_FIRMWARE_MMIO_SIZE 0x08000000
+#define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
+#define RK3588_SECURE_OTP_DOUT_OFFSET 0x20
+#define RK3588_SECURE_OTP_INT_STATUS_OFFSET 0x84
+#define RK3588_SECURE_OTP_READ_DONE BIT(1)
 #define RK3588_DDR_SYS_REG_VERSION 3
 #define RK3588_DDRPHY_CTRL_OFFSET 0x154
 #define RK3588_DDRPHY_STATUS_OFFSET 0x184
@@ -503,10 +507,24 @@ static uint64_t rk3588_firmware_mmio_read(void *opaque, hwaddr offset,
                                           unsigned size)
 {
     RK3588MachineState *s = opaque;
+    hwaddr phys = rk3588_memmap[RK3588_FIRMWARE_MMIO].base + offset;
     hwaddr reg_offset;
 
     if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
         size > 8) {
+        return 0;
+    }
+
+    if (s->board->firmware_profile &&
+        s->board->firmware_profile->unfused_secure_otp && size == 4 &&
+        phys == RK3588_SECURE_OTP_BASE +
+                RK3588_SECURE_OTP_INT_STATUS_OFFSET) {
+        return RK3588_SECURE_OTP_READ_DONE;
+    }
+
+    if (s->board->firmware_profile &&
+        s->board->firmware_profile->unfused_secure_otp && size == 4 &&
+        phys == RK3588_SECURE_OTP_BASE + RK3588_SECURE_OTP_DOUT_OFFSET) {
         return 0;
     }
 

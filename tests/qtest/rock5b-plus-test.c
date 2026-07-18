@@ -19,6 +19,7 @@
 #define RK3588_SDMMC_BASE 0xfe2c0000ULL
 #define RK3588_SDHCI_BASE 0xfe2e0000ULL
 #define RK3588_GICD_BASE 0xfe600000ULL
+#define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
 #define RK3588_UART2_BASE 0xfeb50000ULL
 
 #define PMU1_GRF_OS_REG2 0x0208
@@ -39,6 +40,9 @@
 #define UART_LSR (5 << 2)
 #define UART_LSR_THRE 0x20
 #define UART_LSR_TEMT 0x40
+#define SECURE_OTP_DOUT 0x20
+#define SECURE_OTP_INT_STATUS 0x84
+#define SECURE_OTP_READ_DONE 0x2
 
 static QTestState *rock_5b_plus_qtest_start(unsigned int cpus)
 {
@@ -109,6 +113,19 @@ static void test_rock_5b_plus_smp_creation(void)
     qtest_quit(qts);
 }
 
+static void test_rock_5b_plus_unfused_secure_otp(void)
+{
+    QTestState *qts = rock_5b_plus_qtest_start(1);
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_INT_STATUS), ==,
+                    SECURE_OTP_READ_DONE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_DOUT), ==, 0);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -122,6 +139,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_machine_creation);
     qtest_add_func("/rock-5b-plus/smp-creation",
                    test_rock_5b_plus_smp_creation);
+    qtest_add_func("/rock-5b-plus/unfused-secure-otp",
+                   test_rock_5b_plus_unfused_secure_otp);
 
     return g_test_run();
 }
