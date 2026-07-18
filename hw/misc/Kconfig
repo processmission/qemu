@@ -46,6 +46,10 @@ config PL310
 config ROCKCHIP_SYSCON
     bool
 
+config ROCKCHIP_CRYPTO_V2
+    bool
+    select REGISTER
+
 config PHYTIUM_DDR_CTRL
     bool
 

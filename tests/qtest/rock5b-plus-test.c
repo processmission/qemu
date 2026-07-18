@@ -13,6 +13,7 @@
 
 #define RK3588_RAM_BASE 0x00200000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
+#define RK3588_CRYPTO_BASE 0xfe370000ULL
 #define RK3588_PCIE3X4_DBI_BASE 0xa40000000ULL
 #define RK3588_GMAC0_BASE 0xfe1b0000ULL
 #define RK3588_GMAC1_BASE 0xfe1c0000ULL
@@ -43,6 +44,22 @@
 #define SECURE_OTP_DOUT 0x20
 #define SECURE_OTP_INT_STATUS 0x84
 #define SECURE_OTP_READ_DONE 0x2
+#define CRYPTO_RST_CTL 0x004
+#define CRYPTO_DMA_INT_ST 0x00c
+#define CRYPTO_DMA_CTL 0x010
+#define CRYPTO_DMA_LLI_ADDR 0x014
+#define CRYPTO_FIFO_CTL 0x040
+#define CRYPTO_HASH_CTL 0x048
+#define CRYPTO_HASH_DOUT_0 0x3a0
+#define CRYPTO_HASH_VALID 0x3e4
+#define CRYPTO_WRITE_MASK(value) ((uint32_t)(value) << 16)
+#define CRYPTO_DMA_SRC_ITEM_DONE 0x4
+#define CRYPTO_DMA_LIST_ERR 0x20
+#define CRYPTO_HASH_VALID_BIT 0x1
+#define CRYPTO_FIFO_BYTESWAP 0x3
+#define CRYPTO_HASH_SHA256_PAD_ENABLE 0x25
+#define CRYPTO_LLI_USER_START_LAST 0x6
+#define CRYPTO_LLI_DMA_LAST_SRC_DONE 0x401
 
 static QTestState *rock_5b_plus_qtest_start(unsigned int cpus)
 {
@@ -126,6 +143,103 @@ static void test_rock_5b_plus_unfused_secure_otp(void)
     qtest_quit(qts);
 }
 
+static void test_rock_5b_plus_crypto_sha256(void)
+{
+    static const uint8_t input[] = { 'a', 'b', 'c' };
+    static const uint32_t expected[] = {
+        0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223,
+        0xb00361a3, 0x96177a9c, 0xb410ff61, 0xf20015ad,
+    };
+    const uint64_t input_addr = RK3588_RAM_BASE;
+    const uint64_t lli_addr = RK3588_RAM_BASE + 0x1000;
+    QTestState *qts = rock_5b_plus_qtest_start(1);
+    uint32_t status = 0;
+
+    qtest_memwrite(qts, input_addr, input, sizeof(input));
+    qtest_writel(qts, lli_addr + 0x00, input_addr);
+    qtest_writel(qts, lli_addr + 0x04, sizeof(input));
+    qtest_writel(qts, lli_addr + 0x08, 0);
+    qtest_writel(qts, lli_addr + 0x0c, 0);
+    qtest_writel(qts, lli_addr + 0x10, CRYPTO_LLI_USER_START_LAST);
+    qtest_writel(qts, lli_addr + 0x14, 0);
+    qtest_writel(qts, lli_addr + 0x18, CRYPTO_LLI_DMA_LAST_SRC_DONE);
+    qtest_writel(qts, lli_addr + 0x1c, 0);
+
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_RST_CTL,
+                 CRYPTO_WRITE_MASK(1) | 1);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_RST_CTL), ==, 0);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_FIFO_CTL,
+                 CRYPTO_WRITE_MASK(CRYPTO_FIFO_BYTESWAP) |
+                 CRYPTO_FIFO_BYTESWAP);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_HASH_CTL,
+                 CRYPTO_WRITE_MASK(0xffff) |
+                 CRYPTO_HASH_SHA256_PAD_ENABLE);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_HASH_CTL, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_HASH_CTL), ==,
+                    CRYPTO_HASH_SHA256_PAD_ENABLE);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_LLI_ADDR, lli_addr);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_CTL,
+                 CRYPTO_WRITE_MASK(1) | 1);
+
+    for (unsigned int i = 0; i < 1000 && !status; i++) {
+        qtest_clock_step(qts, 1);
+        status = qtest_readl(qts, RK3588_CRYPTO_BASE +
+                             CRYPTO_DMA_INT_ST);
+    }
+
+    g_assert_cmphex(status, ==, CRYPTO_DMA_SRC_ITEM_DONE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_HASH_VALID), ==,
+                    CRYPTO_HASH_VALID_BIT);
+    for (unsigned int i = 0; i < ARRAY_SIZE(expected); i++) {
+        g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                    CRYPTO_HASH_DOUT_0 + i * 4), ==,
+                        expected[i]);
+    }
+
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_INT_ST,
+                 CRYPTO_DMA_SRC_ITEM_DONE);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_HASH_VALID,
+                 CRYPTO_HASH_VALID_BIT);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_DMA_INT_ST), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_HASH_VALID), ==, 0);
+
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_CTL,
+                 CRYPTO_WRITE_MASK(2) | 2);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_DMA_INT_ST), ==,
+                    CRYPTO_DMA_LIST_ERR);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_INT_ST,
+                 CRYPTO_DMA_LIST_ERR);
+
+    qtest_writel(qts, lli_addr + 0x10,
+                 CRYPTO_LLI_USER_START_LAST | 0x8);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_CTL,
+                 CRYPTO_WRITE_MASK(1) | 1);
+    status = 0;
+    for (unsigned int i = 0; i < 1000 && !status; i++) {
+        qtest_clock_step(qts, 1);
+        status = qtest_readl(qts, RK3588_CRYPTO_BASE +
+                             CRYPTO_DMA_INT_ST);
+    }
+    g_assert_cmphex(status, ==, CRYPTO_DMA_LIST_ERR);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_HASH_VALID), ==, 0);
+
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_RST_CTL,
+                 CRYPTO_WRITE_MASK(1) | 1);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_DMA_INT_ST), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_CRYPTO_BASE +
+                                CRYPTO_HASH_DOUT_0), ==, 0);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -141,6 +255,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_smp_creation);
     qtest_add_func("/rock-5b-plus/unfused-secure-otp",
                    test_rock_5b_plus_unfused_secure_otp);
+    qtest_add_func("/rock-5b-plus/crypto-sha256",
+                   test_rock_5b_plus_crypto_sha256);
 
     return g_test_run();
 }
