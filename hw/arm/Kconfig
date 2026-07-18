@@ -214,6 +214,7 @@ config RK3588
     select DW_APB_UART_VENDOR
     select PCI_EXPRESS_DESIGNWARE
     select RK3588_CRU
+    select RK3588_DDR
     select ROCKCHIP_DWCMSHC
     select ROCKCHIP_PCIE
     select ROCKCHIP_STIMER

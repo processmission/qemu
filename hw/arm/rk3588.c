@@ -30,6 +30,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_syscon.h"
+#include "hw/misc/rk3588_ddr.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
 #include "hw/nvram/rk3588_secure_otp.h"
@@ -92,24 +93,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_FIRMWARE_MMIO_SIZE 0x08000000
 #define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
 #define RK3588_DDR_SYS_REG_VERSION 3
-#define RK3588_DDRPHY_CTRL_OFFSET 0x154
-#define RK3588_DDRPHY_STATUS_OFFSET 0x184
-#define RK3588_DDRPHY_STATUS_ACTIVE 0x3
-#define RK3588_DDR_CHANNEL_STATUS_OFFSET 0x14
-#define RK3588_DDR_CHANNEL_STATUS_READY 0x1
-#define RK3588_DDR_CHANNEL_CMD_OFFSET 0x80
-#define RK3588_DDR_CHANNEL_CMD_START 0x80000000U
-#define RK3588_DDR_CHANNEL_BUSY_OFFSET 0x90
-#define RK3588_DDR_CHANNEL_BUSY 0x1
-#define RK3588_DDR_CHANNEL_GATE_STATUS_OFFSET 0x514
-#define RK3588_DDR_CHANNEL_GATE_BUSY 0x1
-#define RK3588_DDR_CHANNEL_GATE_CMD_OFFSET 0x510
-#define RK3588_DDR_CHANNEL_GATE_ENABLE 0x20
-#define RK3588_DDR_CHANNEL_GATE_CTRL_OFFSET 0xc80
-#define RK3588_DDR_CHANNEL_PHY_STATUS_OFFSET 0xb90
-#define RK3588_DDR_CHANNEL_PHY_BUSY 0x10000
-#define RK3588_DDR_PHY_GATE_CTRL_OFFSET 0xb0
-#define RK3588_DDR_PHY_GATE_ENABLE 0x20
+#define RK3588_DDR_LEGACY_BASE 0xf7010000ULL
+#define RK3588_DDR_GLOBAL_BASE 0xfd000000ULL
+#define RK3588_DDR_CHANNEL_BASE 0xfd100000ULL
+#define RK3588_DDRPHY_BASE 0xfd8d8000ULL
+#define RK3588_DDR_PHY_GATE_BASE 0xfe0c0000ULL
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC_OFFSET 0x84
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC 0x13579bdf
 #define RK3588_PMUSRAM_SKIP_ADDR 0xff101764ULL
@@ -156,12 +144,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
     (RK3588_ATF_DDR_DESCRIPTOR_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
 #define RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET \
     (RK3588_ATF_DDR_CHANNEL_TABLE_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_DDR_GLOBAL_BASE 0xfd000000ULL
-#define RK3588_ATF_DDR_CTRL_WINDOW_SIZE 0x00020000ULL
-#define RK3588_ATF_DDR_CHANNEL_BASE 0xfd100000ULL
-#define RK3588_ATF_DDR_CHANNEL_STRIDE 0x00020000ULL
 #define RK3588_ATF_DDR_CHANNELS 8
-#define RK3588_ATF_DDR_CTRL_BUSY_MASK ((1U << 31) | (1U << 3))
 #define RK3588_USB2_HOST0_EHCI_BASE 0xfc800000ULL
 #define RK3588_USB2_HOST0_OHCI_BASE 0xfc840000ULL
 #define RK3588_USB2_HOST1_EHCI_BASE 0xfc880000ULL
@@ -230,6 +213,7 @@ struct RK3588MachineState {
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
+    RK3588DDRState *ddr;
     RK3588USB2HostState *usb2_host;
     RockchipSysconState *pmu0grf;
     RockchipSysconState *pmu1grf;
@@ -246,9 +230,6 @@ struct RK3588MachineState {
     MemoryRegion firmware_mmio;
     uint8_t *firmware_mmio_regs;
     QEMUTimer *firmware_patch_timer;
-    bool firmware_mmio_gate_done;
-    bool firmware_mmio_last_phy_gate;
-    bool firmware_mmio_gate_bit5_clear;
     bool firmware_boot;
     bool firmware_patch_done;
     bool firmware_handoff_done;
@@ -411,111 +392,14 @@ enum {
     RK3588_UART2_SPI = 333,
 };
 
-static bool rk3588_firmware_ddr_ctrl_offset(hwaddr offset,
-                                            hwaddr *reg_offset)
-{
-    uint64_t phys = rk3588_memmap[RK3588_FIRMWARE_MMIO].base + offset;
-
-    if (phys >= RK3588_ATF_DDR_GLOBAL_BASE &&
-        phys < RK3588_ATF_DDR_GLOBAL_BASE +
-               RK3588_ATF_DDR_CTRL_WINDOW_SIZE) {
-        *reg_offset = phys - RK3588_ATF_DDR_GLOBAL_BASE;
-        return true;
-    }
-
-    if (phys >= RK3588_ATF_DDR_CHANNEL_BASE &&
-        phys < RK3588_ATF_DDR_CHANNEL_BASE +
-               RK3588_ATF_DDR_CHANNELS * RK3588_ATF_DDR_CHANNEL_STRIDE) {
-        *reg_offset = (phys - RK3588_ATF_DDR_CHANNEL_BASE) %
-                      RK3588_ATF_DDR_CHANNEL_STRIDE;
-        return true;
-    }
-
-    return false;
-}
-
 static uint64_t rk3588_firmware_mmio_read(void *opaque, hwaddr offset,
                                           unsigned size)
 {
     RK3588MachineState *s = opaque;
-    hwaddr reg_offset;
 
     if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
         size > 8) {
         return 0;
-    }
-
-    if (size == 4 &&
-        rk3588_firmware_ddr_ctrl_offset(offset, &reg_offset)) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        if (reg_offset == 0) {
-            return value & ~RK3588_ATF_DDR_CTRL_BUSY_MASK;
-        } else if (reg_offset == 4) {
-            return 0;
-        } else if (reg_offset == RK3588_DDR_CHANNEL_STATUS_OFFSET) {
-            bool request = value & RK3588_DDR_CHANNEL_STATUS_READY;
-
-            value &= ~0x7;
-            value |= RK3588_DDR_CHANNEL_STATUS_READY;
-            if (request) {
-                value |= (1U << 31);
-            }
-            return value;
-        }
-    }
-
-    if (size == 4 &&
-        (offset & 0xfff) == RK3588_DDRPHY_STATUS_OFFSET) {
-        hwaddr ctrl = offset - RK3588_DDRPHY_STATUS_OFFSET +
-                      RK3588_DDRPHY_CTRL_OFFSET;
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        value &= ~RK3588_DDRPHY_STATUS_ACTIVE;
-        value |= ldl_le_p(&s->firmware_mmio_regs[ctrl]) &
-                 RK3588_DDRPHY_STATUS_ACTIVE;
-        return value;
-    }
-
-    if (size == 4 &&
-        (offset & 0xffff) == RK3588_DDR_CHANNEL_STATUS_OFFSET) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        value &= ~0x7;
-        value |= RK3588_DDR_CHANNEL_STATUS_READY;
-        return value;
-    }
-
-    if (size == 4 &&
-        (offset & 0xffff) == RK3588_DDR_CHANNEL_CMD_OFFSET) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        return value & ~RK3588_DDR_CHANNEL_CMD_START;
-    }
-
-    if (size == 4 &&
-        (offset & 0xffff) == RK3588_DDR_CHANNEL_BUSY_OFFSET) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        return value & ~RK3588_DDR_CHANNEL_BUSY;
-    }
-
-    if (size == 4 &&
-        (offset & 0xffff) == RK3588_DDR_CHANNEL_GATE_STATUS_OFFSET) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        if (s->firmware_mmio_gate_done || s->firmware_mmio_gate_bit5_clear) {
-            return value | RK3588_DDR_CHANNEL_GATE_BUSY;
-        }
-
-        return value & ~RK3588_DDR_CHANNEL_GATE_BUSY;
-    }
-
-    if (size == 4 &&
-        (offset & 0xffff) == RK3588_DDR_CHANNEL_PHY_STATUS_OFFSET) {
-        uint32_t value = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-        return value & ~RK3588_DDR_CHANNEL_PHY_BUSY;
     }
 
     switch (size) {
@@ -540,24 +424,6 @@ static void rk3588_firmware_mmio_write(void *opaque, hwaddr offset,
     if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
         size > 8) {
         return;
-    }
-
-    if (size == 4) {
-        if ((offset & 0xffff) == RK3588_DDR_CHANNEL_GATE_CMD_OFFSET) {
-            s->firmware_mmio_gate_bit5_clear =
-                !(value & RK3588_DDR_CHANNEL_GATE_ENABLE);
-            s->firmware_mmio_last_phy_gate = false;
-        } else if ((offset & 0xffff) == RK3588_DDR_PHY_GATE_CTRL_OFFSET &&
-                   !(value & RK3588_DDR_PHY_GATE_ENABLE)) {
-            s->firmware_mmio_gate_done = true;
-            s->firmware_mmio_last_phy_gate = true;
-        } else {
-            if ((offset & 0xffff) == RK3588_DDR_CHANNEL_GATE_CTRL_OFFSET &&
-                value == 0 && !s->firmware_mmio_last_phy_gate) {
-                s->firmware_mmio_gate_done = false;
-            }
-            s->firmware_mmio_last_phy_gate = false;
-        }
     }
 
     switch (size) {
@@ -1445,15 +1311,15 @@ static void rk3588_seed_atf_ddr_runtime(RK3588MachineState *s)
     stl_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_TIMER_TABLE_OFFSET + 0xc],
              RK3588_GTIMER_HZ);
     stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_DDR_DESCRIPTOR_OFFSET],
-             RK3588_ATF_DDR_GLOBAL_BASE);
+             RK3588_DDR_GLOBAL_BASE);
     stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_DDR_DESCRIPTOR_OFFSET + 0x20],
              RK3588_ATF_DDR_CHANNEL_TABLE_ADDR);
 
     for (unsigned int i = 0; i < RK3588_ATF_DDR_CHANNELS; i++) {
         stq_le_p(&s->atf_ddr_runtime_regs[
                  RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET + i * sizeof(uint64_t)],
-                 RK3588_ATF_DDR_CHANNEL_BASE +
-                 i * RK3588_ATF_DDR_CHANNEL_STRIDE);
+                 RK3588_DDR_CHANNEL_BASE +
+                 i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
     }
 }
 
@@ -1730,9 +1596,6 @@ static void rk3588_boot_state_reset(void *opaque)
     rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
     rk3588_write_atags(s);
     rk3588_seed_iram_firmware_shims(s);
-    s->firmware_mmio_gate_done = false;
-    s->firmware_mmio_last_phy_gate = false;
-    s->firmware_mmio_gate_bit5_clear = false;
     s->firmware_patch_done = false;
     s->firmware_handoff_done = false;
     s->firmware_atf_entered = false;
@@ -2753,6 +2616,28 @@ static void rk3588_create_stimer(RK3588MachineState *s)
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_STIMER].base);
 }
 
+static void rk3588_create_ddr(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_DDR);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "ddr", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY,
+                    RK3588_DDR_LEGACY_BASE);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_GLOBAL,
+                    RK3588_DDR_GLOBAL_BASE);
+    for (unsigned int i = 0; i < RK3588_DDR_CHANNEL_COUNT; i++) {
+        sysbus_mmio_map(sbd, RK3588_DDR_MMIO_CHANNEL(i),
+                        RK3588_DDR_CHANNEL_BASE +
+                        i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
+    }
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_DDRPHY, RK3588_DDRPHY_BASE);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_PHY_GATE,
+                    RK3588_DDR_PHY_GATE_BASE);
+    s->ddr = RK3588_DDR(dev);
+}
+
 static void rk3588_create_usb2_host(RK3588MachineState *s)
 {
     static const hwaddr bases[RK3588_USB2_HOST_MMIO_COUNT] = {
@@ -2973,6 +2858,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_syscon_devices(s);
     rk3588_create_cru(s);
     rk3588_create_stimer(s);
+    rk3588_create_ddr(s);
     rk3588_create_usb2_host(s);
     rk3588_create_scmi(s);
     rk3588_create_secure_otp(s);

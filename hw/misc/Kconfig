@@ -209,6 +209,10 @@ config LED
 config RK3588_CRU
     bool
 
+config RK3588_DDR
+    bool
+    select REGISTER
+
 config RK3588_SCMI
     bool
 

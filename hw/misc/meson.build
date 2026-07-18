@@ -183,6 +183,7 @@ system_ss.add(when: 'CONFIG_AVR_POWER', if_true: files('avr_power.c'))
 system_ss.add(when: 'CONFIG_MAC_VIA', if_true: files('mac_via.c'))
 
 system_ss.add(when: 'CONFIG_RK3588_CRU', if_true: files('rk3588_cru.c'))
+system_ss.add(when: 'CONFIG_RK3588_DDR', if_true: files('rk3588_ddr.c'))
 system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
 system_ss.add(when: 'CONFIG_SPACEMIT_K3_CTRL', if_true: files('spacemit-k3.c'))
 system_ss.add(when: 'CONFIG_NXP_S32_MC_ME', if_true: files('nxp_s32_mc_me.c'))
