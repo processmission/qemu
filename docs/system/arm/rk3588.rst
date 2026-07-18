@@ -10,7 +10,9 @@ boot path and a downstream firmware path that runs the Rockchip TPL/SPL image,
 validates the U-Boot FIT loadables, hands off to U-Boot proper, and lets
 U-Boot boot Linux or ZVM test images from modeled MMC media.
 
-Two board machines are available:
+Three board machines are available.  Each board has its own machine source
+file and build-time Kconfig entry; the common ``rk3588`` type is abstract and
+contains only shared SoC construction and boot orchestration:
 
 ``rk3588-evb``
   Rockchip RK3588 EVB-style board.  Firmware boot reads the Rockchip RKNS
@@ -24,6 +26,12 @@ Two board machines are available:
   exposes it through the SDMMC/TF-card controller used by the package's
   ``mmc dev 1`` boot script.  This machine maps the fixed ZVM guest/shared RAM
   windows by default, corresponding to the real board's larger DRAM layout.
+
+``rock-5b-plus``
+  Radxa ROCK 5B+ with LPDDR5, the two board PCIe hosts, and the firmware
+  compatibility profile needed by Radxa's RK3588 SDK image.  Firmware boot
+  reads the raw Radxa image from ``if=sd,index=0`` and exposes it through the
+  non-removable eMMC controller.
 
 Supported devices
 -----------------
@@ -39,8 +47,10 @@ RK3588 kernel and ZVM smoke tests:
 * UART2 through QEMU's ``serial_mm`` 16550-compatible model, plus a vendor
   register cover for the DesignWare APB UART window.
 * Rockchip GPIO banks.
-* Rockchip RAM-backed syscon blocks for GRF, IOC and firewall-style register
-  banks.
+* Dedicated RK3588 PMU0/PMU1/SYS GRF banks, plus reusable Rockchip RAM-backed
+  syscon blocks for IOC and firewall-style register banks.
+* Dedicated RK3588 DDR controller/PHY windows and the BL31 DDR runtime
+  descriptor used by the vendor firmware.
 * Rockchip secure timer stub.
 * RK3588 CRU and SCMI-over-SMC clock/reset support.
 * SDHCI eMMC and Synopsys DesignWare MMC for the SD-card controller.
@@ -75,13 +85,15 @@ than as RK3588-only devices:
   Address mapping, compatible strings, MSI routing, and interrupt numbers stay
   in the RK3588 board code.
 
-The RK3588 CRU model, BootROM handoff, ATF DDR runtime descriptor, firmware
-MMIO catch-all, firmware USB2 host windows, PSCI/GIC handoff state for the
-firmware path, SPL-to-U-Boot handoff shim, and closed-BL31 runtime fallback
-patch logic are RK3588 machine code because their addresses and firmware
-assumptions are SoC- and image-specific.  The USB2 windows are not a complete
-reusable Rockchip USB host model; they only provide the reset-visible EHCI/OHCI
-state U-Boot needs while scanning boot devices.
+All MMIO register behavior is implemented outside the machine sources.  The
+RK3588 CRU, GRF, DDR, ATF DDR runtime descriptor, firmware compatibility MMIO,
+SCMI, secure OTP, and firmware USB2 host windows live in independently built
+devices under the corresponding ``hw/*`` subsystem directories.  The common
+machine source only maps and wires those devices and implements SoC boot-flow
+orchestration such as BootROM loading, PSCI/GIC handoff, and the
+SPL/BL31-to-U-Boot compatibility path.  The USB2 device is intentionally a
+firmware-oriented register model; it supplies the reset-visible EHCI/OHCI state
+U-Boot needs while scanning boot devices.
 
 Direct Linux Boot
 -----------------
@@ -129,6 +141,22 @@ The ROC PC machine supports the same direct Linux boot path:
        -serial mon:stdio \
        -display none
 
+ROCK 5B+ supports the same path with a Radxa SDK kernel.  For example:
+
+.. code-block:: bash
+
+   $ build/qemu-system-aarch64 \
+       -accel tcg \
+       -machine rock-5b-plus \
+       -cpu cortex-a76 \
+       -smp 8 \
+       -m 1G \
+       -kernel Image \
+       -initrd initramfs.cpio.gz \
+       -append "console=ttyS2,1500000n8 earlycon=uart8250,mmio32,0xfeb50000,1500000n8 keep_bootcon rdinit=/init" \
+       -serial mon:stdio \
+       -display none
+
 Firmware U-Boot Boot
 --------------------
 
@@ -164,6 +192,31 @@ After the handoff the model exposes the USB2 host register windows so U-Boot
 bootflow probing can continue without taking a synchronous abort on unmapped
 firmware MMIO.  It is intended for downstream firmware bring-up coverage, not
 as a complete replacement for a real RK3588 PMU/secure firmware environment.
+
+Radxa ROCK 5B+ Firmware Image
+-----------------------------
+
+The ``rock-5b-plus`` firmware profile also accepts a complete raw image made by
+the Radxa RK3588 SDK.  No extraction or repackaging is required:
+
+.. code-block:: bash
+
+   $ build/qemu-system-aarch64 \
+       -accel tcg \
+       -machine rock-5b-plus \
+       -cpu cortex-a76 \
+       -smp 1 \
+       -m 2G \
+       -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_b2.output.img,format=raw \
+       -snapshot \
+       -serial mon:stdio \
+       -display none
+
+This path runs the image's DDR/TPL and SPL code, verifies all FIT loadables,
+uses the FIT metadata to select the U-Boot load address dynamically, enters
+U-Boot proper, and continues through its ``extlinux`` boot flow.  With the
+Radxa Bookworm image, U-Boot loads the SDK kernel, initramfs, and
+``rk3588-rock-5b-plus.dtb`` before printing ``Starting kernel ...``.
 
 U-Boot to Linux Boot
 --------------------
