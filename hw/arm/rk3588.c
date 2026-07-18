@@ -39,6 +39,7 @@
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
 #include "hw/timer/rockchip_stimer.h"
+#include "hw/usb/rk3588_usb2_host.h"
 #include "net/net.h"
 #include "system/block-backend.h"
 #include "hw/arm/machines-qom.h"
@@ -165,26 +166,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_USB2_HOST0_OHCI_BASE 0xfc840000ULL
 #define RK3588_USB2_HOST1_EHCI_BASE 0xfc880000ULL
 #define RK3588_USB2_HOST1_OHCI_BASE 0xfc8c0000ULL
-#define RK3588_USB2_HOST_WINDOW_SIZE 0x00040000ULL
-#define RK3588_USB2_EHCI_CAPBASE 0x01000020U
-#define RK3588_USB2_EHCI_HCSPARAMS 0x00000011U
-#define RK3588_USB2_EHCI_USBCMD 0x20
-#define RK3588_USB2_EHCI_USBSTS 0x24
-#define RK3588_USB2_EHCI_PORTSC0 0x64
-#define RK3588_USB2_EHCI_CMD_RESET (1U << 1)
-#define RK3588_USB2_EHCI_CMD_RUN (1U << 0)
-#define RK3588_USB2_EHCI_STS_HALT (1U << 12)
-#define RK3588_USB2_EHCI_PORT_POWER (1U << 12)
-#define RK3588_USB2_OHCI_REVISION 0x00000010U
-#define RK3588_USB2_OHCI_CMDSTATUS 0x08
-#define RK3588_USB2_OHCI_INTRSTATUS 0x0c
-#define RK3588_USB2_OHCI_ROOTHUB_A 0x48
-#define RK3588_USB2_OHCI_PORTSTATUS0 0x54
-#define RK3588_USB2_OHCI_HCR (1U << 0)
-#define RK3588_USB2_OHCI_RH_A_NPS (1U << 9)
-#define RK3588_USB2_OHCI_RH_A_NOCP (1U << 12)
-#define RK3588_USB2_OHCI_RH_A_NDP1 1U
-#define RK3588_USB2_OHCI_RH_PS_PPS (1U << 8)
 
 #define FDT_GIC_SPI 0
 #define FDT_GIC_PPI 1
@@ -249,6 +230,7 @@ struct RK3588MachineState {
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
+    RK3588USB2HostState *usb2_host;
     RockchipSysconState *pmu0grf;
     RockchipSysconState *pmu1grf;
 
@@ -295,7 +277,6 @@ G_STATIC_ASSERT(ARRAY_SIZE(rk3588_cpu_mpidr) == RK3588_MAX_CPUS);
 G_STATIC_ASSERT(ARRAY_SIZE(rk3588_cpu_types) == RK3588_MAX_CPUS);
 
 static void rk3588_firmware_patch_tick(void *opaque);
-static bool rk3588_firmware_usb2_hosts_active(RK3588MachineState *s);
 static bool rk3588_dynamic_fit_handoff(RK3588MachineState *s);
 
 enum {
@@ -453,43 +434,6 @@ static bool rk3588_firmware_ddr_ctrl_offset(hwaddr offset,
     return false;
 }
 
-static bool rk3588_firmware_usb2_host_offset(hwaddr offset,
-                                             hwaddr *reg_offset,
-                                             bool *is_ehci)
-{
-    uint64_t phys = rk3588_memmap[RK3588_FIRMWARE_MMIO].base + offset;
-
-    if (phys >= RK3588_USB2_HOST0_EHCI_BASE &&
-        phys < RK3588_USB2_HOST0_EHCI_BASE + RK3588_USB2_HOST_WINDOW_SIZE) {
-        *reg_offset = phys - RK3588_USB2_HOST0_EHCI_BASE;
-        *is_ehci = true;
-        return true;
-    }
-
-    if (phys >= RK3588_USB2_HOST1_EHCI_BASE &&
-        phys < RK3588_USB2_HOST1_EHCI_BASE + RK3588_USB2_HOST_WINDOW_SIZE) {
-        *reg_offset = phys - RK3588_USB2_HOST1_EHCI_BASE;
-        *is_ehci = true;
-        return true;
-    }
-
-    if (phys >= RK3588_USB2_HOST0_OHCI_BASE &&
-        phys < RK3588_USB2_HOST0_OHCI_BASE + RK3588_USB2_HOST_WINDOW_SIZE) {
-        *reg_offset = phys - RK3588_USB2_HOST0_OHCI_BASE;
-        *is_ehci = false;
-        return true;
-    }
-
-    if (phys >= RK3588_USB2_HOST1_OHCI_BASE &&
-        phys < RK3588_USB2_HOST1_OHCI_BASE + RK3588_USB2_HOST_WINDOW_SIZE) {
-        *reg_offset = phys - RK3588_USB2_HOST1_OHCI_BASE;
-        *is_ehci = false;
-        return true;
-    }
-
-    return false;
-}
-
 static uint64_t rk3588_firmware_mmio_read(void *opaque, hwaddr offset,
                                           unsigned size)
 {
@@ -592,8 +536,6 @@ static void rk3588_firmware_mmio_write(void *opaque, hwaddr offset,
                                        uint64_t value, unsigned size)
 {
     RK3588MachineState *s = opaque;
-    hwaddr reg_offset;
-    bool is_ehci;
 
     if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
         size > 8) {
@@ -601,42 +543,6 @@ static void rk3588_firmware_mmio_write(void *opaque, hwaddr offset,
     }
 
     if (size == 4) {
-        if (rk3588_firmware_usb2_hosts_active(s) &&
-            rk3588_firmware_usb2_host_offset(offset, &reg_offset, &is_ehci)) {
-            if (is_ehci && reg_offset == RK3588_USB2_EHCI_USBCMD) {
-                uint32_t cmd = value & ~RK3588_USB2_EHCI_CMD_RESET;
-                uint32_t status = ldl_le_p(&s->firmware_mmio_regs[
-                                            offset -
-                                            RK3588_USB2_EHCI_USBCMD +
-                                            RK3588_USB2_EHCI_USBSTS]);
-
-                if (cmd & RK3588_USB2_EHCI_CMD_RUN) {
-                    status &= ~RK3588_USB2_EHCI_STS_HALT;
-                } else {
-                    status |= RK3588_USB2_EHCI_STS_HALT;
-                }
-
-                stl_le_p(&s->firmware_mmio_regs[offset], cmd);
-                stl_le_p(&s->firmware_mmio_regs[offset -
-                         RK3588_USB2_EHCI_USBCMD + RK3588_USB2_EHCI_USBSTS],
-                         status);
-                return;
-            }
-
-            if (!is_ehci && reg_offset == RK3588_USB2_OHCI_CMDSTATUS) {
-                stl_le_p(&s->firmware_mmio_regs[offset],
-                         value & ~RK3588_USB2_OHCI_HCR);
-                return;
-            }
-
-            if (!is_ehci && reg_offset == RK3588_USB2_OHCI_INTRSTATUS) {
-                uint32_t status = ldl_le_p(&s->firmware_mmio_regs[offset]);
-
-                stl_le_p(&s->firmware_mmio_regs[offset], status & ~value);
-                return;
-            }
-        }
-
         if ((offset & 0xffff) == RK3588_DDR_CHANNEL_GATE_CMD_OFFSET) {
             s->firmware_mmio_gate_bit5_clear =
                 !(value & RK3588_DDR_CHANNEL_GATE_ENABLE);
@@ -1518,72 +1424,6 @@ static void rk3588_seed_firmware_sysregs(RK3588MachineState *s)
     }
 }
 
-static uint8_t *rk3588_firmware_mmio_ptr(RK3588MachineState *s, hwaddr phys)
-{
-    return &s->firmware_mmio_regs[
-        phys - rk3588_memmap[RK3588_FIRMWARE_MMIO].base];
-}
-
-static bool rk3588_firmware_usb2_hosts_active(RK3588MachineState *s)
-{
-    return !s->firmware_boot || s->firmware_handoff_done;
-}
-
-static void rk3588_reset_usb2_host_window(RK3588MachineState *s, hwaddr base)
-{
-    memset(rk3588_firmware_mmio_ptr(s, base), 0xff,
-           RK3588_USB2_HOST_WINDOW_SIZE);
-}
-
-static void rk3588_seed_usb2_ehci(RK3588MachineState *s, hwaddr base)
-{
-    uint8_t *regs = rk3588_firmware_mmio_ptr(s, base);
-
-    memset(regs, 0, RK3588_USB2_HOST_WINDOW_SIZE);
-    stl_le_p(regs, RK3588_USB2_EHCI_CAPBASE);
-    stl_le_p(regs + 0x04, RK3588_USB2_EHCI_HCSPARAMS);
-    stl_le_p(regs + RK3588_USB2_EHCI_USBSTS, RK3588_USB2_EHCI_STS_HALT);
-    stl_le_p(regs + RK3588_USB2_EHCI_PORTSC0, RK3588_USB2_EHCI_PORT_POWER);
-}
-
-static void rk3588_seed_usb2_ohci(RK3588MachineState *s, hwaddr base)
-{
-    uint8_t *regs = rk3588_firmware_mmio_ptr(s, base);
-
-    memset(regs, 0, RK3588_USB2_HOST_WINDOW_SIZE);
-    stl_le_p(regs, RK3588_USB2_OHCI_REVISION);
-    stl_le_p(regs + RK3588_USB2_OHCI_ROOTHUB_A,
-             RK3588_USB2_OHCI_RH_A_NDP1 |
-             RK3588_USB2_OHCI_RH_A_NPS |
-             RK3588_USB2_OHCI_RH_A_NOCP);
-    stl_le_p(regs + RK3588_USB2_OHCI_PORTSTATUS0,
-             RK3588_USB2_OHCI_RH_PS_PPS);
-}
-
-static void rk3588_seed_firmware_usb2_hosts(RK3588MachineState *s)
-{
-    if (!s->firmware_mmio_regs) {
-        return;
-    }
-
-    rk3588_seed_usb2_ehci(s, RK3588_USB2_HOST0_EHCI_BASE);
-    rk3588_seed_usb2_ohci(s, RK3588_USB2_HOST0_OHCI_BASE);
-    rk3588_seed_usb2_ehci(s, RK3588_USB2_HOST1_EHCI_BASE);
-    rk3588_seed_usb2_ohci(s, RK3588_USB2_HOST1_OHCI_BASE);
-}
-
-static void rk3588_reset_firmware_usb2_hosts(RK3588MachineState *s)
-{
-    if (!s->firmware_mmio_regs) {
-        return;
-    }
-
-    rk3588_reset_usb2_host_window(s, RK3588_USB2_HOST0_EHCI_BASE);
-    rk3588_reset_usb2_host_window(s, RK3588_USB2_HOST0_OHCI_BASE);
-    rk3588_reset_usb2_host_window(s, RK3588_USB2_HOST1_EHCI_BASE);
-    rk3588_reset_usb2_host_window(s, RK3588_USB2_HOST1_OHCI_BASE);
-}
-
 static void rk3588_seed_atf_ddr_runtime(RK3588MachineState *s)
 {
     memset(s->atf_ddr_runtime_regs, 0, sizeof(s->atf_ddr_runtime_regs));
@@ -1827,7 +1667,7 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
     cs->halted = false;
     arm_rebuild_hflags(env);
     s->firmware_handoff_done = true;
-    rk3588_seed_firmware_usb2_hosts(s);
+    rk3588_usb2_host_set_active(s->usb2_host, true);
 }
 
 static void rk3588_firmware_patch_tick(void *opaque)
@@ -1887,11 +1727,7 @@ static void rk3588_boot_state_reset(void *opaque)
     rk3588_seed_dram_info(s);
     rk3588_seed_firmware_sysregs(s);
     rk3588_seed_atf_ddr_runtime(s);
-    if (!s->firmware_boot) {
-        rk3588_seed_firmware_usb2_hosts(s);
-    } else {
-        rk3588_reset_firmware_usb2_hosts(s);
-    }
+    rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
     rk3588_write_atags(s);
     rk3588_seed_iram_firmware_shims(s);
     s->firmware_mmio_gate_done = false;
@@ -2917,6 +2753,29 @@ static void rk3588_create_stimer(RK3588MachineState *s)
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_STIMER].base);
 }
 
+static void rk3588_create_usb2_host(RK3588MachineState *s)
+{
+    static const hwaddr bases[RK3588_USB2_HOST_MMIO_COUNT] = {
+        [RK3588_USB2_HOST_EHCI0] = RK3588_USB2_HOST0_EHCI_BASE,
+        [RK3588_USB2_HOST_OHCI0] = RK3588_USB2_HOST0_OHCI_BASE,
+        [RK3588_USB2_HOST_EHCI1] = RK3588_USB2_HOST1_EHCI_BASE,
+        [RK3588_USB2_HOST_OHCI1] = RK3588_USB2_HOST1_OHCI_BASE,
+    };
+    MachineState *machine = MACHINE(s);
+    DeviceState *dev = qdev_new(TYPE_RK3588_USB2_HOST);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "usb2-host", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    for (unsigned int i = 0; i < ARRAY_SIZE(bases); i++) {
+        sysbus_mmio_map(sbd, i, bases[i]);
+    }
+
+    s->usb2_host = RK3588_USB2_HOST(dev);
+    rk3588_usb2_host_set_active(s->usb2_host,
+                                qtest_enabled() || machine->kernel_filename);
+}
+
 /*
  * Per-machine SMC handler entry. Registered with
  * arm_register_psci_smc_handler() so accelerator SMC exception paths can run it
@@ -3114,6 +2973,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_syscon_devices(s);
     rk3588_create_cru(s);
     rk3588_create_stimer(s);
+    rk3588_create_usb2_host(s);
     rk3588_create_scmi(s);
     rk3588_create_secure_otp(s);
     rk3588_create_crypto(s);
