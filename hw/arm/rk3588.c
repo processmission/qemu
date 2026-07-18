@@ -30,6 +30,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_syscon.h"
+#include "hw/misc/rk3588_atf_ddr.h"
 #include "hw/misc/rk3588_ddr.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
@@ -126,25 +127,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_AARCH64_RET 0xd65f03c0
 #define RK3588_FIRMWARE_PATCH_INTERVAL_NS SCALE_US
 #define RK3588_FIT_METADATA_MAX_SIZE MiB
-#define RK3588_ATF_DDR_RUNTIME_ADDR 0x0008d000ULL
-#define RK3588_ATF_DDR_RUNTIME_SIZE 0x8000
-#define RK3588_ATF_DDR_GLOBAL_PTR_ADDR 0x0008d0a8ULL
-#define RK3588_ATF_TIMER_PTR_ADDR 0x0008d0b0ULL
-#define RK3588_ATF_TIMER_TABLE_ADDR 0x0008d0b8ULL
-#define RK3588_ATF_TIMER_COUNTER_ADDR 0x00062054ULL
-#define RK3588_ATF_DDR_DESCRIPTOR_ADDR 0x0008fd20ULL
-#define RK3588_ATF_DDR_CHANNEL_TABLE_ADDR 0x0008fe00ULL
-#define RK3588_ATF_DDR_GLOBAL_PTR_OFFSET \
-    (RK3588_ATF_DDR_GLOBAL_PTR_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_TIMER_PTR_OFFSET \
-    (RK3588_ATF_TIMER_PTR_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_TIMER_TABLE_OFFSET \
-    (RK3588_ATF_TIMER_TABLE_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_DDR_DESCRIPTOR_OFFSET \
-    (RK3588_ATF_DDR_DESCRIPTOR_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET \
-    (RK3588_ATF_DDR_CHANNEL_TABLE_ADDR - RK3588_ATF_DDR_RUNTIME_ADDR)
-#define RK3588_ATF_DDR_CHANNELS 8
 #define RK3588_USB2_HOST0_EHCI_BASE 0xfc800000ULL
 #define RK3588_USB2_HOST0_OHCI_BASE 0xfc840000ULL
 #define RK3588_USB2_HOST1_EHCI_BASE 0xfc880000ULL
@@ -213,6 +195,7 @@ struct RK3588MachineState {
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
+    DeviceState *atf_ddr;
     RK3588DDRState *ddr;
     RK3588USB2HostState *usb2_host;
     RockchipSysconState *pmu0grf;
@@ -225,8 +208,6 @@ struct RK3588MachineState {
     MemoryRegion zvm_high_ram;
     MemoryRegion bootrom;
     MemoryRegion firmware_scratch;
-    MemoryRegion atf_ddr_runtime;
-    uint8_t atf_ddr_runtime_regs[RK3588_ATF_DDR_RUNTIME_SIZE];
     MemoryRegion firmware_mmio;
     uint8_t *firmware_mmio_regs;
     QEMUTimer *firmware_patch_timer;
@@ -445,72 +426,6 @@ static void rk3588_firmware_mmio_write(void *opaque, hwaddr offset,
 static const MemoryRegionOps rk3588_firmware_mmio_ops = {
     .read = rk3588_firmware_mmio_read,
     .write = rk3588_firmware_mmio_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .impl = {
-        .min_access_size = 1,
-        .max_access_size = 8,
-    },
-    .valid = {
-        .min_access_size = 1,
-        .max_access_size = 8,
-    },
-};
-
-static void rk3588_seed_atf_ddr_runtime(RK3588MachineState *s);
-
-static uint64_t rk3588_atf_ddr_runtime_read(void *opaque, hwaddr offset,
-                                            unsigned size)
-{
-    RK3588MachineState *s = opaque;
-
-    if (offset + size > sizeof(s->atf_ddr_runtime_regs) || size > 8) {
-        return 0;
-    }
-
-    switch (size) {
-    case 1:
-        return s->atf_ddr_runtime_regs[offset];
-    case 2:
-        return lduw_le_p(&s->atf_ddr_runtime_regs[offset]);
-    case 4:
-        return ldl_le_p(&s->atf_ddr_runtime_regs[offset]);
-    case 8:
-        return ldq_le_p(&s->atf_ddr_runtime_regs[offset]);
-    default:
-        return 0;
-    }
-}
-
-static void rk3588_atf_ddr_runtime_write(void *opaque, hwaddr offset,
-                                         uint64_t value, unsigned size)
-{
-    RK3588MachineState *s = opaque;
-
-    if (offset + size > sizeof(s->atf_ddr_runtime_regs) || size > 8) {
-        return;
-    }
-
-    switch (size) {
-    case 1:
-        s->atf_ddr_runtime_regs[offset] = value;
-        break;
-    case 2:
-        stw_le_p(&s->atf_ddr_runtime_regs[offset], value);
-        break;
-    case 4:
-        stl_le_p(&s->atf_ddr_runtime_regs[offset], value);
-        break;
-    case 8:
-        stq_le_p(&s->atf_ddr_runtime_regs[offset], value);
-        break;
-    }
-
-    rk3588_seed_atf_ddr_runtime(s);
-}
-
-static const MemoryRegionOps rk3588_atf_ddr_runtime_ops = {
-    .read = rk3588_atf_ddr_runtime_read,
-    .write = rk3588_atf_ddr_runtime_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl = {
         .min_access_size = 1,
@@ -1290,39 +1205,6 @@ static void rk3588_seed_firmware_sysregs(RK3588MachineState *s)
     }
 }
 
-static void rk3588_seed_atf_ddr_runtime(RK3588MachineState *s)
-{
-    memset(s->atf_ddr_runtime_regs, 0, sizeof(s->atf_ddr_runtime_regs));
-
-    /*
-     * Rockchip's closed BL31 keeps a DDR controller runtime descriptor in its
-     * SRAM BSS. SPL also uses this SRAM area, so provide the minimum stable
-     * descriptor the BL31 DDR save/restore code expects before it programs
-     * per-channel registers.
-     */
-    stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_DDR_GLOBAL_PTR_OFFSET],
-             RK3588_ATF_DDR_DESCRIPTOR_ADDR);
-    stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_TIMER_PTR_OFFSET],
-             RK3588_ATF_TIMER_TABLE_ADDR);
-    stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_TIMER_TABLE_OFFSET],
-             RK3588_ATF_TIMER_COUNTER_ADDR);
-    stl_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_TIMER_TABLE_OFFSET + 0x8],
-             1000000);
-    stl_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_TIMER_TABLE_OFFSET + 0xc],
-             RK3588_GTIMER_HZ);
-    stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_DDR_DESCRIPTOR_OFFSET],
-             RK3588_DDR_GLOBAL_BASE);
-    stq_le_p(&s->atf_ddr_runtime_regs[RK3588_ATF_DDR_DESCRIPTOR_OFFSET + 0x20],
-             RK3588_ATF_DDR_CHANNEL_TABLE_ADDR);
-
-    for (unsigned int i = 0; i < RK3588_ATF_DDR_CHANNELS; i++) {
-        stq_le_p(&s->atf_ddr_runtime_regs[
-                 RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET + i * sizeof(uint64_t)],
-                 RK3588_DDR_CHANNEL_BASE +
-                 i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
-    }
-}
-
 static void rk3588_write_atags(RK3588MachineState *s)
 {
     const RK3588FirmwareProfile *profile = s->board->firmware_profile;
@@ -1592,7 +1474,6 @@ static void rk3588_boot_state_reset(void *opaque)
 
     rk3588_seed_dram_info(s);
     rk3588_seed_firmware_sysregs(s);
-    rk3588_seed_atf_ddr_runtime(s);
     rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
     rk3588_write_atags(s);
     rk3588_seed_iram_firmware_shims(s);
@@ -1625,14 +1506,6 @@ static void rk3588_create_low_memory(RK3588MachineState *s)
                                 rk3588_memmap[RK3588_FIRMWARE_SCRATCH].base,
                                 &s->firmware_scratch);
 
-    memory_region_init_io(&s->atf_ddr_runtime, OBJECT(s),
-                          &rk3588_atf_ddr_runtime_ops, s,
-                          "rk3588.atf-ddr-runtime",
-                          RK3588_ATF_DDR_RUNTIME_SIZE);
-    memory_region_add_subregion_overlap(sysmem, RK3588_ATF_DDR_RUNTIME_ADDR,
-                                        &s->atf_ddr_runtime, 10);
-    rk3588_seed_atf_ddr_runtime(s);
-
     memory_region_init_ram(&s->atags, NULL, "rk3588.atags",
                            rk3588_memmap[RK3588_ATAGS].size, &error_fatal);
     memory_region_add_subregion(sysmem, rk3588_memmap[RK3588_ATAGS].base,
@@ -1655,6 +1528,17 @@ static void rk3588_create_low_memory(RK3588MachineState *s)
 
     s->firmware_patch_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                            rk3588_firmware_patch_tick, s);
+}
+
+static void rk3588_create_atf_ddr(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_ATF_DDR);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "atf-ddr", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map_overlap(sbd, 0, RK3588_ATF_DDR_RUNTIME_BASE, 10);
+    s->atf_ddr = dev;
 }
 
 static void rk3588_create_zvm_ram(RK3588MachineState *s)
@@ -2847,6 +2731,7 @@ static void rk3588_init(MachineState *machine)
 
     rk3588_create_cpus(s);
     rk3588_create_low_memory(s);
+    rk3588_create_atf_ddr(s);
     rk3588_create_firmware_mmio(s);
     memory_region_add_subregion(get_system_memory(),
                                 rk3588_memmap[RK3588_RAM].base,
