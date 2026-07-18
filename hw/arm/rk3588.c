@@ -2924,23 +2924,18 @@ static void rk3588_create_stimer(RK3588MachineState *s)
  * Consumes only the SCMI SMC (function-id 0x82000010); all other SMCs fall
  * through to standard PSCI handling (CPU_ON/OFF/SYSTEM_RESET/...).
  *
- * The shmem-backed responder lives in the rk3588-scmi device
- * (realized in rk3588_create_scmi). We stash the realized device
- * pointer in a file-scope variable so the SMC hook can find it from
- * the CPU run-loop without an explicit per-CPU linkage.
+ * The shmem-backed responder lives in the rk3588-scmi device realized by
+ * rk3588_create_scmi().  Resolve the active machine through QOM so multiple
+ * machine instances do not share file-scope device state.
  */
-static RK3588SCMIState *rk3588_scmi_dev;
-static RK3588MachineState *rk3588_active_machine;
-
 static bool rk3588_smc_handler(ARMCPU *cpu)
 {
+    RK3588MachineState *s = RK3588_MACHINE(qdev_get_machine());
     CPUARMState *env = &cpu->env;
     uint64_t fn = is_a64(env) ? env->xregs[0] : env->regs[0];
 
     if ((uint32_t)fn == RK3588_BROM_SMC_NEXT_STAGE) {
-        if (rk3588_active_machine) {
-            rk3588_bootrom_load_spl(rk3588_active_machine, cpu);
-        }
+        rk3588_bootrom_load_spl(s, cpu);
         if (is_a64(env)) {
             env->xregs[0] = 0;
         } else {
@@ -2950,46 +2945,40 @@ static bool rk3588_smc_handler(ARMCPU *cpu)
     }
 
     if ((uint32_t)fn == RK3588_QEMU_SMC_UBOOT_HANDOFF) {
-        if (rk3588_active_machine) {
-            rk3588_firmware_handoff_to_uboot(rk3588_active_machine, cpu);
-        }
+        rk3588_firmware_handoff_to_uboot(s, cpu);
         return true;
     }
 
     if ((uint32_t)fn == RK3588_QEMU_SMC_ATF_ENTRY) {
-        if (rk3588_active_machine) {
-            uint64_t bl31_params = is_a64(env) ? env->xregs[2] : env->regs[2];
+        uint64_t bl31_params = is_a64(env) ? env->xregs[2] : env->regs[2];
 
-            rk3588_patch_bl31_runtime(rk3588_active_machine);
-            rk3588_active_machine->firmware_atf_entered = true;
-            cpu_set_pc(CPU(cpu), RK3588_BL31_BASE);
-            if (is_a64(env)) {
-                env->xregs[0] = bl31_params;
-                env->xregs[1] = 0;
-                env->xregs[2] = 0;
-                env->xregs[3] = 0;
-            } else {
-                env->regs[0] = bl31_params;
-                env->regs[1] = 0;
-                env->regs[2] = 0;
-                env->regs[3] = 0;
-            }
-            arm_rebuild_hflags(env);
+        rk3588_patch_bl31_runtime(s);
+        s->firmware_atf_entered = true;
+        cpu_set_pc(CPU(cpu), RK3588_BL31_BASE);
+        if (is_a64(env)) {
+            env->xregs[0] = bl31_params;
+            env->xregs[1] = 0;
+            env->xregs[2] = 0;
+            env->xregs[3] = 0;
+        } else {
+            env->regs[0] = bl31_params;
+            env->regs[1] = 0;
+            env->regs[2] = 0;
+            env->regs[3] = 0;
         }
+        arm_rebuild_hflags(env);
         return true;
     }
 
     if ((uint32_t)fn == RK3588_QEMU_SMC_BL31_EXIT) {
-        if (rk3588_active_machine) {
-            rk3588_firmware_handoff_to_uboot(rk3588_active_machine, cpu);
-        }
+        rk3588_firmware_handoff_to_uboot(s, cpu);
         return true;
     }
 
     if ((uint32_t)fn != RK3588_SCMI_SMC_ID) {
         return false;
     }
-    if (!rk3588_scmi_dev) {
+    if (!s->scmi) {
         /* Responder not yet realized - return NOT_SUPPORTED. */
         if (is_a64(env)) {
             env->xregs[0] = (uint64_t)(int64_t)-1;
@@ -2999,7 +2988,7 @@ static bool rk3588_smc_handler(ARMCPU *cpu)
         return true;
     }
 
-    rk3588_scmi_handle_smc(rk3588_scmi_dev);
+    rk3588_scmi_handle_smc(RK3588_SCMI(s->scmi));
     /* a0 = 0 means "response is in shmem, fetch it". */
     if (is_a64(env)) {
         env->xregs[0] = 0;
@@ -3019,7 +3008,7 @@ static void rk3588_create_scmi(RK3588MachineState *s)
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SCMI_SHMEM].base);
 
-    rk3588_scmi_dev = RK3588_SCMI(dev);
+    s->scmi = dev;
     arm_register_psci_smc_handler(rk3588_smc_handler);
 }
 
@@ -3128,7 +3117,6 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_scmi(s);
     rk3588_create_secure_otp(s);
     rk3588_create_crypto(s);
-    rk3588_active_machine = s;
     rk3588_create_uart(s);
     rk3588_create_sdhci(s);
     rk3588_create_sdmmc(s);
