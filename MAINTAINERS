@@ -1039,6 +1039,7 @@ F: hw/arm/rk3588*
 F: hw/arm/rock5b_plus.c
 F: hw/*/rk3588*
 F: include/hw/*/rk3588*
+F: tests/functional/aarch64/test_rock5b_plus.py
 F: tests/qtest/rk3588*
 F: tests/qtest/rock5b-plus-test.c
 
