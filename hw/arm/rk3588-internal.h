@@ -23,6 +23,10 @@
 typedef struct RK3588FirmwareProfile {
     bool unfused_secure_otp;
     bool crypto_v2_sha256;
+    bool dynamic_fit_handoff;
+    bool atags_core;
+    uint64_t fit_offset;
+    uint32_t fit_alignment;
 } RK3588FirmwareProfile;
 
 typedef struct RK3588BoardConfig {

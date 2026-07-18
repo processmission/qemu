@@ -11,6 +11,7 @@
 
 #define ROCK_5B_PLUS_MACHINE "rock-5b-plus"
 
+#define RK3588_ATAGS_BASE 0x001fe000ULL
 #define RK3588_RAM_BASE 0x00200000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
 #define RK3588_CRYPTO_BASE 0xfe370000ULL
@@ -33,6 +34,11 @@
 #define RK3588_DDRTYPE_LOW_MASK 0x7
 #define RK3588_DDRTYPE_HIGH_MASK 0x1
 #define RK3588_LPDDR5 9
+
+#define RK3588_ATAG_CORE 0x54410001
+#define RK3588_ATAG_CORE_WORDS 5
+#define RK3588_ATAG_DDR_MEM 0x54410052
+#define RK3588_ATAG_DDR_MEM_WORDS 48
 
 #define DWC_PCIE_VENDOR_DEVICE 0x0000
 #define DWC_PCIE_LTSSM_STATUS 0x0300
@@ -126,6 +132,22 @@ static void test_rock_5b_plus_machine_creation(void)
     g_assert_cmphex((sys_reg3 >> RK3588_DDRTYPE_HIGH_SHIFT) &
                     RK3588_DDRTYPE_HIGH_MASK, ==,
                     (RK3588_LPDDR5 >> 3) & RK3588_DDRTYPE_HIGH_MASK);
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE), ==,
+                    RK3588_ATAG_CORE_WORDS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE + 4), ==,
+                    RK3588_ATAG_CORE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE + 20), ==,
+                    RK3588_ATAG_DDR_MEM_WORDS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE + 24), ==,
+                    RK3588_ATAG_DDR_MEM);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE + 28), ==, 1);
+    g_assert_cmphex(qtest_readq(qts, RK3588_ATAGS_BASE + 36), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, RK3588_ATAGS_BASE + 44), ==,
+                    RK3588_RAM_BASE + 512ULL * 1024 * 1024);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ATAGS_BASE + 20 +
+                                RK3588_ATAG_DDR_MEM_WORDS *
+                                sizeof(uint32_t)), ==, 0);
 
     /* ROCK 5B+ uses a PCIe RTL8125 NIC, not either RK3588 DWMAC. */
     g_assert_cmphex(qtest_readl(qts, RK3588_GMAC0_BASE +

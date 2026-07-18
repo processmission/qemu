@@ -57,6 +57,8 @@
 #include "target/arm/gtimer.h"
 #include "target/arm/internals.h"
 
+#include <libfdt.h>
+
 #define TYPE_RK3588_EVB_MACHINE MACHINE_TYPE_NAME("rk3588-evb")
 #define TYPE_RK3588S_ROC_PC_MACHINE MACHINE_TYPE_NAME("rk3588s-roc-pc")
 OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
@@ -84,7 +86,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_RKNS_LBA 64
 #define RK3588_RKNS_HEADER_SIZE 2048
 #define RK3588_RKNS_SECTOR_SIZE 512
-#define RK3588_UBOOT_ITB_OFFSET 0x800000
 #define RK3588_UBOOT_LOAD_ADDR 0x00800000ULL
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
@@ -139,6 +140,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_AARCH64_NOP 0xd503201f
 #define RK3588_AARCH64_RET 0xd65f03c0
 #define RK3588_FIRMWARE_PATCH_INTERVAL_NS SCALE_US
+#define RK3588_FIT_METADATA_MAX_SIZE MiB
 #define RK3588_ATF_DDR_RUNTIME_ADDR 0x0008d000ULL
 #define RK3588_ATF_DDR_RUNTIME_SIZE 0x8000
 #define RK3588_ATF_DDR_GLOBAL_PTR_ADDR 0x0008d0a8ULL
@@ -216,8 +218,22 @@ typedef struct RK3588BootROM {
     uint8_t *spl;
     size_t spl_size;
     hwaddr tpl_entry;
+    hwaddr atf_load;
+    hwaddr uboot_load;
+    hwaddr uboot_entry;
+    uint32_t atf_size;
+    uint32_t uboot_size;
+    uint32_t uboot_entry_word;
     bool spl_loaded;
+    bool fit_handoff_valid;
 } RK3588BootROM;
+
+typedef struct RK3588FITImage {
+    hwaddr load;
+    hwaddr entry;
+    uint64_t media_offset;
+    uint32_t size;
+} RK3588FITImage;
 
 static const char * const rk3588_evb_compatible[] = {
     "qemu,rk3588-evb",
@@ -327,6 +343,7 @@ G_STATIC_ASSERT(ARRAY_SIZE(rk3588_cpu_types) == RK3588_MAX_CPUS);
 
 static void rk3588_firmware_patch_tick(void *opaque);
 static bool rk3588_firmware_usb2_hosts_active(RK3588MachineState *s);
+static bool rk3588_dynamic_fit_handoff(RK3588MachineState *s);
 
 enum {
     RK3588_SRAM,
@@ -1663,20 +1680,37 @@ static void rk3588_seed_atf_ddr_runtime(RK3588MachineState *s)
 
 static void rk3588_write_atags(RK3588MachineState *s)
 {
+    const RK3588FirmwareProfile *profile = s->board->firmware_profile;
     MachineState *ms = MACHINE(s);
     uint8_t *base = memory_region_get_ram_ptr(&s->atags);
-    uint32_t tag_size_words = (8 + 184) / sizeof(uint32_t);
+    uint8_t *ddr_tag = base + 8 + 12;
+    uint32_t core_size_words = (8 + 12) / sizeof(uint32_t);
+    uint32_t ddr_size_words = (8 + 184) / sizeof(uint32_t);
     uint64_t ddr_size = rk3588_memmap[RK3588_RAM].base + ms->ram_size;
 
     memset(base, 0, RK3588_ATAGS_SIZE);
 
-    stl_le_p(base, tag_size_words);
-    stl_le_p(base + 4, 0x54410052);       /* ATAG_DDR_MEM */
-    stl_le_p(base + 8, 1);                /* one DRAM bank */
-    stl_le_p(base + 12, 0);               /* tag version */
-    stq_le_p(base + 16, 0);               /* bank[0] start */
-    stq_le_p(base + 24, ddr_size);        /* bank[0] size */
-    stl_le_p(base + tag_size_words * sizeof(uint32_t), 0);
+    if (!profile || !profile->atags_core) {
+        stl_le_p(base, ddr_size_words);
+        stl_le_p(base + 4, 0x54410052);   /* ATAG_DDR_MEM */
+        stl_le_p(base + 8, 1);            /* one DRAM bank */
+        stl_le_p(base + 12, 0);           /* tag version */
+        stq_le_p(base + 16, 0);           /* bank[0] start */
+        stq_le_p(base + 24, ddr_size);     /* bank[0] size */
+        stl_le_p(base + ddr_size_words * sizeof(uint32_t), 0);
+        return;
+    }
+
+    stl_le_p(base, core_size_words);
+    stl_le_p(base + 4, 0x54410001);       /* ATAG_CORE */
+
+    stl_le_p(ddr_tag, ddr_size_words);
+    stl_le_p(ddr_tag + 4, 0x54410052);     /* ATAG_DDR_MEM */
+    stl_le_p(ddr_tag + 8, 1);              /* one DRAM bank */
+    stl_le_p(ddr_tag + 12, 0);             /* tag version */
+    stq_le_p(ddr_tag + 16, 0);             /* bank[0] start */
+    stq_le_p(ddr_tag + 24, ddr_size);       /* bank[0] size */
+    stl_le_p(ddr_tag + ddr_size_words * sizeof(uint32_t), 0);
 }
 
 static void rk3588_seed_iram_firmware_shims(RK3588MachineState *s)
@@ -1836,11 +1870,17 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
 {
     CPUState *cs = CPU(cpu);
     CPUARMState *env = &cpu->env;
+    hwaddr entry = RK3588_UBOOT_LOAD_ADDR;
+
+    if (rk3588_dynamic_fit_handoff(s) &&
+        s->bootrom_state.fit_handoff_valid) {
+        entry = s->bootrom_state.uboot_entry;
+    }
 
     rk3588_prepare_nonsecure_linux_interrupts(s);
     cpu_reset(cs);
     arm_emulate_firmware_reset(cs, 2);
-    cpu_set_pc(cs, RK3588_UBOOT_LOAD_ADDR);
+    cpu_set_pc(cs, entry);
     env->xregs[0] = 0;
     env->xregs[1] = 0;
     env->xregs[2] = 0;
@@ -1864,12 +1904,28 @@ static void rk3588_firmware_patch_tick(void *opaque)
         return;
     }
 
+    pc = env->pc;
+    if (rk3588_dynamic_fit_handoff(s)) {
+        RK3588BootROM *bootrom = &s->bootrom_state;
+
+        if (bootrom->fit_handoff_valid &&
+            pc >= bootrom->atf_load &&
+            pc < bootrom->atf_load + bootrom->atf_size &&
+            rk3588_phys_read32(bootrom->uboot_entry, &uboot_entry) &&
+            uboot_entry == bootrom->uboot_entry_word) {
+            rk3588_firmware_handoff_to_uboot(s, cpu);
+            return;
+        }
+
+        rk3588_schedule_firmware_patch(s);
+        return;
+    }
+
     /*
      * Keep BL31 writes after SPL hash verification by patching only once the
      * CPU has entered BL31.  The U-Boot proper load may become visible on a
      * later tick, so handoff below is not gated by the current PC.
      */
-    pc = env->pc;
     pc_in_bl31 = pc >= RK3588_BL31_BASE && pc < RK3588_BL31_LIMIT;
     if (pc_in_bl31) {
         rk3588_patch_bl31_runtime(s);
@@ -2028,6 +2084,377 @@ static bool rk3588_blk_read(BlockBackend *blk, int64_t offset,
     return true;
 }
 
+static bool rk3588_dynamic_fit_handoff(RK3588MachineState *s)
+{
+    const RK3588FirmwareProfile *profile = s->board->firmware_profile;
+
+    return profile && profile->dynamic_fit_handoff;
+}
+
+static const char *rk3588_fit_single_string(const void *fit, int node,
+                                             const char *property,
+                                             Error **errp)
+{
+    const char *value;
+    const char *node_name = fdt_get_name(fit, node, NULL);
+    int count = fdt_stringlist_count(fit, node, property);
+    int len;
+
+    if (count != 1) {
+        if (count < 0) {
+            error_setg(errp, "invalid FIT %s/%s property: %s",
+                       node_name, property, fdt_strerror(count));
+        } else {
+            error_setg(errp, "FIT %s/%s contains %d strings, expected 1",
+                       node_name, property, count);
+        }
+        return NULL;
+    }
+
+    value = fdt_stringlist_get(fit, node, property, 0, &len);
+    if (!value || !len) {
+        error_setg(errp, "FIT %s/%s is empty", node_name, property);
+        return NULL;
+    }
+
+    return value;
+}
+
+static bool rk3588_fit_check_string(const void *fit, int node,
+                                     const char *property,
+                                     const char *expected, Error **errp)
+{
+    const char *value = rk3588_fit_single_string(fit, node, property, errp);
+
+    if (!value) {
+        return false;
+    }
+    if (strcmp(value, expected)) {
+        error_setg(errp, "FIT image %s has %s '%s', expected '%s'",
+                   fdt_get_name(fit, node, NULL), property, value, expected);
+        return false;
+    }
+
+    return true;
+}
+
+static bool rk3588_fit_get_address(const void *fit, int node,
+                                    const char *property, bool optional,
+                                    hwaddr *value, Error **errp)
+{
+    const void *data;
+    int len;
+
+    data = fdt_getprop(fit, node, property, &len);
+    if (!data) {
+        if (optional && len == -FDT_ERR_NOTFOUND) {
+            return true;
+        }
+        error_setg(errp, "cannot read FIT image %s/%s: %s",
+                   fdt_get_name(fit, node, NULL), property,
+                   fdt_strerror(len));
+        return false;
+    }
+
+    switch (len) {
+    case sizeof(fdt32_t):
+        *value = fdt32_ld(data);
+        return true;
+    case sizeof(fdt64_t):
+        *value = fdt64_ld(data);
+        return true;
+    default:
+        error_setg(errp, "FIT image %s/%s has invalid length %d",
+                   fdt_get_name(fit, node, NULL), property, len);
+        return false;
+    }
+}
+
+static bool rk3588_fit_get_u32(const void *fit, int node,
+                                const char *property, uint32_t *value,
+                                Error **errp)
+{
+    const fdt32_t *data;
+    int len;
+
+    data = fdt_getprop(fit, node, property, &len);
+    if (!data) {
+        error_setg(errp, "cannot read FIT image %s/%s: %s",
+                   fdt_get_name(fit, node, NULL), property,
+                   fdt_strerror(len));
+        return false;
+    }
+    if (len != sizeof(*data)) {
+        error_setg(errp, "FIT image %s/%s has invalid length %d",
+                   fdt_get_name(fit, node, NULL), property, len);
+        return false;
+    }
+
+    *value = fdt32_ld(data);
+    return true;
+}
+
+static const char *rk3588_fit_find_uboot(const void *fit, int config,
+                                         int images, Error **errp)
+{
+    const char *candidate = NULL;
+    int count = fdt_stringlist_count(fit, config, "loadables");
+
+    if (count <= 0) {
+        error_setg(errp, "FIT configuration has no valid loadables list");
+        return NULL;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const char *name = fdt_stringlist_get(fit, config, "loadables", i,
+                                               NULL);
+
+        if (!name) {
+            error_setg(errp, "cannot read FIT loadables[%d]", i);
+            return NULL;
+        }
+        if (!strcmp(name, "uboot")) {
+            return name;
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        const char *name = fdt_stringlist_get(fit, config, "loadables", i,
+                                               NULL);
+        int image = fdt_subnode_offset(fit, images, name);
+
+        if (image < 0) {
+            error_setg(errp, "FIT loadable '%s' has no image node", name);
+            return NULL;
+        }
+        if (fdt_stringlist_search(fit, image, "type", "standalone") >= 0 &&
+            fdt_stringlist_search(fit, image, "os", "U-Boot") >= 0) {
+            if (candidate) {
+                error_setg(errp, "FIT configuration has multiple U-Boot "
+                           "loadables");
+                return NULL;
+            }
+            candidate = name;
+        }
+    }
+
+    if (!candidate) {
+        error_setg(errp, "FIT configuration has no U-Boot loadable");
+    }
+    return candidate;
+}
+
+static bool rk3588_fit_read_image(const void *fit, int images,
+                                   const char *name,
+                                   const char *expected_type,
+                                   const char *expected_os,
+                                   uint64_t payload_base,
+                                   uint64_t media_size,
+                                   RK3588FITImage *image, Error **errp)
+{
+    uint32_t data_offset;
+    int node = fdt_subnode_offset(fit, images, name);
+
+    if (node < 0) {
+        error_setg(errp, "FIT configuration references missing image '%s'",
+                   name);
+        return false;
+    }
+    if (!rk3588_fit_check_string(fit, node, "type", expected_type, errp) ||
+        !rk3588_fit_check_string(fit, node, "os", expected_os, errp) ||
+        !rk3588_fit_check_string(fit, node, "compression", "none", errp) ||
+        !rk3588_fit_get_address(fit, node, "load", false,
+                                 &image->load, errp) ||
+        !rk3588_fit_get_u32(fit, node, "data-size", &image->size, errp) ||
+        !rk3588_fit_get_u32(fit, node, "data-offset", &data_offset, errp)) {
+        return false;
+    }
+
+    image->entry = 0;
+    if (!rk3588_fit_get_address(fit, node, "entry", true,
+                                 &image->entry, errp)) {
+        return false;
+    }
+    if (!image->entry) {
+        image->entry = image->load;
+    }
+
+    if (!image->size || image->load > HWADDR_MAX - image->size ||
+        image->entry < image->load ||
+        image->entry >= image->load + image->size) {
+        error_setg(errp, "FIT image '%s' has an invalid load range", name);
+        return false;
+    }
+    if (payload_base > media_size ||
+        data_offset > media_size - payload_base ||
+        image->size > media_size - payload_base - data_offset) {
+        error_setg(errp, "FIT image '%s' external data exceeds boot media",
+                   name);
+        return false;
+    }
+
+    image->media_offset = payload_base + data_offset;
+    return true;
+}
+
+static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
+                                                BlockBackend *blk,
+                                                Error **errp)
+{
+    const RK3588FirmwareProfile *profile = s->board->firmware_profile;
+    MachineState *ms = MACHINE(s);
+    struct fdt_header header;
+    g_autofree uint8_t *fit = NULL;
+    RK3588FITImage atf = { 0 };
+    RK3588FITImage uboot = { 0 };
+    const char *default_name;
+    const char *atf_name;
+    const char *uboot_name;
+    int64_t media_len;
+    uint64_t media_size;
+    uint64_t payload_base;
+    uint64_t entry_delta;
+    uint32_t metadata_size;
+    uint32_t entry_word;
+    int configs;
+    int config;
+    int images;
+    int ret;
+
+    if (!rk3588_dynamic_fit_handoff(s)) {
+        return true;
+    }
+
+    s->bootrom_state.fit_handoff_valid = false;
+    if (!profile->fit_alignment ||
+        (profile->fit_alignment & (profile->fit_alignment - 1)) ||
+        profile->fit_alignment > RK3588_FIT_METADATA_MAX_SIZE) {
+        error_setg(errp, "%s has invalid FIT alignment %u",
+                   s->board->machine_name, profile->fit_alignment);
+        return false;
+    }
+
+    media_len = blk_getlength(blk);
+    if (media_len < 0) {
+        error_setg_errno(errp, -media_len,
+                         "cannot determine RK3588 boot media size");
+        return false;
+    }
+    media_size = media_len;
+    if (profile->fit_offset > media_size ||
+        sizeof(header) > media_size - profile->fit_offset ||
+        !rk3588_blk_read(blk, profile->fit_offset, &header,
+                         sizeof(header), errp)) {
+        if (!*errp) {
+            error_setg(errp, "%s FIT header exceeds boot media",
+                       s->board->machine_name);
+        }
+        return false;
+    }
+
+    ret = fdt_check_header(&header);
+    if (ret < 0) {
+        error_setg(errp, "%s boot media has an invalid FIT header: %s",
+                   s->board->machine_name, fdt_strerror(ret));
+        return false;
+    }
+    metadata_size = fdt_totalsize(&header);
+    if (metadata_size < sizeof(header) ||
+        metadata_size > RK3588_FIT_METADATA_MAX_SIZE ||
+        metadata_size > media_size - profile->fit_offset) {
+        error_setg(errp, "%s FIT metadata size 0x%x is invalid",
+                   s->board->machine_name, metadata_size);
+        return false;
+    }
+
+    fit = g_malloc(metadata_size);
+    if (!rk3588_blk_read(blk, profile->fit_offset, fit, metadata_size,
+                         errp)) {
+        return false;
+    }
+    ret = fdt_check_full(fit, metadata_size);
+    if (ret < 0) {
+        error_setg(errp, "%s FIT metadata is invalid: %s",
+                   s->board->machine_name, fdt_strerror(ret));
+        return false;
+    }
+
+    payload_base = ROUND_UP((uint64_t)metadata_size,
+                            profile->fit_alignment);
+    if (payload_base > media_size - profile->fit_offset) {
+        error_setg(errp, "%s FIT payload exceeds boot media",
+                   s->board->machine_name);
+        return false;
+    }
+    payload_base += profile->fit_offset;
+
+    configs = fdt_path_offset(fit, "/configurations");
+    images = fdt_path_offset(fit, "/images");
+    if (configs < 0 || images < 0) {
+        error_setg(errp, "%s FIT lacks configurations or images",
+                   s->board->machine_name);
+        return false;
+    }
+    default_name = rk3588_fit_single_string(fit, configs, "default", errp);
+    if (!default_name) {
+        return false;
+    }
+    config = fdt_subnode_offset(fit, configs, default_name);
+    if (config < 0) {
+        error_setg(errp, "FIT default configuration '%s' is missing",
+                   default_name);
+        return false;
+    }
+    atf_name = rk3588_fit_single_string(fit, config, "firmware", errp);
+    if (!atf_name) {
+        return false;
+    }
+    uboot_name = rk3588_fit_find_uboot(fit, config, images, errp);
+    if (!uboot_name ||
+        !rk3588_fit_read_image(fit, images, atf_name, "firmware",
+                                "arm-trusted-firmware", payload_base,
+                                media_size, &atf, errp) ||
+        !rk3588_fit_read_image(fit, images, uboot_name, "standalone",
+                                "U-Boot", payload_base, media_size,
+                                &uboot, errp)) {
+        return false;
+    }
+
+    if (atf.load >= rk3588_memmap[RK3588_SRAM].size ||
+        atf.size > rk3588_memmap[RK3588_SRAM].size - atf.load) {
+        error_setg(errp, "FIT ATF image lies outside RK3588 SRAM");
+        return false;
+    }
+    if (uboot.load < rk3588_memmap[RK3588_RAM].base ||
+        uboot.load - rk3588_memmap[RK3588_RAM].base >= ms->ram_size ||
+        uboot.size > ms->ram_size -
+                     (uboot.load - rk3588_memmap[RK3588_RAM].base)) {
+        error_setg(errp, "FIT U-Boot image lies outside guest RAM");
+        return false;
+    }
+
+    entry_delta = uboot.entry - uboot.load;
+    if (uboot.size < sizeof(entry_word) ||
+        entry_delta > uboot.size - sizeof(entry_word) ||
+        !rk3588_blk_read(blk, uboot.media_offset + entry_delta,
+                         &entry_word, sizeof(entry_word), errp)) {
+        if (!*errp) {
+            error_setg(errp, "FIT U-Boot entry does not contain an "
+                       "instruction");
+        }
+        return false;
+    }
+
+    s->bootrom_state.atf_load = atf.load;
+    s->bootrom_state.atf_size = atf.size;
+    s->bootrom_state.uboot_load = uboot.load;
+    s->bootrom_state.uboot_entry = uboot.entry;
+    s->bootrom_state.uboot_size = uboot.size;
+    s->bootrom_state.uboot_entry_word = le32_to_cpu(entry_word);
+    s->bootrom_state.fit_handoff_valid = true;
+    return true;
+}
+
 static bool rk3588_load_rkns_image(BlockBackend *blk,
                                    const RK3588HeaderV2 *hdr,
                                    unsigned int index, uint8_t **data,
@@ -2102,6 +2529,11 @@ static bool rk3588_bootrom_prepare(RK3588MachineState *s, Error **errp)
         g_free(tpl);
         return false;
     }
+    if (!rk3588_bootrom_prepare_fit_handoff(s, blk, errp)) {
+        g_free(tpl);
+        g_free(spl);
+        return false;
+    }
 
     if (address_space_write(&address_space_memory, RK3588_TPL_LOAD_ADDR,
                             MEMTXATTRS_UNSPECIFIED, tpl, tpl_size) !=
@@ -2132,7 +2564,9 @@ static void rk3588_bootrom_load_spl(RK3588MachineState *s, ARMCPU *cpu)
     address_space_write(&address_space_memory, rk3588_memmap[RK3588_SRAM].base,
                         MEMTXATTRS_UNSPECIFIED, s->bootrom_state.spl,
                         s->bootrom_state.spl_size);
-    rk3588_patch_spl_atf_handoff();
+    if (!rk3588_dynamic_fit_handoff(s)) {
+        rk3588_patch_spl_atf_handoff();
+    }
     stl_le_p(memory_region_get_ram_ptr(&s->iram) + 0x10,
              board->brom_bootsource);
     s->bootrom_state.spl_loaded = true;
