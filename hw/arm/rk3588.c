@@ -16,6 +16,7 @@
 #include "system/address-spaces.h"
 #include "system/block-backend-io.h"
 #include "exec/hwaddr.h"
+#include "exec/translation-block.h"
 #include "system/device_tree.h"
 #include "system/kvm.h"
 #include "system/memory.h"
@@ -32,6 +33,8 @@
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_atf_ddr.h"
 #include "hw/misc/rk3588_ddr.h"
+#include "hw/misc/rk3588_firmware_mmio.h"
+#include "hw/misc/rk3588_grf.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
 #include "hw/nvram/rk3588_secure_otp.h"
@@ -52,7 +55,6 @@
 #include "hw/core/sysbus.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/intc/arm_gicv3_its_common.h"
-#include "hw/misc/unimp.h"
 #include "hw/misc/rk3588_cru.h"
 #include "hw/pci-host/rockchip_pcie.h"
 #include "qobject/qlist.h"
@@ -91,16 +93,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_UBOOT_LOAD_ADDR 0x00800000ULL
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
-#define RK3588_FIRMWARE_MMIO_SIZE 0x08000000
 #define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
-#define RK3588_DDR_SYS_REG_VERSION 3
-#define RK3588_DDR_LEGACY_BASE 0xf7010000ULL
+#define RK3588_DDR_LEGACY_BASE 0xf7000000ULL
+#define RK3588_DDR_LEGACY_PHY_BASE 0xfd800000ULL
+#define RK3588_DDR_LEGACY_PHY_AUX_BASE 0xfe000000ULL
 #define RK3588_DDR_GLOBAL_BASE 0xfd000000ULL
 #define RK3588_DDR_CHANNEL_BASE 0xfd100000ULL
 #define RK3588_DDRPHY_BASE 0xfd8d8000ULL
 #define RK3588_DDR_PHY_GATE_BASE 0xfe0c0000ULL
-#define RK3588_PMU0_GRF_WARM_BOOT_MAGIC_OFFSET 0x84
-#define RK3588_PMU0_GRF_WARM_BOOT_MAGIC 0x13579bdf
 #define RK3588_PMUSRAM_SKIP_ADDR 0xff101764ULL
 #define RK3588_BL31_BASE 0x00060000ULL
 #define RK3588_BL31_LIMIT 0x00090000ULL
@@ -198,8 +198,6 @@ struct RK3588MachineState {
     DeviceState *atf_ddr;
     RK3588DDRState *ddr;
     RK3588USB2HostState *usb2_host;
-    RockchipSysconState *pmu0grf;
-    RockchipSysconState *pmu1grf;
 
     MemoryRegion sram;
     MemoryRegion iram;
@@ -208,8 +206,6 @@ struct RK3588MachineState {
     MemoryRegion zvm_high_ram;
     MemoryRegion bootrom;
     MemoryRegion firmware_scratch;
-    MemoryRegion firmware_mmio;
-    uint8_t *firmware_mmio_regs;
     QEMUTimer *firmware_patch_timer;
     bool firmware_boot;
     bool firmware_patch_done;
@@ -281,7 +277,6 @@ enum {
     RK3588_CRYPTO,
     RK3588_IRAM,
     RK3588_BROM,
-    RK3588_FIRMWARE_MMIO,
     RK3588_UART2,
 };
 
@@ -328,9 +323,9 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_GPIO4] =        { 0xfec50000, 0x00000100 },
     /*
      * General Register File (GRF) syscons - write-only RGMII-delay / PHY-
-     * interface-select registers consumed by dwmac-rk. Modeled as RAZ/WI
-     * (create_unimplemented_device); the gmac FDT node references these
-     * via rockchip,grf / rockchip,php-grf phandles.
+     * interface-select registers consumed by dwmac-rk. Dedicated RK3588 GRF
+     * and reusable Rockchip syscon devices own their register storage; the
+     * gmac FDT node references them through phandles.
      */
     [RK3588_SYS_GRF] =      { 0xfd58c000, 0x00001000 },
     [RK3588_PHP_GRF] =      { 0xfd5b0000, 0x00001000 },
@@ -349,7 +344,6 @@ static const MemMapEntry rk3588_memmap[] = {
                               ROCKCHIP_CRYPTO_V2_MMIO_SIZE },
     [RK3588_IRAM] =         { 0xff000000, RK3588_IRAM_SIZE },
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
-    [RK3588_FIRMWARE_MMIO] = { 0xf7000000, RK3588_FIRMWARE_MMIO_SIZE },
     [RK3588_UART2] =        { 0xfeb50000, 0x00000100 },
 };
 
@@ -371,70 +365,6 @@ enum {
     RK3588_PCIE3X4_SYS_SPI = 263,
     RK3588_GPIO0_SPI = 277,
     RK3588_UART2_SPI = 333,
-};
-
-static uint64_t rk3588_firmware_mmio_read(void *opaque, hwaddr offset,
-                                          unsigned size)
-{
-    RK3588MachineState *s = opaque;
-
-    if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
-        size > 8) {
-        return 0;
-    }
-
-    switch (size) {
-    case 1:
-        return s->firmware_mmio_regs[offset];
-    case 2:
-        return lduw_le_p(&s->firmware_mmio_regs[offset]);
-    case 4:
-        return ldl_le_p(&s->firmware_mmio_regs[offset]);
-    case 8:
-        return ldq_le_p(&s->firmware_mmio_regs[offset]);
-    default:
-        return 0;
-    }
-}
-
-static void rk3588_firmware_mmio_write(void *opaque, hwaddr offset,
-                                       uint64_t value, unsigned size)
-{
-    RK3588MachineState *s = opaque;
-
-    if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
-        size > 8) {
-        return;
-    }
-
-    switch (size) {
-    case 1:
-        s->firmware_mmio_regs[offset] = value;
-        break;
-    case 2:
-        stw_le_p(&s->firmware_mmio_regs[offset], value);
-        break;
-    case 4:
-        stl_le_p(&s->firmware_mmio_regs[offset], value);
-        break;
-    case 8:
-        stq_le_p(&s->firmware_mmio_regs[offset], value);
-        break;
-    }
-}
-
-static const MemoryRegionOps rk3588_firmware_mmio_ops = {
-    .read = rk3588_firmware_mmio_read,
-    .write = rk3588_firmware_mmio_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .impl = {
-        .min_access_size = 1,
-        .max_access_size = 8,
-    },
-    .valid = {
-        .min_access_size = 1,
-        .max_access_size = 8,
-    },
 };
 
 static const char *rk3588_cpu_type(unsigned int n)
@@ -1121,8 +1051,8 @@ static void rk3588_enable_psci_conduit(RK3588MachineState *s)
     }
 }
 
-static RockchipSysconState *rk3588_create_syscon(RK3588MachineState *s,
-                                                 const char *name, int memidx)
+static void rk3588_create_syscon(RK3588MachineState *s, const char *name,
+                                 int memidx)
 {
     DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SYSCON);
     SysBusDevice *sbd;
@@ -1132,77 +1062,7 @@ static RockchipSysconState *rk3588_create_syscon(RK3588MachineState *s,
     sbd = SYS_BUS_DEVICE(dev);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, rk3588_memmap[memidx].base);
-
-    return ROCKCHIP_SYSCON(dev);
-}
-
-static uint32_t rk3588_ddr_sys_reg2(uint64_t group_bytes,
-                                     uint32_t dram_type)
-{
-    uint64_t group_mb = MAX(group_bytes / MiB, 256);
-    unsigned int row = 13;
-    uint32_t row_delta, reg;
-
-    while ((256ULL << (row - 13)) < group_mb && row < 17) {
-        row++;
-    }
-
-    row_delta = row - 13;
-    reg = (dram_type & 7) << 13;
-    reg |= 1 << 28;              /* chinfo: channel 0 present */
-    reg |= 1 << 9;               /* col = 10 */
-    reg |= (row_delta & 3) << 6; /* cs0_row low bits */
-
-    return reg;
-}
-
-static uint32_t rk3588_ddr_sys_reg3(uint64_t group_bytes,
-                                     uint32_t dram_type)
-{
-    uint64_t group_mb = MAX(group_bytes / MiB, 256);
-    unsigned int row = 13;
-    uint32_t row_delta, reg;
-
-    while ((256ULL << (row - 13)) < group_mb && row < 17) {
-        row++;
-    }
-
-    row_delta = row - 13;
-    reg = RK3588_DDR_SYS_REG_VERSION << 28;
-    reg |= (dram_type >> 3) << 12;
-    reg |= ((row_delta >> 2) & 1) << 5;
-
-    return reg;
-}
-
-static void rk3588_seed_dram_info(RK3588MachineState *s)
-{
-    MachineState *ms = MACHINE(s);
-    uint64_t group = MAX(ms->ram_size / 2, 256 * MiB);
-    uint32_t sys_reg2 = rk3588_ddr_sys_reg2(group, s->board->dram_type);
-    uint32_t sys_reg3 = rk3588_ddr_sys_reg3(group, s->board->dram_type);
-
-    if (!s->pmu1grf) {
-        return;
-    }
-
-    rockchip_syscon_set_u32(s->pmu1grf, 0x200 + 2 * sizeof(uint32_t),
-                            sys_reg2);
-    rockchip_syscon_set_u32(s->pmu1grf, 0x200 + 3 * sizeof(uint32_t),
-                            sys_reg3);
-    rockchip_syscon_set_u32(s->pmu1grf, 0x200 + 4 * sizeof(uint32_t),
-                            sys_reg2);
-    rockchip_syscon_set_u32(s->pmu1grf, 0x200 + 5 * sizeof(uint32_t),
-                            sys_reg3);
-}
-
-static void rk3588_seed_firmware_sysregs(RK3588MachineState *s)
-{
-    if (s->pmu0grf) {
-        rockchip_syscon_set_u32(s->pmu0grf,
-                                RK3588_PMU0_GRF_WARM_BOOT_MAGIC_OFFSET,
-                                RK3588_PMU0_GRF_WARM_BOOT_MAGIC);
-    }
+    object_unref(OBJECT(dev));
 }
 
 static void rk3588_write_atags(RK3588MachineState *s)
@@ -1392,8 +1252,7 @@ static void rk3588_schedule_firmware_patch(RK3588MachineState *s)
               RK3588_FIRMWARE_PATCH_INTERVAL_NS);
 }
 
-static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
-                                             ARMCPU *cpu)
+static void rk3588_set_uboot_cpu_state(RK3588MachineState *s, ARMCPU *cpu)
 {
     CPUState *cs = CPU(cpu);
     CPUARMState *env = &cpu->env;
@@ -1402,9 +1261,11 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
     if (rk3588_dynamic_fit_handoff(s) &&
         s->bootrom_state.fit_handoff_valid) {
         entry = s->bootrom_state.uboot_entry;
+        tb_invalidate_phys_range(cs, s->bootrom_state.uboot_load,
+                                 s->bootrom_state.uboot_load +
+                                 s->bootrom_state.uboot_size - 1);
     }
 
-    rk3588_prepare_nonsecure_linux_interrupts(s);
     cpu_reset(cs);
     arm_emulate_firmware_reset(cs, 2);
     cpu_set_pc(cs, entry);
@@ -1414,8 +1275,33 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
     env->xregs[3] = 0;
     cs->halted = false;
     arm_rebuild_hflags(env);
+}
+
+static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
+                                             ARMCPU *cpu)
+{
+    rk3588_prepare_nonsecure_linux_interrupts(s);
+    rk3588_set_uboot_cpu_state(s, cpu);
     s->firmware_handoff_done = true;
     rk3588_usb2_host_set_active(s->usb2_host, true);
+}
+
+static void rk3588_firmware_handoff_work(CPUState *cs,
+                                         run_on_cpu_data data)
+{
+    RK3588MachineState *s = data.host_ptr;
+
+    rk3588_set_uboot_cpu_state(s, ARM_CPU(cs));
+}
+
+static void rk3588_schedule_firmware_handoff(RK3588MachineState *s,
+                                              ARMCPU *cpu)
+{
+    rk3588_prepare_nonsecure_linux_interrupts(s);
+    s->firmware_handoff_done = true;
+    rk3588_usb2_host_set_active(s->usb2_host, true);
+    async_run_on_cpu(CPU(cpu), rk3588_firmware_handoff_work,
+                     RUN_ON_CPU_HOST_PTR(s));
 }
 
 static void rk3588_firmware_patch_tick(void *opaque)
@@ -1436,11 +1322,12 @@ static void rk3588_firmware_patch_tick(void *opaque)
         RK3588BootROM *bootrom = &s->bootrom_state;
 
         if (bootrom->fit_handoff_valid &&
+            arm_current_el(env) == 3 &&
             pc >= bootrom->atf_load &&
             pc < bootrom->atf_load + bootrom->atf_size &&
             rk3588_phys_read32(bootrom->uboot_entry, &uboot_entry) &&
             uboot_entry == bootrom->uboot_entry_word) {
-            rk3588_firmware_handoff_to_uboot(s, cpu);
+            rk3588_schedule_firmware_handoff(s, cpu);
             return;
         }
 
@@ -1461,7 +1348,7 @@ static void rk3588_firmware_patch_tick(void *opaque)
     if (!s->firmware_atf_entered && s->firmware_patch_done &&
         rk3588_phys_read32(RK3588_UBOOT_LOAD_ADDR, &uboot_entry) &&
         uboot_entry == RK3588_UBOOT_ENTRY_BRANCH) {
-        rk3588_firmware_handoff_to_uboot(s, cpu);
+        rk3588_schedule_firmware_handoff(s, cpu);
         return;
     }
 
@@ -1472,8 +1359,6 @@ static void rk3588_boot_state_reset(void *opaque)
 {
     RK3588MachineState *s = opaque;
 
-    rk3588_seed_dram_info(s);
-    rk3588_seed_firmware_sysregs(s);
     rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
     rk3588_write_atags(s);
     rk3588_seed_iram_firmware_shims(s);
@@ -1539,6 +1424,7 @@ static void rk3588_create_atf_ddr(RK3588MachineState *s)
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map_overlap(sbd, 0, RK3588_ATF_DDR_RUNTIME_BASE, 10);
     s->atf_ddr = dev;
+    object_unref(OBJECT(dev));
 }
 
 static void rk3588_create_zvm_ram(RK3588MachineState *s)
@@ -1580,17 +1466,13 @@ static void rk3588_create_zvm_ram(RK3588MachineState *s)
 
 static void rk3588_create_firmware_mmio(RK3588MachineState *s)
 {
-    s->firmware_mmio_regs = g_malloc(rk3588_memmap[RK3588_FIRMWARE_MMIO].size);
-    memset(s->firmware_mmio_regs, 0xff,
-           rk3588_memmap[RK3588_FIRMWARE_MMIO].size);
+    DeviceState *dev = qdev_new(TYPE_RK3588_FIRMWARE_MMIO);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
-    memory_region_init_io(&s->firmware_mmio, OBJECT(s),
-                          &rk3588_firmware_mmio_ops, s,
-                          "rk3588.firmware-mmio",
-                          rk3588_memmap[RK3588_FIRMWARE_MMIO].size);
-    memory_region_add_subregion_overlap(get_system_memory(),
-                                        rk3588_memmap[RK3588_FIRMWARE_MMIO].base,
-                                        &s->firmware_mmio, -1000);
+    object_property_add_child(OBJECT(s), "firmware-mmio", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map_overlap(sbd, 0, RK3588_FIRMWARE_MMIO_BASE, -1000);
+    object_unref(OBJECT(dev));
 }
 
 static bool rk3588_blk_read(BlockBackend *blk, int64_t offset,
@@ -2507,8 +2389,23 @@ static void rk3588_create_ddr(RK3588MachineState *s)
 
     object_property_add_child(OBJECT(s), "ddr", OBJECT(dev));
     sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY,
-                    RK3588_DDR_LEGACY_BASE);
+    for (unsigned int i = 0; i < RK3588_DDR_LEGACY_CHANNEL_COUNT; i++) {
+        hwaddr base = RK3588_DDR_LEGACY_BASE +
+                      i * RK3588_DDR_LEGACY_CHANNEL_STRIDE;
+
+        for (unsigned int j = 0;
+             j < RK3588_DDR_LEGACY_CTRL_WINDOWS_PER_CHANNEL; j++) {
+            sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY(i, j),
+                            base + j * RK3588_DDR_LEGACY_WINDOW_STRIDE);
+        }
+        sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_GATE(i),
+                        RK3588_DDR_PHY_GATE_BASE +
+                        i * RK3588_DDR_LEGACY_WINDOW_STRIDE);
+    }
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY,
+                    RK3588_DDR_LEGACY_PHY_BASE);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY_AUX,
+                    RK3588_DDR_LEGACY_PHY_AUX_BASE);
     sysbus_mmio_map(sbd, RK3588_DDR_MMIO_GLOBAL,
                     RK3588_DDR_GLOBAL_BASE);
     for (unsigned int i = 0; i < RK3588_DDR_CHANNEL_COUNT; i++) {
@@ -2517,9 +2414,8 @@ static void rk3588_create_ddr(RK3588MachineState *s)
                         i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
     }
     sysbus_mmio_map(sbd, RK3588_DDR_MMIO_DDRPHY, RK3588_DDRPHY_BASE);
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_PHY_GATE,
-                    RK3588_DDR_PHY_GATE_BASE);
     s->ddr = RK3588_DDR(dev);
+    object_unref(OBJECT(dev));
 }
 
 static void rk3588_create_usb2_host(RK3588MachineState *s)
@@ -2543,6 +2439,7 @@ static void rk3588_create_usb2_host(RK3588MachineState *s)
     s->usb2_host = RK3588_USB2_HOST(dev);
     rk3588_usb2_host_set_active(s->usb2_host,
                                 qtest_enabled() || machine->kernel_filename);
+    object_unref(OBJECT(dev));
 }
 
 /*
@@ -2663,9 +2560,21 @@ static void rk3588_create_sdmmc(RK3588MachineState *s)
 
 static void rk3588_create_syscon_devices(RK3588MachineState *s)
 {
-    s->pmu0grf = rk3588_create_syscon(s, "pmu0-grf", RK3588_PMU0_GRF);
-    s->pmu1grf = rk3588_create_syscon(s, "pmu1-grf", RK3588_PMU1_GRF);
-    rk3588_create_syscon(s, "sys-grf", RK3588_SYS_GRF);
+    DeviceState *grf = qdev_new(TYPE_RK3588_GRF);
+    SysBusDevice *grf_sbd = SYS_BUS_DEVICE(grf);
+
+    qdev_prop_set_uint64(grf, "ram-size", MACHINE(s)->ram_size);
+    qdev_prop_set_uint32(grf, "dram-type", s->board->dram_type);
+    object_property_add_child(OBJECT(s), "pmu-grf", OBJECT(grf));
+    sysbus_realize(grf_sbd, &error_fatal);
+    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_PMU0,
+                    rk3588_memmap[RK3588_PMU0_GRF].base);
+    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_PMU1,
+                    rk3588_memmap[RK3588_PMU1_GRF].base);
+    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_SYS,
+                    rk3588_memmap[RK3588_SYS_GRF].base);
+    object_unref(OBJECT(grf));
+
     rk3588_create_syscon(s, "php-grf", RK3588_PHP_GRF);
     rk3588_create_syscon(s, "usb-grf", RK3588_USB_GRF);
     rk3588_create_syscon(s, "pmu1-ioc", RK3588_PMU1_IOC);
@@ -2673,8 +2582,6 @@ static void rk3588_create_syscon_devices(RK3588MachineState *s)
     rk3588_create_syscon(s, "bus-ioc", RK3588_BUS_IOC);
     rk3588_create_syscon(s, "firewall-ddr", RK3588_FIREWALL_DDR);
     rk3588_create_syscon(s, "firewall-sysmem", RK3588_FIREWALL_SYSMEM);
-    rk3588_seed_dram_info(s);
-    rk3588_seed_firmware_sysregs(s);
 }
 
 static void rk3588_create_crypto(RK3588MachineState *s)
@@ -2708,6 +2615,7 @@ static void rk3588_create_secure_otp(RK3588MachineState *s)
     sbd = SYS_BUS_DEVICE(s->secure_otp);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, RK3588_SECURE_OTP_BASE);
+    object_unref(OBJECT(s->secure_otp));
 }
 
 static void rk3588_init(MachineState *machine)

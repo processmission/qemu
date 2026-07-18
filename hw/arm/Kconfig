@@ -209,6 +209,7 @@ config SBSA_REF
 config RK3588
     bool
     select ARM_GIC
+    select ARM_GICV5 if TCG
     select DEVICE_TREE
     select DW_MMC
     select DW_APB_UART_VENDOR
@@ -216,17 +217,17 @@ config RK3588
     select RK3588_ATF_DDR
     select RK3588_CRU
     select RK3588_DDR
+    select RK3588_FIRMWARE_MMIO
+    select RK3588_GRF
     select ROCKCHIP_DWCMSHC
     select ROCKCHIP_PCIE
     select ROCKCHIP_STIMER
     select ROCKCHIP_SYSCON
-    select RK3588_SECURE_OTP
     select RK3588_SCMI
     select ROCKCHIP_GPIO
     select SDHCI
     select SERIAL_MM
     select RK3588_USB2_HOST
-    select UNIMP
 
 config RK3588_EVB
     bool
@@ -247,6 +248,7 @@ config ROCK_5B_PLUS
     default y
     depends on TCG && AARCH64
     select RK3588
+    select RK3588_SECURE_OTP
     select ROCKCHIP_CRYPTO_V2
 
 config S32K5

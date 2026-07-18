@@ -216,6 +216,13 @@ config RK3588_DDR
     bool
     select REGISTER
 
+config RK3588_FIRMWARE_MMIO
+    bool
+
+config RK3588_GRF
+    bool
+    select REGISTER
+
 config RK3588_SCMI
     bool
 
