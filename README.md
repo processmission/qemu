@@ -15,12 +15,12 @@ for new machine requests or bug reports.
 | RISC-V | [`k3-pico-itx`](docs/system/riscv/spacemit-k3.rst) | ✅ | ✅ | PM |
 | RISC-V | [`milkv-duo`](docs/system/riscv/milkv-duo.rst) | ✅ | ✅ | UP |
 | RISC-V | [`riscv-server-ref`](docs/system/riscv/riscv-server-ref.rst) | ✅ | ✅ | UP |
-| ARM | [`ax650x-pyramid`](docs/system/arm/ax650x-pyramid.rst) | ✅ | ❌ | PM |
+| ARM | [`ax650x-pyramid`](docs/system/arm/ax650x-pyramid.rst) | ✅ | - | PM |
 | ARM | [`phytium-pi`](docs/system/arm/phytium-pi.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588-evb`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588s-roc-pc`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rock-5b-plus`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
-| ARM | [`s32k566-cvb-r52`](docs/system/arm/s32k5.rst) | ✅ | ❌ | PM |
+| ARM | [`s32k566-cvb-r52`](docs/system/arm/s32k5.rst) | ✅ | - | PM |
 
 Source legend:
 
