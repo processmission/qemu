@@ -32,6 +32,7 @@
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
+#include "hw/nvram/rk3588_secure_otp.h"
 #include "hw/pci-host/designware.h"
 #include "hw/sd/dw_mmc.h"
 #include "hw/sd/rockchip_dwcmshc.h"
@@ -89,9 +90,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
 #define RK3588_FIRMWARE_MMIO_SIZE 0x08000000
 #define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
-#define RK3588_SECURE_OTP_DOUT_OFFSET 0x20
-#define RK3588_SECURE_OTP_INT_STATUS_OFFSET 0x84
-#define RK3588_SECURE_OTP_READ_DONE BIT(1)
 #define RK3588_DDR_SYS_REG_VERSION 3
 #define RK3588_DDRPHY_CTRL_OFFSET 0x154
 #define RK3588_DDRPHY_STATUS_OFFSET 0x184
@@ -250,6 +248,7 @@ struct RK3588MachineState {
     DeviceState *gmac1;
     DeviceState *gpio[5];
     DeviceState *crypto;
+    DeviceState *secure_otp;
     RockchipSysconState *pmu0grf;
     RockchipSysconState *pmu1grf;
 
@@ -495,24 +494,10 @@ static uint64_t rk3588_firmware_mmio_read(void *opaque, hwaddr offset,
                                           unsigned size)
 {
     RK3588MachineState *s = opaque;
-    hwaddr phys = rk3588_memmap[RK3588_FIRMWARE_MMIO].base + offset;
     hwaddr reg_offset;
 
     if (offset + size > rk3588_memmap[RK3588_FIRMWARE_MMIO].size ||
         size > 8) {
-        return 0;
-    }
-
-    if (s->board->firmware_profile &&
-        s->board->firmware_profile->unfused_secure_otp && size == 4 &&
-        phys == RK3588_SECURE_OTP_BASE +
-                RK3588_SECURE_OTP_INT_STATUS_OFFSET) {
-        return RK3588_SECURE_OTP_READ_DONE;
-    }
-
-    if (s->board->firmware_profile &&
-        s->board->firmware_profile->unfused_secure_otp && size == 4 &&
-        phys == RK3588_SECURE_OTP_BASE + RK3588_SECURE_OTP_DOUT_OFFSET) {
         return 0;
     }
 
@@ -3091,6 +3076,23 @@ static void rk3588_create_crypto(RK3588MachineState *s)
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_CRYPTO].base);
 }
 
+static void rk3588_create_secure_otp(RK3588MachineState *s)
+{
+    const RK3588FirmwareProfile *profile = s->board->firmware_profile;
+    SysBusDevice *sbd;
+
+    if (!profile || !profile->unfused_secure_otp) {
+        return;
+    }
+
+    s->secure_otp = qdev_new(TYPE_RK3588_SECURE_OTP);
+    object_property_add_child(OBJECT(s), "secure-otp",
+                              OBJECT(s->secure_otp));
+    sbd = SYS_BUS_DEVICE(s->secure_otp);
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, RK3588_SECURE_OTP_BASE);
+}
+
 static void rk3588_init(MachineState *machine)
 {
     RK3588MachineState *s = RK3588_MACHINE(machine);
@@ -3124,6 +3126,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_cru(s);
     rk3588_create_stimer(s);
     rk3588_create_scmi(s);
+    rk3588_create_secure_otp(s);
     rk3588_create_crypto(s);
     rk3588_active_machine = s;
     rk3588_create_uart(s);

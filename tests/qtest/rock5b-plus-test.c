@@ -53,6 +53,7 @@
 #define UART_LSR_TEMT 0x40
 #define SECURE_OTP_DOUT 0x20
 #define SECURE_OTP_INT_STATUS 0x84
+#define SECURE_OTP_UNIMPLEMENTED 0x100
 #define SECURE_OTP_READ_DONE 0x2
 #define CRYPTO_RST_CTL 0x004
 #define CRYPTO_DMA_INT_ST 0x00c
@@ -180,6 +181,28 @@ static void test_rock_5b_plus_unfused_secure_otp(void)
                     SECURE_OTP_READ_DONE);
     g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
                                 SECURE_OTP_DOUT), ==, 0);
+
+    qtest_writel(qts, RK3588_SECURE_OTP_BASE + SECURE_OTP_DOUT,
+                 UINT32_MAX);
+    qtest_writel(qts, RK3588_SECURE_OTP_BASE + SECURE_OTP_INT_STATUS, 0);
+    qtest_writel(qts, RK3588_SECURE_OTP_BASE + SECURE_OTP_UNIMPLEMENTED,
+                 UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_DOUT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_INT_STATUS), ==,
+                    SECURE_OTP_READ_DONE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_UNIMPLEMENTED), ==, 0);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_DOUT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_INT_STATUS), ==,
+                    SECURE_OTP_READ_DONE);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SECURE_OTP_BASE +
+                                SECURE_OTP_UNIMPLEMENTED), ==, 0);
 
     qtest_quit(qts);
 }

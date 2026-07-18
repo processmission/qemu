@@ -218,6 +218,7 @@ config RK3588
     select ROCKCHIP_PCIE
     select ROCKCHIP_STIMER
     select ROCKCHIP_SYSCON
+    select RK3588_SECURE_OTP
     select RK3588_SCMI
     select ROCKCHIP_GPIO
     select SDHCI
