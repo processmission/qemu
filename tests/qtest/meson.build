@@ -276,7 +276,8 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_IOMMU_TESTDEV') and
    config_all_devices.has_key('CONFIG_ARM_VIRT') ?
    ['iommu-smmuv3-test'] : []) + \
-  (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-evb-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_RK3588S_ROC_PC') ? ['rk3588s-roc-pc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_PHYTIUMPI') ? ['phytiumpi-test'] : []) + \
   qtests_cxl +                                                                                  \
