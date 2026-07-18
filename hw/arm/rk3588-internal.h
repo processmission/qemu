@@ -20,6 +20,10 @@
 #define RK3588_DRAM_TYPE_LPDDR4X 8
 #define RK3588_DRAM_TYPE_LPDDR5 9
 
+typedef struct RK3588FirmwareProfile {
+    bool unfused_secure_otp;
+} RK3588FirmwareProfile;
+
 typedef struct RK3588BoardConfig {
     const char *machine_name;
     const char *desc;
@@ -34,6 +38,7 @@ typedef struct RK3588BoardConfig {
     unsigned int pcie3x4_num_lanes;
     bool swap_gmac_aliases;
     bool default_zvm_ram;
+    const RK3588FirmwareProfile *firmware_profile;
 } RK3588BoardConfig;
 
 void rk3588_machine_instance_configure(Object *obj,

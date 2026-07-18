@@ -17,6 +17,10 @@ static const char * const rock_5b_plus_compatible[] = {
     "rockchip,rk3588",
 };
 
+static const RK3588FirmwareProfile rock_5b_plus_firmware = {
+    .unfused_secure_otp = true,
+};
+
 static const RK3588BoardConfig rock_5b_plus_board = {
     .machine_name = "rock-5b-plus",
     .desc = "Radxa ROCK 5B+",
@@ -31,6 +35,7 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .pcie3x4_num_lanes = 2,
     .swap_gmac_aliases = false,
     .default_zvm_ram = false,
+    .firmware_profile = &rock_5b_plus_firmware,
 };
 
 static void rock_5b_plus_machine_instance_init(Object *obj)
