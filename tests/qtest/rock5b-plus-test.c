@@ -7,6 +7,7 @@
  */
 
 #include "qemu/osdep.h"
+#include <libfdt.h>
 #include "libqtest.h"
 
 #define ROCK_5B_PLUS_MACHINE "rock-5b-plus"
@@ -76,6 +77,152 @@ static QTestState *rock_5b_plus_qtest_start(unsigned int cpus)
 {
     return qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
                        " -smp %u -m 512M", cpus);
+}
+
+static void assert_fdt_cells(const void *fdt, int node, const char *property,
+                             const uint32_t *expected, size_t count)
+{
+    const fdt32_t *cells;
+    int length;
+
+    cells = fdt_getprop(fdt, node, property, &length);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(length, ==, (int)(count * sizeof(*cells)));
+
+    for (size_t i = 0; i < count; i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i]), ==, expected[i]);
+    }
+}
+
+static void test_rock_5b_plus_pcie3x2_fdt(void)
+{
+    static const uint32_t kernel_insn = GUINT32_TO_LE(0x14000000);
+    static const uint32_t expected_reg[] = {
+        0x0000000a, 0x40400000, 0x00000000, 0x00400000,
+        0x00000000, 0xfe160000, 0x00000000, 0x00010000,
+        0x00000000, 0xf1000000, 0x00000000, 0x00100000,
+    };
+    static const uint32_t expected_interrupts[] = {
+        0, 258, 4, 0,
+        0, 257, 4, 0,
+        0, 256, 4, 0,
+        0, 255, 4, 0,
+        0, 254, 4, 0,
+    };
+    static const uint32_t expected_bus_range[] = { 0x10, 0x1f };
+    static const uint32_t expected_ranges[] = {
+        0x01000000, 0x00000000, 0xf1100000,
+                    0x00000000, 0xf1100000, 0x00000000, 0x00100000,
+        0x02000000, 0x00000000, 0xf1200000,
+                    0x00000000, 0xf1200000, 0x00000000, 0x00e00000,
+        0x03000000, 0x00000009, 0x40000000,
+                    0x00000009, 0x40000000, 0x00000000, 0x40000000,
+    };
+    g_autofree char *kernel_path = NULL;
+    g_autofree char *dtb_path = NULL;
+    g_autofree char *machine_arg = NULL;
+    g_autofree char *dtb = NULL;
+    g_autofree char *stderr_buf = NULL;
+    g_autoptr(GError) error = NULL;
+    gsize dtb_size;
+    int kernel_fd, dtb_fd, exit_status;
+    int pcie, its;
+    const fdt32_t *cells;
+    int length;
+    bool spawned;
+
+    kernel_fd = g_file_open_tmp("rock5b-plus-kernel-XXXXXX", &kernel_path,
+                                &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(kernel_fd, >=, 0);
+    g_assert_cmpint(close(kernel_fd), ==, 0);
+    g_assert_true(g_file_set_contents(kernel_path,
+                                      (const char *)&kernel_insn,
+                                      sizeof(kernel_insn), &error));
+    g_assert_no_error(error);
+
+    dtb_fd = g_file_open_tmp("rock5b-plus-dtb-XXXXXX", &dtb_path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(dtb_fd, >=, 0);
+    g_assert_cmpint(close(dtb_fd), ==, 0);
+
+    machine_arg = g_strdup_printf(ROCK_5B_PLUS_MACHINE ",dumpdtb=%s",
+                                  dtb_path);
+    const char *argv[] = {
+        qtest_qemu_binary(NULL),
+        "-machine", machine_arg,
+        "-cpu", "cortex-a76",
+        "-smp", "1",
+        "-m", "512M",
+        "-kernel", kernel_path,
+        "-display", "none",
+        "-serial", "none",
+        "-nodefaults",
+        NULL,
+    };
+
+    spawned = g_spawn_sync(NULL, (char **)argv, NULL,
+                           G_SPAWN_STDOUT_TO_DEV_NULL, NULL, NULL, NULL,
+                           &stderr_buf, &exit_status, &error);
+    g_assert_true(spawned);
+    g_assert_no_error(error);
+    if (!g_spawn_check_exit_status(exit_status, &error)) {
+        g_error("QEMU failed to dump the ROCK 5B+ DTB: %s\n%s",
+                error->message, stderr_buf ? stderr_buf : "");
+    }
+
+    g_assert_true(g_file_get_contents(dtb_path, &dtb, &dtb_size, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(fdt_check_header(dtb), ==, 0);
+    g_assert_cmpuint(fdt_totalsize(dtb), <=, dtb_size);
+
+    pcie = fdt_path_offset(dtb, "/pcie@fe160000");
+    g_assert_cmpint(pcie, >=, 0);
+    g_assert_cmpint(fdt_node_check_compatible(dtb, pcie,
+                                              "rockchip,rk3588-pcie"), ==,
+                    0);
+    assert_fdt_cells(dtb, pcie, "reg", expected_reg,
+                     ARRAY_SIZE(expected_reg));
+    assert_fdt_cells(dtb, pcie, "interrupts", expected_interrupts,
+                     ARRAY_SIZE(expected_interrupts));
+    assert_fdt_cells(dtb, pcie, "bus-range", expected_bus_range,
+                     ARRAY_SIZE(expected_bus_range));
+    assert_fdt_cells(dtb, pcie, "ranges", expected_ranges,
+                     ARRAY_SIZE(expected_ranges));
+
+    cells = fdt_getprop(dtb, pcie, "num-lanes", &length);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(length, ==, (int)sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, 2);
+
+    cells = fdt_getprop(dtb, pcie, "linux,pci-domain", &length);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(length, ==, (int)sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, 1);
+
+    cells = fdt_getprop(dtb, pcie, "resets", &length);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(length, ==, 4 * (int)sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), !=, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, fdt32_to_cpu(cells[2]));
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 526);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, 541);
+
+    its = fdt_path_offset(dtb,
+                          "/interrupt-controller@fe600000/"
+                          "msi-controller@fe660000");
+    g_assert_cmpint(its, >=, 0);
+    cells = fdt_getprop(dtb, pcie, "msi-map", &length);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(length, ==, 4 * (int)sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, 0x1000);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                    fdt_get_phandle(dtb, its));
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0x1000);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, 0x1000);
+
+    g_assert_cmpint(g_unlink(kernel_path), ==, 0);
+    g_assert_cmpint(g_unlink(dtb_path), ==, 0);
 }
 
 static void test_rock_5b_plus_machine_creation(void)
@@ -330,6 +477,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_machine_creation);
     qtest_add_func("/rock-5b-plus/smp-creation",
                    test_rock_5b_plus_smp_creation);
+    qtest_add_func("/rock-5b-plus/pcie3x2-fdt",
+                   test_rock_5b_plus_pcie3x2_fdt);
     qtest_add_func("/rock-5b-plus/unfused-secure-otp",
                    test_rock_5b_plus_unfused_secure_otp);
     qtest_add_func("/rock-5b-plus/crypto-sha256",

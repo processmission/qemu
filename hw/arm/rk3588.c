@@ -839,12 +839,81 @@ static void rk3588_fdt_add_gmac_nodes(RK3588MachineState *s, void *fdt,
     }
 }
 
-static void rk3588_fdt_add_pcie_node(RK3588MachineState *s, void *fdt,
+typedef struct RK3588PCIEFDTConfig {
+    const char *node;
+    unsigned int dbi_map;
+    unsigned int apb_map;
+    unsigned int cfg_map;
+    uint32_t sys_spi;
+    uint32_t pmc_spi;
+    uint32_t msg_spi;
+    uint32_t legacy_spi;
+    uint32_t err_spi;
+    uint32_t power_up_reset;
+    uint32_t pipe_reset;
+    uint32_t domain;
+    uint32_t bus_start;
+    uint32_t requester_id;
+    uint32_t prefetch_hi;
+    uint32_t prefetch_lo;
+} RK3588PCIEFDTConfig;
+
+enum {
+    RK3588_SRST_PCIE0_POWER_UP = 294,
+    RK3588_SRST_P_PCIE0 = 299,
+    RK3588_SRST_PCIE1_POWER_UP = 526,
+    RK3588_SRST_P_PCIE1 = 541,
+};
+
+static const RK3588PCIEFDTConfig rk3588_pcie3x4_fdt = {
+    .node = "/pcie@fe150000",
+    .dbi_map = RK3588_PCIE3X4_DBI,
+    .apb_map = RK3588_PCIE3X4_APB,
+    .cfg_map = RK3588_PCIE3X4_CFG,
+    .sys_spi = RK3588_PCIE3X4_SYS_SPI,
+    .pmc_spi = RK3588_PCIE3X4_PMC_SPI,
+    .msg_spi = RK3588_PCIE3X4_MSG_SPI,
+    .legacy_spi = RK3588_PCIE3X4_LEGACY_SPI,
+    .err_spi = RK3588_PCIE3X4_ERR_SPI,
+    .power_up_reset = RK3588_SRST_PCIE0_POWER_UP,
+    .pipe_reset = RK3588_SRST_P_PCIE0,
+    .domain = 0,
+    .bus_start = 0,
+    .requester_id = 0,
+    .prefetch_hi = 0x9,
+    .prefetch_lo = 0,
+};
+
+static const RK3588PCIEFDTConfig rk3588_pcie3x2_fdt = {
+    .node = "/pcie@fe160000",
+    .dbi_map = RK3588_PCIE3X2_DBI,
+    .apb_map = RK3588_PCIE3X2_APB,
+    .cfg_map = RK3588_PCIE3X2_CFG,
+    .sys_spi = RK3588_PCIE3X2_SYS_SPI,
+    .pmc_spi = RK3588_PCIE3X2_PMC_SPI,
+    .msg_spi = RK3588_PCIE3X2_MSG_SPI,
+    .legacy_spi = RK3588_PCIE3X2_LEGACY_SPI,
+    .err_spi = RK3588_PCIE3X2_ERR_SPI,
+    .power_up_reset = RK3588_SRST_PCIE1_POWER_UP,
+    .pipe_reset = RK3588_SRST_P_PCIE1,
+    .domain = 1,
+    .bus_start = 0x10,
+    .requester_id = 0x1000,
+    .prefetch_hi = 0x9,
+    .prefetch_lo = 0x40000000,
+};
+
+static void rk3588_fdt_add_pcie_node(void *fdt,
+                                      const RK3588PCIEFDTConfig *config,
+                                      unsigned int num_lanes,
                                       uint32_t cru_phandle,
                                       uint32_t clk_phandle,
                                       uint32_t its1_phandle)
 {
-    const char *pcie = "/pcie@fe150000";
+    const char *pcie = config->node;
+    uint32_t io_base = rk3588_memmap[config->cfg_map].base +
+                       rk3588_memmap[config->cfg_map].size;
+    uint32_t mem_base = io_base + 0x00100000;
     static const char * const compat[] = {
         "rockchip,rk3588-pcie",
         "rockchip,rk3568-pcie",
@@ -858,38 +927,30 @@ static void rk3588_fdt_add_pcie_node(RK3588MachineState *s, void *fdt,
     static const char * const reset_names[] = {
         "pwr", "pipe",
     };
-    /*
-     * SRST_PCIE0_POWER_UP (294) and SRST_P_PCIE0 (299) -
-     * include/dt-bindings/reset/rockchip,rk3588-cru.h. The
-     * dw-rockchip driver does reset_control_get_exclusive on both;
-     * the CRU stub accepts the deassert writes (fire-and-forget).
-     */
-    enum { SRST_PCIE0_POWER_UP = 294, SRST_P_PCIE0 = 299 };
-
     qemu_fdt_add_subnode(fdt, pcie);
     qemu_fdt_setprop_string_array(fdt, pcie, "compatible",
                                   (char **)&compat, ARRAY_SIZE(compat));
     qemu_fdt_setprop_string(fdt, pcie, "device_type", "pci");
     qemu_fdt_setprop_sized_cells(fdt, pcie, "reg",
-                                 2, rk3588_memmap[RK3588_PCIE3X4_DBI].base,
-                                 2, rk3588_memmap[RK3588_PCIE3X4_DBI].size,
-                                 2, rk3588_memmap[RK3588_PCIE3X4_APB].base,
-                                 2, rk3588_memmap[RK3588_PCIE3X4_APB].size,
-                                 2, rk3588_memmap[RK3588_PCIE3X4_CFG].base,
-                                 2, rk3588_memmap[RK3588_PCIE3X4_CFG].size);
+                                 2, rk3588_memmap[config->dbi_map].base,
+                                 2, rk3588_memmap[config->dbi_map].size,
+                                 2, rk3588_memmap[config->apb_map].base,
+                                 2, rk3588_memmap[config->apb_map].size,
+                                 2, rk3588_memmap[config->cfg_map].base,
+                                 2, rk3588_memmap[config->cfg_map].size);
     qemu_fdt_setprop_string_array(fdt, pcie, "reg-names",
                                   (char **)&reg_names,
                                   ARRAY_SIZE(reg_names));
     qemu_fdt_setprop_cells(fdt, pcie, "interrupts",
-                           FDT_GIC_SPI, RK3588_PCIE3X4_SYS_SPI,
+                           FDT_GIC_SPI, config->sys_spi,
                            FDT_IRQ_TYPE_LEVEL_HIGH, 0,
-                           FDT_GIC_SPI, RK3588_PCIE3X4_PMC_SPI,
+                           FDT_GIC_SPI, config->pmc_spi,
                            FDT_IRQ_TYPE_LEVEL_HIGH, 0,
-                           FDT_GIC_SPI, RK3588_PCIE3X4_MSG_SPI,
+                           FDT_GIC_SPI, config->msg_spi,
                            FDT_IRQ_TYPE_LEVEL_HIGH, 0,
-                           FDT_GIC_SPI, RK3588_PCIE3X4_LEGACY_SPI,
+                           FDT_GIC_SPI, config->legacy_spi,
                            FDT_IRQ_TYPE_LEVEL_HIGH, 0,
-                           FDT_GIC_SPI, RK3588_PCIE3X4_ERR_SPI,
+                           FDT_GIC_SPI, config->err_spi,
                            FDT_IRQ_TYPE_LEVEL_HIGH, 0);
     static const char * const irq_names[] = {
         "sys", "pmc", "msg", "legacy", "err",
@@ -910,50 +971,63 @@ static void rk3588_fdt_add_pcie_node(RK3588MachineState *s, void *fdt,
     qemu_fdt_setprop_string_array(fdt, pcie, "clock-names",
                                   (char **)&clock_names,
                                   ARRAY_SIZE(clock_names));
-    /*
-     * The load-bearing property: dw-rockchip does
-     * devm_reset_control_array_get_exclusive on these. Without a cru
-     * reset provider the probe fails with -ENOENT (which is the
-     * baseline symptom we are fixing).
-     */
+    /* Both reset IDs are defined by rockchip,rk3588-cru.h. */
     qemu_fdt_setprop_cells(fdt, pcie, "resets",
-                           cru_phandle, SRST_PCIE0_POWER_UP,
-                           cru_phandle, SRST_P_PCIE0);
+                           cru_phandle, config->power_up_reset,
+                           cru_phandle, config->pipe_reset);
     qemu_fdt_setprop_string_array(fdt, pcie, "reset-names",
                                   (char **)&reset_names,
                                   ARRAY_SIZE(reset_names));
     qemu_fdt_setprop_cell(fdt, pcie, "#address-cells", 3);
     qemu_fdt_setprop_cell(fdt, pcie, "#size-cells", 2);
     qemu_fdt_setprop_cell(fdt, pcie, "#interrupt-cells", 1);
-    qemu_fdt_setprop_cells(fdt, pcie, "bus-range", 0, 0x0f);
-    qemu_fdt_setprop_cell(fdt, pcie, "num-lanes",
-                          s->board->pcie3x4_num_lanes);
+    qemu_fdt_setprop_cells(fdt, pcie, "bus-range", config->bus_start,
+                           config->bus_start + 0x0f);
+    qemu_fdt_setprop_cell(fdt, pcie, "num-lanes", num_lanes);
     qemu_fdt_setprop_cell(fdt, pcie, "max-link-speed", 3);
     /*
-     * RK3588 routes pcie3x4 Requester IDs 0x0000..0x0fff to ITS1.
-     * PCIe device MSI writes then target the ITS1 GITS_TRANSLATER doorbell
-     * directly; the host bridge line IRQs above remain separate.
+     * Each host owns a disjoint 0x1000 Requester ID range routed to ITS1.
+     * PCIe MSI writes then target the ITS1 GITS_TRANSLATER doorbell directly;
+     * the host bridge line IRQs above remain separate.
      */
     qemu_fdt_setprop_cells(fdt, pcie, "msi-map",
-                           0x0000, its1_phandle, 0x0000, 0x1000);
+                           config->requester_id, its1_phandle,
+                           config->requester_id, 0x1000);
     /*
-     * Bus ranges - IO/MEM/prefetch. The 1 MiB CFG window at
-     * 0xf0000000 is the reg "config" entry above; the designware
-     * model serves it via the outbound CFG viewport once the guest
-     * programs the iATU.
+     * Bus ranges - IO/MEM/prefetch. The 1 MiB CFG window is the reg
+     * "config" entry above; the designware model serves it via the outbound
+     * CFG viewport once the guest programs the iATU.
      */
     qemu_fdt_setprop_cells(fdt, pcie, "ranges",
-                           0x01000000, 0x0, 0xf0100000,
-                                         0x0, 0xf0100000, 0x0, 0x00100000,
-                           0x02000000, 0x0, 0xf0200000,
-                                         0x0, 0xf0200000, 0x0, 0x00e00000,
-                           0x03000000, 0x9, 0x00000000,
-                                         0x9, 0x00000000, 0x0, 0x40000000);
+                           0x01000000, 0x0, io_base,
+                                         0x0, io_base, 0x0, 0x00100000,
+                           0x02000000, 0x0, mem_base,
+                                         0x0, mem_base, 0x0, 0x00e00000,
+                           0x03000000, config->prefetch_hi,
+                                         config->prefetch_lo,
+                                         config->prefetch_hi,
+                                         config->prefetch_lo,
+                                         0x0, 0x40000000);
     /* Refer to xin24m so the cru-of-declare path doesn't grab us. */
-    qemu_fdt_setprop_cell(fdt, pcie, "linux,pci-domain", 0);
+    qemu_fdt_setprop_cell(fdt, pcie, "linux,pci-domain", config->domain);
     qemu_fdt_setprop_string(fdt, pcie, "status", "okay");
 }
 
+static void rk3588_fdt_add_pcie_nodes(RK3588MachineState *s, void *fdt,
+                                       uint32_t cru_phandle,
+                                       uint32_t clk_phandle,
+                                       uint32_t its1_phandle)
+{
+    rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie3x4_fdt,
+                             s->board->pcie3x4_num_lanes,
+                             cru_phandle, clk_phandle, its1_phandle);
+
+    if (s->board->pcie3x2_num_lanes) {
+        rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie3x2_fdt,
+                                 s->board->pcie3x2_num_lanes,
+                                 cru_phandle, clk_phandle, its1_phandle);
+    }
+}
 
 static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 {
@@ -989,8 +1063,8 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_storage_nodes(fdt, clk_phandle, scmi_clk_phandle);
     rk3588_fdt_add_gpio_nodes(fdt, clk_phandle);
     rk3588_fdt_add_gmac_nodes(s, fdt, clk_phandle, sys_grf_ph, php_grf_ph);
-    rk3588_fdt_add_pcie_node(s, fdt, cru_phandle, clk_phandle,
-                             its1_phandle);
+    rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
+                              its1_phandle);
 
     return fdt;
 }
