@@ -1963,6 +1963,18 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_divide(void)
         VALID_CHANNELS = 1001,
         STORAGE_CHANNELS = 1008,
     };
+    static const struct {
+        uint16_t input;
+        uint16_t operand;
+        uint16_t expected;
+    } boundary[] = {
+        { 0x1ae0, 0x45bb, 0x10cc },
+        { 0x1d50, 0x45bb, 0x136a },
+        { 0x2760, 0x3d18, 0x25ca },
+        { 0x1560, 0x3d18, 0x1438 },
+        { 0x0f80, 0x3d19, 0x0de2 },
+        { 0x1140, 0x3d19, 0x101e },
+    };
     uint16_t input[STORAGE_CHANNELS];
     uint16_t operand[STORAGE_CHANNELS];
     uint16_t output[STORAGE_CHANNELS];
@@ -1970,8 +1982,14 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_divide(void)
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
     for (unsigned int channel = 0; channel < STORAGE_CHANNELS; channel++) {
-        input[channel] = cpu_to_le16(0x4000);
-        operand[channel] = cpu_to_le16(channel & 1 ? 0x4000 : 0x3c00);
+        if (channel < ARRAY_SIZE(boundary)) {
+            input[channel] = cpu_to_le16(boundary[channel].input);
+            operand[channel] = cpu_to_le16(boundary[channel].operand);
+        } else {
+            input[channel] = cpu_to_le16(0x4000);
+            operand[channel] = cpu_to_le16(
+                channel & 1 ? 0x4000 : 0x3c00);
+        }
         output[channel] = cpu_to_le16(0xa5a5);
     }
     rk3588_rknn_make_dpu_rdma_fp16_lut_regcmd(commands);
@@ -2023,8 +2041,15 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_divide(void)
     qtest_memread(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
                   output, sizeof(output));
     for (unsigned int channel = 0; channel < ARRAY_SIZE(output); channel++) {
-        uint16_t expected = channel >= VALID_CHANNELS ? 0 :
-                            channel & 1 ? 0x3c00 : 0x4000;
+        uint16_t expected;
+
+        if (channel >= VALID_CHANNELS) {
+            expected = 0;
+        } else if (channel < ARRAY_SIZE(boundary)) {
+            expected = boundary[channel].expected;
+        } else {
+            expected = channel & 1 ? 0x3c00 : 0x4000;
+        }
 
         g_assert_cmphex(le16_to_cpu(output[channel]), ==, expected);
     }
@@ -3176,6 +3201,12 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_lut(void)
         0x3bfe, 0x38d9, 0x35e1, 0x3054,
         0x24b2, 0x0e00, 0x0400, 0x0400,
     };
+    static const uint16_t strict_up_input[] = {
+        0xc4ba, 0xc483, 0xc4f1, 0xc204,
+    };
+    static const uint16_t strict_up_expected[] = {
+        0x208c, 0x21a4, 0x1f58, 0x2a53,
+    };
     uint64_t baseline[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
     uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS + 1028];
     uint64_t task45_commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
@@ -3346,6 +3377,25 @@ static void test_rk3588_rknpu_dpu_rdma_fp16_lut(void)
             g_error("task45 lane %u: actual 0x%04x expected 0x%04x",
                     index, actual, expected_value);
         }
+    }
+
+    for (unsigned int index = 0; index < ARRAY_SIZE(task45_input); index++) {
+        task45_input[index] =
+            strict_up_input[index % ARRAY_SIZE(strict_up_input)];
+        task45_output[index] = 0xa5a5;
+    }
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_INPUT_ADDR,
+                   task45_input, sizeof(task45_input));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
+                   task45_output, sizeof(task45_output));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    qtest_memread(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
+                  task45_output, sizeof(task45_output));
+    for (unsigned int index = 0; index < ARRAY_SIZE(task45_output); index++) {
+        g_assert_cmphex(le16_to_cpu(task45_output[index]), ==,
+                        strict_up_expected[
+                            index % ARRAY_SIZE(strict_up_expected)]);
     }
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                 RKNN_PC_TASK_STATUS), ==,
