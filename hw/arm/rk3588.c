@@ -26,6 +26,7 @@
 #include "hw/arm/boot.h"
 #include "hw/arm/bsa.h"
 #include "hw/arm/linux-boot-if.h"
+#include "rk3588-internal.h"
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_scmi.h"
@@ -55,7 +56,6 @@
 #include "target/arm/gtimer.h"
 #include "target/arm/internals.h"
 
-#define TYPE_RK3588_MACHINE MACHINE_TYPE_NAME("rk3588")
 #define TYPE_RK3588_EVB_MACHINE MACHINE_TYPE_NAME("rk3588-evb")
 #define TYPE_RK3588S_ROC_PC_MACHINE MACHINE_TYPE_NAME("rk3588s-roc-pc")
 OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
@@ -87,11 +87,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_UBOOT_LOAD_ADDR 0x00800000ULL
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
-#define RK3588_BROM_BOOTSOURCE_EMMC 2
-#define RK3588_BROM_BOOTSOURCE_SD 5
 #define RK3588_FIRMWARE_MMIO_SIZE 0x08000000
 #define RK3588_DDR_SYS_REG_VERSION 3
-#define RK3588_LPDDR4X 8
 #define RK3588_DDRPHY_CTRL_OFFSET 0x154
 #define RK3588_DDRPHY_STATUS_OFFSET 0x184
 #define RK3588_DDRPHY_STATUS_ACTIVE 0x3
@@ -217,18 +214,6 @@ typedef struct RK3588BootROM {
     bool spl_loaded;
 } RK3588BootROM;
 
-typedef struct RK3588BoardConfig {
-    const char *machine_name;
-    const char *desc;
-    const char *ram_id;
-    const char *fdt_model;
-    const char * const *fdt_compatible;
-    size_t fdt_compatible_count;
-    unsigned int firmware_sd_unit;
-    uint32_t brom_bootsource;
-    bool default_zvm_ram;
-} RK3588BoardConfig;
-
 static const char * const rk3588_evb_compatible[] = {
     "qemu,rk3588-evb",
     "rockchip,rk3588-evb1-v10",
@@ -251,6 +236,9 @@ static const RK3588BoardConfig rk3588_evb_board = {
     .fdt_compatible_count = ARRAY_SIZE(rk3588_evb_compatible),
     .firmware_sd_unit = 0,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,
+    .dram_type = RK3588_DRAM_TYPE_LPDDR4X,
+    .gmac_mask = BIT(0) | BIT(1),
+    .pcie3x4_num_lanes = 4,
     .default_zvm_ram = false,
 };
 
@@ -263,6 +251,10 @@ static const RK3588BoardConfig rk3588s_roc_pc_board = {
     .fdt_compatible_count = ARRAY_SIZE(rk3588s_roc_pc_compatible),
     .firmware_sd_unit = 2,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_SD,
+    .dram_type = RK3588_DRAM_TYPE_LPDDR4X,
+    .gmac_mask = BIT(0) | BIT(1),
+    .pcie3x4_num_lanes = 4,
+    .swap_gmac_aliases = true,
     .default_zvm_ram = true,
 };
 
@@ -1210,20 +1202,37 @@ static void rk3588_fdt_add_gmac_nodes(RK3588MachineState *s, void *fdt,
                                       uint32_t clk_phandle,
                                       uint32_t sys_grf_ph, uint32_t php_grf_ph)
 {
-    bool roc_pc = s->board == &rk3588s_roc_pc_board;
+    const RK3588BoardConfig *board = s->board;
 
-    rk3588_fdt_add_gmac_node(fdt, 0, clk_phandle, sys_grf_ph, php_grf_ph);
-    rk3588_fdt_add_gmac_node(fdt, 1, clk_phandle, sys_grf_ph, php_grf_ph);
+    if (board->gmac_mask & BIT(0)) {
+        rk3588_fdt_add_gmac_node(fdt, 0, clk_phandle,
+                                 sys_grf_ph, php_grf_ph);
+    }
+    if (board->gmac_mask & BIT(1)) {
+        rk3588_fdt_add_gmac_node(fdt, 1, clk_phandle,
+                                 sys_grf_ph, php_grf_ph);
+    }
 
-    qemu_fdt_setprop_string(fdt, "/aliases", "ethernet0",
-                            roc_pc ? "/ethernet@fe1c0000" :
-                                     "/ethernet@fe1b0000");
-    qemu_fdt_setprop_string(fdt, "/aliases", "ethernet1",
-                            roc_pc ? "/ethernet@fe1b0000" :
-                                     "/ethernet@fe1c0000");
+    if (board->gmac_mask == (BIT(0) | BIT(1))) {
+        qemu_fdt_setprop_string(fdt, "/aliases", "ethernet0",
+                                board->swap_gmac_aliases ?
+                                "/ethernet@fe1c0000" :
+                                "/ethernet@fe1b0000");
+        qemu_fdt_setprop_string(fdt, "/aliases", "ethernet1",
+                                board->swap_gmac_aliases ?
+                                "/ethernet@fe1b0000" :
+                                "/ethernet@fe1c0000");
+    } else if (board->gmac_mask & BIT(0)) {
+        qemu_fdt_setprop_string(fdt, "/aliases", "ethernet0",
+                                "/ethernet@fe1b0000");
+    } else if (board->gmac_mask & BIT(1)) {
+        qemu_fdt_setprop_string(fdt, "/aliases", "ethernet0",
+                                "/ethernet@fe1c0000");
+    }
 }
 
-static void rk3588_fdt_add_pcie_node(void *fdt, uint32_t cru_phandle,
+static void rk3588_fdt_add_pcie_node(RK3588MachineState *s, void *fdt,
+                                      uint32_t cru_phandle,
                                       uint32_t clk_phandle,
                                       uint32_t its1_phandle)
 {
@@ -1309,7 +1318,8 @@ static void rk3588_fdt_add_pcie_node(void *fdt, uint32_t cru_phandle,
     qemu_fdt_setprop_cell(fdt, pcie, "#size-cells", 2);
     qemu_fdt_setprop_cell(fdt, pcie, "#interrupt-cells", 1);
     qemu_fdt_setprop_cells(fdt, pcie, "bus-range", 0, 0x0f);
-    qemu_fdt_setprop_cell(fdt, pcie, "num-lanes", 4);
+    qemu_fdt_setprop_cell(fdt, pcie, "num-lanes",
+                          s->board->pcie3x4_num_lanes);
     qemu_fdt_setprop_cell(fdt, pcie, "max-link-speed", 3);
     /*
      * RK3588 routes pcie3x4 Requester IDs 0x0000..0x0fff to ITS1.
@@ -1371,7 +1381,8 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_storage_nodes(fdt, clk_phandle, scmi_clk_phandle);
     rk3588_fdt_add_gpio_nodes(fdt, clk_phandle);
     rk3588_fdt_add_gmac_nodes(s, fdt, clk_phandle, sys_grf_ph, php_grf_ph);
-    rk3588_fdt_add_pcie_node(fdt, cru_phandle, clk_phandle, its1_phandle);
+    rk3588_fdt_add_pcie_node(s, fdt, cru_phandle, clk_phandle,
+                             its1_phandle);
 
     return fdt;
 }
@@ -1447,7 +1458,8 @@ static RockchipSysconState *rk3588_create_syscon(RK3588MachineState *s,
     return ROCKCHIP_SYSCON(dev);
 }
 
-static uint32_t rk3588_ddr_sys_reg2(uint64_t group_bytes)
+static uint32_t rk3588_ddr_sys_reg2(uint64_t group_bytes,
+                                     uint32_t dram_type)
 {
     uint64_t group_mb = MAX(group_bytes / MiB, 256);
     unsigned int row = 13;
@@ -1458,7 +1470,7 @@ static uint32_t rk3588_ddr_sys_reg2(uint64_t group_bytes)
     }
 
     row_delta = row - 13;
-    reg = (RK3588_LPDDR4X & 7) << 13;
+    reg = (dram_type & 7) << 13;
     reg |= 1 << 28;              /* chinfo: channel 0 present */
     reg |= 1 << 9;               /* col = 10 */
     reg |= (row_delta & 3) << 6; /* cs0_row low bits */
@@ -1466,7 +1478,8 @@ static uint32_t rk3588_ddr_sys_reg2(uint64_t group_bytes)
     return reg;
 }
 
-static uint32_t rk3588_ddr_sys_reg3(uint64_t group_bytes)
+static uint32_t rk3588_ddr_sys_reg3(uint64_t group_bytes,
+                                     uint32_t dram_type)
 {
     uint64_t group_mb = MAX(group_bytes / MiB, 256);
     unsigned int row = 13;
@@ -1478,7 +1491,7 @@ static uint32_t rk3588_ddr_sys_reg3(uint64_t group_bytes)
 
     row_delta = row - 13;
     reg = RK3588_DDR_SYS_REG_VERSION << 28;
-    reg |= (RK3588_LPDDR4X >> 3) << 12;
+    reg |= (dram_type >> 3) << 12;
     reg |= ((row_delta >> 2) & 1) << 5;
 
     return reg;
@@ -1488,8 +1501,8 @@ static void rk3588_seed_dram_info(RK3588MachineState *s)
 {
     MachineState *ms = MACHINE(s);
     uint64_t group = MAX(ms->ram_size / 2, 256 * MiB);
-    uint32_t sys_reg2 = rk3588_ddr_sys_reg2(group);
-    uint32_t sys_reg3 = rk3588_ddr_sys_reg3(group);
+    uint32_t sys_reg2 = rk3588_ddr_sys_reg2(group, s->board->dram_type);
+    uint32_t sys_reg3 = rk3588_ddr_sys_reg3(group, s->board->dram_type);
 
     if (!s->pmu1grf) {
         return;
@@ -2353,30 +2366,38 @@ static void rk3588_create_gpio(RK3588MachineState *s)
 
 static void rk3588_create_gmac(RK3588MachineState *s)
 {
-    /*
-     * Synopsys dwmac-4.20a (GMAC4). The FDT advertises both RK3588 GMAC
-     * instances as "rockchip,rk3588-gmac", "snps,dwmac-4.20a" so Linux
-     * stmmac reads
-     * MAC_VERSION @0x110 expecting SNPSVER 0x51 (GMAC4) - TYPE_DWMAC4
-     * returns exactly that, letting stmmac_bind complete and eth0
-     * enumerate. Replaces the older TYPE_NPCM_GMAC v3.50a model which
-     * returned the wrong synth-id and never bound.
-     */
-    s->gmac0 = qdev_new(TYPE_DWMAC4);
-    object_property_add_child(OBJECT(s), "gmac0", OBJECT(s->gmac0));
-    qemu_configure_nic_device(s->gmac0, false, "gmac0");
-    SysBusDevice *sbd = SYS_BUS_DEVICE(s->gmac0);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_GMAC0].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_GMAC0_SPI));
+    SysBusDevice *sbd;
 
-    s->gmac1 = qdev_new(TYPE_DWMAC4);
-    object_property_add_child(OBJECT(s), "gmac1", OBJECT(s->gmac1));
-    qemu_configure_nic_device(s->gmac1, true, "gmac1");
-    sbd = SYS_BUS_DEVICE(s->gmac1);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_GMAC1].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_GMAC1_SPI));
+    /*
+     * Synopsys dwmac-4.20a (GMAC4). Boards select the RK3588 GMAC instances
+     * that their FDT advertises as "rockchip,rk3588-gmac",
+     * "snps,dwmac-4.20a". Linux stmmac reads MAC_VERSION @0x110 expecting
+     * SNPSVER 0x51 (GMAC4); TYPE_DWMAC4 returns exactly that, letting
+     * stmmac_bind complete and the interface enumerate. Replaces the older
+     * TYPE_NPCM_GMAC v3.50a model which returned the wrong synth-id and never
+     * bound.
+     */
+    if (s->board->gmac_mask & BIT(0)) {
+        s->gmac0 = qdev_new(TYPE_DWMAC4);
+        object_property_add_child(OBJECT(s), "gmac0", OBJECT(s->gmac0));
+        qemu_configure_nic_device(s->gmac0, false, "gmac0");
+        sbd = SYS_BUS_DEVICE(s->gmac0);
+        sysbus_realize(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_GMAC0].base);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(s->gic, RK3588_GMAC0_SPI));
+    }
+
+    if (s->board->gmac_mask & BIT(1)) {
+        s->gmac1 = qdev_new(TYPE_DWMAC4);
+        object_property_add_child(OBJECT(s), "gmac1", OBJECT(s->gmac1));
+        qemu_configure_nic_device(s->gmac1, true, "gmac1");
+        sbd = SYS_BUS_DEVICE(s->gmac1);
+        sysbus_realize(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_GMAC1].base);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(s->gic, RK3588_GMAC1_SPI));
+    }
 }
 
 static void rk3588_create_pcie(RK3588MachineState *s)
@@ -2736,27 +2757,33 @@ static void rk3588_set_zvm_ram(Object *obj, bool value, Error **errp)
     s->zvm_ram = value;
 }
 
-static void rk3588_machine_instance_init(Object *obj,
-                                         const RK3588BoardConfig *board)
+void rk3588_machine_instance_configure(Object *obj,
+                                       const RK3588BoardConfig *board)
 {
     RK3588MachineState *s = RK3588_MACHINE(obj);
 
+    assert(board);
+    assert(board->dram_type && board->dram_type <= 0xf);
+    assert(!(board->gmac_mask & ~(BIT(0) | BIT(1))));
+    assert(board->pcie3x4_num_lanes == 1 ||
+           board->pcie3x4_num_lanes == 2 ||
+           board->pcie3x4_num_lanes == 4);
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
 }
 
 static void rk3588_evb_machine_instance_init(Object *obj)
 {
-    rk3588_machine_instance_init(obj, &rk3588_evb_board);
+    rk3588_machine_instance_configure(obj, &rk3588_evb_board);
 }
 
 static void rk3588s_roc_pc_machine_instance_init(Object *obj)
 {
-    rk3588_machine_instance_init(obj, &rk3588s_roc_pc_board);
+    rk3588_machine_instance_configure(obj, &rk3588s_roc_pc_board);
 }
 
-static void rk3588_machine_class_init(ObjectClass *oc,
-                                      const RK3588BoardConfig *board)
+void rk3588_machine_class_configure(ObjectClass *oc,
+                                    const RK3588BoardConfig *board)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -2779,13 +2806,13 @@ static void rk3588_machine_class_init(ObjectClass *oc,
 
 static void rk3588_evb_machine_class_init(ObjectClass *oc, const void *data)
 {
-    rk3588_machine_class_init(oc, &rk3588_evb_board);
+    rk3588_machine_class_configure(oc, &rk3588_evb_board);
 }
 
 static void rk3588s_roc_pc_machine_class_init(ObjectClass *oc,
                                               const void *data)
 {
-    rk3588_machine_class_init(oc, &rk3588s_roc_pc_board);
+    rk3588_machine_class_configure(oc, &rk3588s_roc_pc_board);
 }
 
 static const TypeInfo rk3588_machine_typeinfo = {
