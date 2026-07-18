@@ -4184,10 +4184,20 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_dpu_rdma_fp16_pipeline(
                         make_float16(le16_to_cpu(operand[index])), true,
                         &status);
 
-                    value = ew_mode ==
-                        ROCKCHIP_RKNN_DPU_RDMA_FP16_EW_DIVIDE ?
-                        float32_div(value, rhs, &status) :
-                        float32_sub(value, rhs, &status);
+                    if (ew_mode == ROCKCHIP_RKNN_DPU_RDMA_FP16_EW_DIVIDE) {
+                        uint32_t bits;
+                        unsigned int exponent;
+
+                        value = float32_div(value, rhs, &status);
+                        bits = float32_val(value);
+                        exponent = extract32(bits, 23, 8);
+                        if (exponent && exponent != 0xff) {
+                            bits &= ~MAKE_64BIT_MASK(0, 10);
+                            value = make_float32(bits);
+                        }
+                    } else {
+                        value = float32_sub(value, rhs, &status);
+                    }
                 }
                 output[index] = cpu_to_le16(float16_val(
                     float32_to_float16(value, true, &status)));
@@ -4302,7 +4312,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_dpu_rdma_fp16_lut(
 
                     interpolated = table == 0 ?
                         numerator / denominator :
-                        DIV_ROUND_UP(numerator, denominator);
+                        numerator / denominator + 1;
                 }
                 converted = interpolated * task->dpu.out_cvt_scale;
                 if (table == 0) {

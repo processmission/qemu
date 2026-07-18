@@ -163,6 +163,8 @@ storage channels, valid channels, surface stride, and IOVA addresses are
 derived from registers and bounded by the functional backend's resource
 limits.  ``CORE.QUANTIFY`` and BS operand-source controls do not alter FP16
 execution while the BS stage is bypassed.
+The board-validated EW division path truncates its quotient to 14 significant
+bits before the final round-to-nearest FP16 conversion.
 The DPU-RDMA FP16 LUT profile is also register-driven.  It accepts FP16 input
 surfaces, applies the decoded BN FP16 multiplier and FP32 add operand, selects
 the LE or LO table using the configured LUT boundaries and five-bit index
@@ -170,7 +172,8 @@ fraction, performs rounded adjacent-entry interpolation, and converts the
 result using ``OUT_CVT`` ``minus_exp`` before FP16 writeback.  The validated
 profile includes the board-observed LE underflow clamp and table-specific
 rounding: LE interpolation truncates before applying its output offset, while
-LO interpolation rounds upward without that offset.  Its LUT road, slope,
+LO interpolation strictly rounds upward, including exact integer
+interpolation results, without that offset.  Its LUT road, slope,
 precision, and stage controls
 are capability-checked; unsupported combinations fail before DMA rather than
 being treated as this profile.  Tensor dimensions and valid/storage channels
