@@ -148,7 +148,6 @@ ROCK 5B+ supports the same path with a Radxa SDK kernel.  For example:
    $ build/qemu-system-aarch64 \
        -accel tcg \
        -machine rock-5b-plus \
-       -cpu cortex-a76 \
        -smp 8 \
        -m 1G \
        -kernel Image \
@@ -204,7 +203,6 @@ the Radxa RK3588 SDK.  No extraction or repackaging is required:
    $ build/qemu-system-aarch64 \
        -accel tcg \
        -machine rock-5b-plus \
-       -cpu cortex-a76 \
        -smp 1 \
        -m 2G \
        -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_b2.output.img,format=raw \
