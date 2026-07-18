@@ -110,6 +110,7 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV 0x125
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV_NO_CPEND 0x124
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE 0x36d
+#define ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE_NO_CPEND 0x36c
 #define ROCKCHIP_RKNN_DPU_BS_OW_CFG_RDMA 0x126
 #define ROCKCHIP_RKNN_DPU_BS_OW_OP_SUPPORTED 0
 #define ROCKCHIP_RKNN_DPU_RDMA_DATA_CUBE_WIDTH 0x00c
@@ -2370,7 +2371,9 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
             (dpu_blocks | ROCKCHIP_RKNN_BLOCK_DPU_RDMA) &&
         bs_rdma_available && brdma_data_use == 1 &&
         task->dpu.bs_ow_cfg ==
-            ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV_NO_CPEND &&
+            (task->core.depthwise ?
+             ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE_NO_CPEND :
+             ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV_NO_CPEND) &&
         task->dpu_rdma.width == task->dpu.output.width &&
         task->dpu_rdma.height == task->dpu.output.height &&
         task->dpu_rdma.channels == task->dpu.output.channels &&
@@ -4600,7 +4603,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                          output_bytes)) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
-    if (task->core.depthwise && !int8_qd_brdma) {
+    if (task->core.depthwise && !int8_writeback) {
         RockchipRKNNDepthwiseOutputLayout layout;
 
         if (!rockchip_rknn_depthwise_int32_layout(task, &layout) ||
@@ -4627,7 +4630,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                        input_channel_offset_bytes) ||
         !rockchip_rknn_host_budget_add(s, &host_bytes,
                                        output_channel_offset_bytes) ||
-        (task->core.depthwise && !int8_qd_brdma &&
+        (task->core.depthwise && !int8_writeback &&
          !rockchip_rknn_host_budget_add(s, &host_bytes,
                                         depthwise_block_bytes))) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
