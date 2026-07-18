@@ -1004,11 +1004,10 @@ static size_t rk3588_rknn_make_dpu_rdma_int8_binary_regcmd(
 }
 
 static size_t rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(
-    uint64_t commands[])
+    uint64_t commands[], unsigned int output_height)
 {
     enum {
         INPUT_WIDTH = 3,
-        OUTPUT_HEIGHT = 2,
         INPUT_CHANNELS = 8,
         OUTPUT_WIDTH = INPUT_WIDTH * 2,
         OUTPUT_CHANNELS = INPUT_CHANNELS * 2,
@@ -1022,7 +1021,7 @@ static size_t rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU,
                              RKNN_DPU_DATA_CUBE_WIDTH, OUTPUT_WIDTH - 1);
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU,
-                             RKNN_DPU_DATA_CUBE_HEIGHT, OUTPUT_HEIGHT - 1);
+                             RKNN_DPU_DATA_CUBE_HEIGHT, output_height - 1);
     rk3588_rknn_patch_regcmd(
         commands, count, RKNN_REGCMD_TARGET_DPU,
         RKNN_DPU_DATA_CUBE_CHANNEL,
@@ -1035,14 +1034,14 @@ static size_t rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(
                              0x4058, OUTPUT_CHANNELS - 1);
     rk3588_rknn_patch_regcmd(
         commands, count, RKNN_REGCMD_TARGET_DPU, 0x405c,
-        ((OUTPUT_HEIGHT - 1) << 16) | (OUTPUT_WIDTH - 1));
+        ((output_height - 1) << 16) | (OUTPUT_WIDTH - 1));
     rk3588_rknn_patch_regcmd(
         commands, count, RKNN_REGCMD_TARGET_DPU, 0x40c0,
-        OUTPUT_WIDTH * OUTPUT_HEIGHT * 32);
+        OUTPUT_WIDTH * output_height * 32);
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU_RDMA,
                              0x500c, INPUT_WIDTH - 1);
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU_RDMA,
-                             0x5010, OUTPUT_HEIGHT - 1);
+                             0x5010, output_height - 1);
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU_RDMA,
                              0x5014, INPUT_CHANNELS - 1);
     rk3588_rknn_patch_regcmd(commands, count, RKNN_REGCMD_TARGET_DPU_RDMA,
@@ -2736,11 +2735,72 @@ static void test_rk3588_rknpu_dpu_rdma_int16_unpool(void)
     uint8_t input[INPUT_BYTES];
     uint8_t output[OUTPUT_BYTES];
     size_t command_count =
-        rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands);
+        rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands, OUTPUT_HEIGHT);
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
     for (unsigned int index = 0; index < ARRAY_SIZE(input); index++) {
         input[index] = index * 37 + 11;
+    }
+    rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR,
+                   commands, command_count * sizeof(*commands));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_INPUT_ADDR,
+                   input, sizeof(input));
+    qtest_memset(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
+                 0xa5, sizeof(output));
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 rk3588_rknn_register_amount(command_count));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    qtest_memread(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
+                  output, sizeof(output));
+    for (unsigned int surface = 0; surface < SURFACES; surface++) {
+        for (unsigned int row = 0; row < OUTPUT_HEIGHT; row++) {
+            for (unsigned int column = 0; column < OUTPUT_WIDTH; column++) {
+                for (unsigned int channel = 0; channel < 16; channel++) {
+                    size_t output_index = surface * OUTPUT_SURFACE_BYTES +
+                        (row * OUTPUT_WIDTH + column) * 16 + channel;
+                    size_t input_index = surface * INPUT_SURFACE_BYTES +
+                        ((row / 2) * INPUT_WIDTH + column / 2) * 16 +
+                        channel;
+
+                    g_assert_cmphex(output[output_index], ==,
+                                    input[input_index]);
+                }
+            }
+        }
+    }
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_INTERRUPT_RAW_STATUS), ==,
+                    RKNN_DPU_INTERRUPT_BITS);
+    qtest_quit(qts);
+}
+
+static void test_rk3588_rknpu_dpu_rdma_int16_unpool_odd_height(void)
+{
+    enum {
+        INPUT_WIDTH = 3,
+        INPUT_HEIGHT = 2,
+        OUTPUT_HEIGHT = 3,
+        SURFACES = 2,
+        INPUT_SURFACE_BYTES = INPUT_WIDTH * INPUT_HEIGHT * 16,
+        INPUT_BYTES = INPUT_SURFACE_BYTES * SURFACES,
+        OUTPUT_WIDTH = INPUT_WIDTH * 2,
+        OUTPUT_SURFACE_BYTES = OUTPUT_WIDTH * OUTPUT_HEIGHT * 16,
+        OUTPUT_BYTES = OUTPUT_SURFACE_BYTES * SURFACES,
+    };
+    uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
+    uint8_t input[INPUT_BYTES];
+    uint8_t output[OUTPUT_BYTES];
+    size_t command_count =
+        rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands, OUTPUT_HEIGHT);
+    QTestState *qts = rk3588_qtest_start_rknpu_matmul();
+
+    for (unsigned int index = 0; index < ARRAY_SIZE(input); index++) {
+        input[index] = index * 29 + 7;
     }
     rk3588_rknn_prepare_matmul(qts, true, 0xa5);
     qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR,
@@ -2792,7 +2852,7 @@ static void test_rk3588_rknpu_dpu_rdma_int16_unpool_budget(void)
     uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
     uint8_t input[INPUT_BYTES] = {};
     size_t command_count =
-        rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands);
+        rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands, 2);
     QTestState *qts = rk3588_qtest_start_rknpu_matmul_max_macs(
         ONE_SURFACE_WORK);
 
@@ -2834,7 +2894,7 @@ static void test_rk3588_rknpu_dpu_rdma_int16_unpool_controls(void)
     for (unsigned int index = 0; index < ARRAY_SIZE(cases); index++) {
         uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
         size_t command_count =
-            rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands);
+            rk3588_rknn_make_dpu_rdma_int16_unpool_regcmd(commands, 2);
         QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
         g_test_message("DPU-RDMA INT16 unpool mutation: %s",
@@ -13703,6 +13763,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_dpu_rdma_int8_pipeline_controls);
     qtest_add_func("/rk3588/rknpu-dpu-rdma-int16-unpool",
                    test_rk3588_rknpu_dpu_rdma_int16_unpool);
+    qtest_add_func("/rk3588/rknpu-dpu-rdma-int16-unpool-odd-height",
+                   test_rk3588_rknpu_dpu_rdma_int16_unpool_odd_height);
     qtest_add_func("/rk3588/rknpu-dpu-rdma-int16-unpool-budget",
                    test_rk3588_rknpu_dpu_rdma_int16_unpool_budget);
     qtest_add_func("/rk3588/rknpu-dpu-rdma-int16-unpool-controls",

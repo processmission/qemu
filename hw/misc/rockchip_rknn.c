@@ -1776,7 +1776,6 @@ static bool rockchip_rknn_dpu_rdma_int16_unpool_is_supported(
            rdma->channels <= UINT32_MAX / 2 &&
            dpu->output.width == rdma->width * 2 &&
            dpu->output.height == rdma->height &&
-           !(dpu->output.height & 1) &&
            dpu->output.channels == rdma->channels * 2 &&
            dpu->output_channels_valid == dpu->output.channels &&
            dpu->output.atom == 16 && dpu->output.surface_stride ==
@@ -3936,7 +3935,8 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
     g_autofree uint8_t *output = NULL;
     size_t input_storage_channels;
     size_t output_storage_channels;
-    size_t input_height = output_view->height / 2;
+    size_t input_height = output_view->height / 2 +
+        output_view->height % 2;
     size_t surfaces;
     size_t input_bytes;
     size_t input_surface_bytes;
@@ -3945,17 +3945,20 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
     uint64_t work_items;
     uint64_t host_bytes = 0;
 
-    surfaces = input_height && !(rdma->height % input_height) ?
-        rdma->height / input_height : 0;
+    if (!rockchip_rknn_size_round_up(rdma->channels, 8,
+                                     &input_storage_channels) ||
+        !rockchip_rknn_size_round_up(output_view->channels, 16,
+                                     &output_storage_channels)) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
+    surfaces = input_storage_channels &&
+        output_storage_channels % input_storage_channels == 0 ?
+        output_storage_channels / input_storage_channels : 0;
     if (!rockchip_rknn_u64_mul3(
             output_view->width, output_view->height,
             task->dpu.output_channels_valid, &work_items) ||
         !rockchip_rknn_u64_mul(work_items, surfaces, &work_items) ||
         work_items > s->functional_max_mac_operations ||
-        !rockchip_rknn_size_round_up(rdma->channels, 8,
-                                     &input_storage_channels) ||
-        !rockchip_rknn_size_round_up(output_view->channels, 16,
-                                     &output_storage_channels) ||
         !surfaces ||
         input_storage_channels > SIZE_MAX / 2 ||
         output_storage_channels != input_storage_channels * 2 ||
