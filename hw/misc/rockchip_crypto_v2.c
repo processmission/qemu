@@ -63,8 +63,9 @@ REG32(HASH_VALID, 0x3e4)
 
 #define ROCKCHIP_CRYPTO_WRITE_MASK_SHIFT 16
 #define ROCKCHIP_CRYPTO_HASH_MODE_SHA256 2
-#define ROCKCHIP_CRYPTO_LLI_USER_START BIT(1)
-#define ROCKCHIP_CRYPTO_LLI_USER_LAST BIT(2)
+#define ROCKCHIP_CRYPTO_LLI_USER_CIPHER_START BIT(0)
+#define ROCKCHIP_CRYPTO_LLI_USER_STRING_START BIT(1)
+#define ROCKCHIP_CRYPTO_LLI_USER_STRING_LAST BIT(2)
 #define ROCKCHIP_CRYPTO_LLI_DMA_LAST BIT(0)
 #define ROCKCHIP_CRYPTO_LLI_DMA_SRC_DONE BIT(10)
 
@@ -233,13 +234,21 @@ static void rockchip_crypto_v2_dma_bh(void *opaque)
     if (!src_len || src_len > ROCKCHIP_CRYPTO_V2_MAX_DMA ||
         src_addr > UINT32_MAX - (src_len - 1) ||
         user_define !=
-            (ROCKCHIP_CRYPTO_LLI_USER_START |
-             ROCKCHIP_CRYPTO_LLI_USER_LAST) ||
+            (ROCKCHIP_CRYPTO_LLI_USER_CIPHER_START |
+             ROCKCHIP_CRYPTO_LLI_USER_STRING_START |
+             ROCKCHIP_CRYPTO_LLI_USER_STRING_LAST) ||
         dma_ctrl !=
             (ROCKCHIP_CRYPTO_LLI_DMA_LAST |
              ROCKCHIP_CRYPTO_LLI_DMA_SRC_DONE) ||
         le32_to_cpu(lli.dst_addr) || le32_to_cpu(lli.dst_len) ||
         le32_to_cpu(lli.reserved) || le32_to_cpu(lli.next_addr)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: unsupported LLI src=%08x/%u dst=%08x/%u "
+                      "user=%08x reserved=%08x dma=%08x next=%08x\n",
+                      TYPE_ROCKCHIP_CRYPTO_V2, src_addr, src_len,
+                      le32_to_cpu(lli.dst_addr), le32_to_cpu(lli.dst_len),
+                      user_define, le32_to_cpu(lli.reserved), dma_ctrl,
+                      le32_to_cpu(lli.next_addr));
         rockchip_crypto_v2_dma_error(s, R_DMA_INT_ST_LIST_ERR_MASK);
         return;
     }

@@ -58,7 +58,7 @@
 #define CRYPTO_HASH_VALID_BIT 0x1
 #define CRYPTO_FIFO_BYTESWAP 0x3
 #define CRYPTO_HASH_SHA256_PAD_ENABLE 0x25
-#define CRYPTO_LLI_USER_START_LAST 0x6
+#define CRYPTO_LLI_USER_HASH_START_LAST 0x7
 #define CRYPTO_LLI_DMA_LAST_SRC_DONE 0x401
 
 static QTestState *rock_5b_plus_qtest_start(unsigned int cpus)
@@ -160,7 +160,7 @@ static void test_rock_5b_plus_crypto_sha256(void)
     qtest_writel(qts, lli_addr + 0x04, sizeof(input));
     qtest_writel(qts, lli_addr + 0x08, 0);
     qtest_writel(qts, lli_addr + 0x0c, 0);
-    qtest_writel(qts, lli_addr + 0x10, CRYPTO_LLI_USER_START_LAST);
+    qtest_writel(qts, lli_addr + 0x10, CRYPTO_LLI_USER_HASH_START_LAST);
     qtest_writel(qts, lli_addr + 0x14, 0);
     qtest_writel(qts, lli_addr + 0x18, CRYPTO_LLI_DMA_LAST_SRC_DONE);
     qtest_writel(qts, lli_addr + 0x1c, 0);
@@ -216,8 +216,21 @@ static void test_rock_5b_plus_crypto_sha256(void)
     qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_INT_ST,
                  CRYPTO_DMA_LIST_ERR);
 
+    qtest_writel(qts, lli_addr + 0x10, 0x6);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_CTL,
+                 CRYPTO_WRITE_MASK(1) | 1);
+    status = 0;
+    for (unsigned int i = 0; i < 1000 && !status; i++) {
+        qtest_clock_step(qts, 1);
+        status = qtest_readl(qts, RK3588_CRYPTO_BASE +
+                             CRYPTO_DMA_INT_ST);
+    }
+    g_assert_cmphex(status, ==, CRYPTO_DMA_LIST_ERR);
+    qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_INT_ST,
+                 CRYPTO_DMA_LIST_ERR);
+
     qtest_writel(qts, lli_addr + 0x10,
-                 CRYPTO_LLI_USER_START_LAST | 0x8);
+                 CRYPTO_LLI_USER_HASH_START_LAST | 0x8);
     qtest_writel(qts, RK3588_CRYPTO_BASE + CRYPTO_DMA_CTL,
                  CRYPTO_WRITE_MASK(1) | 1);
     status = 0;
