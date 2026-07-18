@@ -37,6 +37,9 @@ typedef struct RK3588BoardConfig {
     uint32_t dram_type;
     uint32_t gmac_mask;
     unsigned int pcie3x4_num_lanes;
+    unsigned int pcie3x2_num_lanes;
+    bool pcie3x4_link_down;
+    bool pcie3x2_link_down;
     bool swap_gmac_aliases;
     bool default_zvm_ram;
     const RK3588FirmwareProfile *firmware_profile;

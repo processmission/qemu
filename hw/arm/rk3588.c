@@ -274,7 +274,8 @@ struct RK3588MachineState {
     DeviceState *sdhci;
     DeviceState *sdmmc;     /* dw_mmc - SD card controller */
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
-    DeviceState *pcie;
+    DeviceState *pcie3x4;
+    DeviceState *pcie3x2;
     DeviceState *gmac0;
     DeviceState *gmac1;
     DeviceState *gpio[5];
@@ -342,6 +343,9 @@ enum {
     RK3588_PCIE3X4_APB,
     RK3588_PCIE3X4_CFG,
     RK3588_PCIE3X4_DBI,
+    RK3588_PCIE3X2_APB,
+    RK3588_PCIE3X2_CFG,
+    RK3588_PCIE3X2_DBI,
     RK3588_GMAC0,
     RK3588_GMAC1,
     RK3588_SDMMC,
@@ -393,6 +397,9 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_PCIE3X4_APB] =  { 0xfe150000, 0x00010000 },
     [RK3588_PCIE3X4_CFG] =  { 0xf0000000, 0x00100000 },
     [RK3588_PCIE3X4_DBI] =  { 0xa40000000ULL, 0x00400000 },
+    [RK3588_PCIE3X2_APB] =  { 0xfe160000, 0x00010000 },
+    [RK3588_PCIE3X2_CFG] =  { 0xf1000000, 0x00100000 },
+    [RK3588_PCIE3X2_DBI] =  { 0xa40400000ULL, 0x00400000 },
     [RK3588_GMAC0] =        { 0xfe1b0000, 0x00010000 },
     [RK3588_GMAC1] =        { 0xfe1c0000, 0x00010000 },
     [RK3588_SDMMC] =        { 0xfe2c0000, 0x00004000 },
@@ -439,6 +446,11 @@ enum {
     RK3588_SDHCI_SPI = 205,
     RK3588_GMAC0_SPI = 227,
     RK3588_GMAC1_SPI = 234,
+    RK3588_PCIE3X2_ERR_SPI = 254,
+    RK3588_PCIE3X2_LEGACY_SPI = 255,
+    RK3588_PCIE3X2_MSG_SPI = 256,
+    RK3588_PCIE3X2_PMC_SPI = 257,
+    RK3588_PCIE3X2_SYS_SPI = 258,
     RK3588_PCIE3X4_ERR_SPI = 259,
     RK3588_PCIE3X4_LEGACY_SPI = 260,
     RK3588_PCIE3X4_MSG_SPI = 261,
@@ -2423,73 +2435,91 @@ static void rk3588_create_gmac(RK3588MachineState *s)
     }
 }
 
-static void rk3588_create_pcie(RK3588MachineState *s)
-{
-    SysBusDevice *sbd;
+enum {
+    RK3588_PCIE_IRQ_ERR,
+    RK3588_PCIE_IRQ_LEGACY,
+    RK3588_PCIE_IRQ_MSG,
+    RK3588_PCIE_IRQ_PMC,
+    RK3588_PCIE_IRQ_SYS,
+};
 
-    /*
-     * RK3588 PCIe 3x4 host - wraps TYPE_DESIGNWARE_PCIE_HOST and adds
-     * the RK APB vendor register window (LTSSM pinned link-up at
-     * 0x300=0x00030011, rest RAZ/WI). sysbus mmio[0] is the inherited
-     * 4 KiB DBI (DWC core), sysbus mmio[1] is the 64 KiB RK APB.
-     *
-     * sysbus IRQs: 0..3 = INTA..INTD (legacy), 4 = MSI (msg),
-     * 5/6/7 = err/pmc/sys (inert). The board wires them to the five
-     * GIC SPIs the DT advertises.
-     */
-    s->pcie = qdev_new(TYPE_ROCKCHIP_PCIE_HOST);
-    object_property_add_child(OBJECT(s), "pcie3x4", OBJECT(s->pcie));
-    sbd = SYS_BUS_DEVICE(s->pcie);
+static DeviceState *rk3588_create_pcie_host(RK3588MachineState *s,
+                                             const char *name,
+                                             const char *vmstate_id,
+                                             hwaddr dbi_base,
+                                             hwaddr apb_base,
+                                             uint32_t domain,
+                                             uint8_t bus_nr,
+                                             bool link_down,
+                                             const int *spis)
+{
+    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_PCIE_HOST);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (vmstate_id) {
+        dev->id = g_strdup(vmstate_id);
+    }
+    qdev_prop_set_bit(dev, "link-up", !link_down);
+    qdev_prop_set_uint32(dev, "domain", domain);
+    qdev_prop_set_uint8(dev, "bus-nr", bus_nr);
+    object_property_add_child(OBJECT(s), name, OBJECT(dev));
     sysbus_realize(sbd, &error_fatal);
 
-    /* DBI: inherited 4 KiB DWC core mmio at the very start of the
-     * 4 MiB DBI window. The remaining (4 MiB - 4 KiB) - including
-     * DBI2 at +0x10_0000 - is backed by an unimplemented device so
-     * guest DBI reads/writes above 0xfff don't abort (D-15). */
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_PCIE3X4_DBI].base);
-    create_unimplemented_device("rk3588.pcie3x4-dbi-tail",
-                                rk3588_memmap[RK3588_PCIE3X4_DBI].base + 0x1000,
-                                rk3588_memmap[RK3588_PCIE3X4_DBI].size - 0x1000);
+    sysbus_mmio_map(sbd, 0, dbi_base);
+    sysbus_mmio_map(sbd, 1, apb_base);
+    sysbus_mmio_map(sbd, 2, dbi_base + ROCKCHIP_PCIE_DBI_CORE_SIZE);
 
-    /* APB: RK vendor PCIE_CLIENT_* window (LTSSM_STATUS pinned). */
-    sysbus_mmio_map(sbd, 1, rk3588_memmap[RK3588_PCIE3X4_APB].base);
-
-    /*
-     * CFG window at 0xf0000000: served by the designware root's
-     * outbound CFG viewport once the guest programs the iATU in
-     * dw_pcie_config_ecam_iatu. The designware model maps
-     * viewport->cfg at the programmed base in system memory, so no
-     * static alias is needed here. Cover the 1 MiB window with an
-     * unimplemented device up front so that any pre-iATU-program
-     * access does not abort; once the viewport is enabled it shadows
-     * this hole (the viewport region is added with subregion overlap
-     * priority 0, which beats the unimplemented device's default 0).
-     * To make that override robust, drop the cover before the guest
-     * reaches iATU setup is not possible; instead we leave the hole
-     * unbacked and rely on the designware model's
-     * memory_region_set_address to install the viewport region on
-     * top - which works because MemoryRegion overlap resolves the
-     * most-recently-added region first. So we do NOT pre-cover CFG.
-     */
-
-    /* IRQs: legacy INTA..INTD all map to SPI 260 (the dw-rockchip
-     * driver installs a single chained handler on the legacy line
-     * and demuxes INTA..D from PCIE_CLIENT_INTR_STATUS_LEGACY). */
     for (unsigned int i = 0; i < 4; i++) {
         sysbus_connect_irq(sbd, i,
                            qdev_get_gpio_in(s->gic,
-                                            RK3588_PCIE3X4_LEGACY_SPI));
+                                           spis[RK3588_PCIE_IRQ_LEGACY]));
     }
-    /* msg -> MSI parent (SPI 261). */
     sysbus_connect_irq(sbd, ROCKCHIP_PCIE_MSG_IRQ,
-                       qdev_get_gpio_in(s->gic, RK3588_PCIE3X4_MSG_SPI));
-    /* RK-only inert IRQs (err/pmc/sys). Wired for FDT fidelity. */
+                       qdev_get_gpio_in(s->gic,
+                                       spis[RK3588_PCIE_IRQ_MSG]));
     sysbus_connect_irq(sbd, ROCKCHIP_PCIE_ERR_IRQ,
-                       qdev_get_gpio_in(s->gic, RK3588_PCIE3X4_ERR_SPI));
+                       qdev_get_gpio_in(s->gic,
+                                       spis[RK3588_PCIE_IRQ_ERR]));
     sysbus_connect_irq(sbd, ROCKCHIP_PCIE_PMC_IRQ,
-                       qdev_get_gpio_in(s->gic, RK3588_PCIE3X4_PMC_SPI));
+                       qdev_get_gpio_in(s->gic,
+                                       spis[RK3588_PCIE_IRQ_PMC]));
     sysbus_connect_irq(sbd, ROCKCHIP_PCIE_SYS_IRQ,
-                       qdev_get_gpio_in(s->gic, RK3588_PCIE3X4_SYS_SPI));
+                       qdev_get_gpio_in(s->gic,
+                                       spis[RK3588_PCIE_IRQ_SYS]));
+
+    return dev;
+}
+
+static void rk3588_create_pcie(RK3588MachineState *s)
+{
+    static const int pcie3x4_spis[] = {
+        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE3X4_ERR_SPI,
+        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE3X4_LEGACY_SPI,
+        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE3X4_MSG_SPI,
+        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE3X4_PMC_SPI,
+        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE3X4_SYS_SPI,
+    };
+    static const int pcie3x2_spis[] = {
+        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE3X2_ERR_SPI,
+        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE3X2_LEGACY_SPI,
+        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE3X2_MSG_SPI,
+        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE3X2_PMC_SPI,
+        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE3X2_SYS_SPI,
+    };
+
+    s->pcie3x4 = rk3588_create_pcie_host(
+        s, "pcie3x4", "pcie3x4",
+        rk3588_memmap[RK3588_PCIE3X4_DBI].base,
+        rk3588_memmap[RK3588_PCIE3X4_APB].base,
+        0, 0, s->board->pcie3x4_link_down, pcie3x4_spis);
+
+    if (s->board->pcie3x2_num_lanes) {
+        s->pcie3x2 = rk3588_create_pcie_host(
+            s, "pcie3x2", "pcie3x2",
+            rk3588_memmap[RK3588_PCIE3X2_DBI].base,
+            rk3588_memmap[RK3588_PCIE3X2_APB].base,
+            1, 0x10, s->board->pcie3x2_link_down, pcie3x2_spis);
+    }
 }
 
 static void rk3588_create_cru(RK3588MachineState *s)
@@ -2808,6 +2838,9 @@ void rk3588_machine_instance_configure(Object *obj,
     assert(board->pcie3x4_num_lanes == 1 ||
            board->pcie3x4_num_lanes == 2 ||
            board->pcie3x4_num_lanes == 4);
+    assert(board->pcie3x2_num_lanes == 0 ||
+           board->pcie3x2_num_lanes == 1 ||
+           board->pcie3x2_num_lanes == 2);
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
 }
