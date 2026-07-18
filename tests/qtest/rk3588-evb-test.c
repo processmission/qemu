@@ -6089,6 +6089,8 @@ static void rk3588_rknn_enable_int8_qd_erdma(uint64_t commands[],
 {
     const uint32_t spatial = RK3588_RKNN_MOBILENET_TASK6_WIDTH *
                              RK3588_RKNN_MOBILENET_TASK6_HEIGHT;
+    const uint32_t surface_stride = spatial * 2;
+    const uint32_t surface_notch = surface_stride * 2 - spatial;
     size_t index;
 
 #define PATCH_QD_ERDMA(_target, _reg, _value) do {                   \
@@ -6107,20 +6109,22 @@ static void rk3588_rknn_enable_int8_qd_erdma(uint64_t commands[],
     PATCH_QD_ERDMA(
         0x2001, 0x5038,
         RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA + spatial * 16);
-    PATCH_QD_ERDMA(0x2001, 0x5040, spatial << 4);
+    PATCH_QD_ERDMA(0x2001, 0x5040, surface_stride << 4);
     PATCH_QD_ERDMA(0x2001, 0x5044, 0x7d00);
     PATCH_QD_ERDMA(0x2001, 0x504c,
-                   (spatial + !valid_notch) << 4);
-    PATCH_QD_ERDMA(0x2001, 0x506c, spatial << 4);
+                   (surface_notch + !valid_notch) << 4);
+    PATCH_QD_ERDMA(0x2001, 0x506c, surface_notch << 4);
 #undef PATCH_QD_ERDMA
 }
 
 static void test_rk3588_rknpu_int8_qd_brdma_erdma(void)
 {
-    const size_t operand_bytes =
+    const size_t spatial =
         RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+        RK3588_RKNN_MOBILENET_TASK6_HEIGHT;
+    const size_t operand_span = spatial * 128;
+    const size_t stale_group_offset = spatial * 96;
+    const size_t operand_group_bytes = spatial * 16;
     g_autofree uint64_t *commands = NULL;
     g_autofree void *input = NULL;
     g_autofree void *weights = NULL;
@@ -6151,7 +6155,15 @@ static void test_rk3588_rknpu_int8_qd_brdma_erdma(void)
         RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
     qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
                      RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
-                 0, operand_bytes);
+                 0, operand_span);
+    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
+                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+                     stale_group_offset,
+                 1, operand_group_bytes);
+    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
+                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+                     stale_group_offset + spatial * 16,
+                 1, operand_group_bytes);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
     actual = g_malloc(output_length);

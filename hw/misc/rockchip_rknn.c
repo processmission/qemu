@@ -2660,6 +2660,28 @@ static size_t rockchip_rknn_depthwise_weight_index(size_t channels,
            channel - channel_group;
 }
 
+static int32_t rockchip_rknn_dot_i8(const int8_t *input,
+                                    const int8_t *weights,
+                                    size_t count)
+{
+    int32_t accumulator = 0;
+
+    for (size_t index = 0; index < count; index++) {
+        accumulator += input[index] * weights[index];
+    }
+    return accumulator;
+}
+
+static int32_t rockchip_rknn_sum_i8(const int8_t *input, size_t count)
+{
+    int32_t sum = 0;
+
+    for (size_t index = 0; index < count; index++) {
+        sum += input[index];
+    }
+    return sum;
+}
+
 static size_t rockchip_rknn_fp16_weight_index(
     size_t channels, size_t kernel_area, size_t output, size_t kernel,
     size_t channel)
@@ -4445,6 +4467,7 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     g_autofree int8_t *ew_data = NULL;
     g_autofree uint32_t *output = NULL;
     g_autofree int8_t *int8_output = NULL;
+    g_autofree int8_t *padding_values = NULL;
     g_autofree size_t *input_channel_offsets = NULL;
     g_autofree size_t *output_channel_offsets = NULL;
     size_t input_bytes;
@@ -4578,6 +4601,9 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                        input_staging_bytes) ||
         !rockchip_rknn_host_budget_add(s, &host_bytes, weight_bytes) ||
         !rockchip_rknn_host_budget_add(s, &host_bytes, output_bytes) ||
+        !rockchip_rknn_host_budget_add(
+            s, &host_bytes,
+            rockchip_rknn_cna_execution_channels(&task->cna)) ||
         !rockchip_rknn_size_mul(
             rockchip_rknn_cna_execution_channels(&task->cna),
             sizeof(*input_channel_offsets), &input_channel_offset_bytes) ||
@@ -4595,15 +4621,19 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     }
     input = g_try_new(int8_t, input_bytes);
     weights = g_try_new(int8_t, weight_bytes);
+    padding_values = g_try_malloc(
+        rockchip_rknn_cna_execution_channels(&task->cna));
     input_channel_offsets = g_try_malloc(input_channel_offset_bytes);
     output_channel_offsets = g_try_malloc(output_channel_offset_bytes);
-    if (!input || !weights || !input_channel_offsets ||
+    if (!input || !weights || !padding_values || !input_channel_offsets ||
         !output_channel_offsets) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
     for (unsigned int channel = 0;
          channel < rockchip_rknn_cna_execution_channels(&task->cna);
          channel++) {
+        padding_values[channel] =
+            rockchip_rknn_cna_padding_value(&task->cna, channel);
         input_channel_offsets[channel] =
             (channel / task->cna.input.atom) *
                 task->cna.input.height * task->cna.input.width *
@@ -4695,9 +4725,11 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
             }
             for (unsigned int group = 0; group < channel_groups; group++) {
                 uint64_t src_surface_offset =
-                    (uint64_t)group * task->dpu_rdma.surface_notch * 32;
+                    (uint64_t)group *
+                    (spatial + task->dpu_rdma.surface_notch) * 16;
                 uint64_t ew_surface_offset =
-                    (uint64_t)group * task->dpu_rdma.ew_surface_notch * 32;
+                    (uint64_t)group *
+                    (spatial + task->dpu_rdma.ew_surface_notch) * 16;
                 size_t buffer_offset = group * group_bytes;
                 uint64_t src_iova = task->dpu_rdma.src_iova +
                                     src_surface_offset;
@@ -4732,25 +4764,30 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                         int input_column = column * task->cna.stride_x -
                                            task->cna.pad_left +
                                            kernel_column;
+                        bool input_valid = input_row >= 0 &&
+                            input_row < task->cna.input.height &&
+                            input_column >= 0 &&
+                            input_column < task->cna.input.width;
+                        size_t input_spatial = input_valid ?
+                            ((size_t)input_row * task->cna.input.width +
+                             input_column) * task->cna.input.atom : 0;
+
                         for (unsigned int channel = 0;
                              channel < rockchip_rknn_cna_execution_channels(
-                                           &task->cna);
-                             channel++) {
-                            int8_t input_value =
-                                rockchip_rknn_cna_padding_value(
-                                    &task->cna, channel);
+                                           &task->cna);) {
+                            size_t chunk = MIN(
+                                rockchip_rknn_cna_execution_channels(
+                                    &task->cna) - channel,
+                                task->cna.input.atom -
+                                    channel % task->cna.input.atom);
+                            const int8_t *input_chunk = input_valid ?
+                                input + input_channel_offsets[channel] +
+                                    input_spatial :
+                                padding_values + channel;
 
-                            if (input_row >= 0 &&
-                                input_row < task->cna.input.height &&
-                                input_column >= 0 &&
-                                input_column < task->cna.input.width) {
-                                size_t index = input_channel_offsets[channel] +
-                                    (input_row * task->cna.input.width +
-                                     input_column) * task->cna.input.atom;
-
-                                input_value = input[index];
-                            }
-                            qd_sum += input_value;
+                            chunk = MIN(chunk, 32 - channel % 32);
+                            qd_sum += rockchip_rknn_sum_i8(input_chunk, chunk);
+                            channel += chunk;
                         }
                     }
                 }
@@ -4773,30 +4810,65 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                         int input_column = column * task->cna.stride_x -
                                            task->cna.pad_left +
                                            kernel_column;
-                        unsigned int first_channel =
-                            task->core.depthwise ? out : 0;
-                        unsigned int last_channel = task->core.depthwise ?
-                            out + 1 : rockchip_rknn_cna_execution_channels(
-                                          &task->cna);
+                        bool input_valid = input_row >= 0 &&
+                            input_row < task->cna.input.height &&
+                            input_column >= 0 &&
+                            input_column < task->cna.input.width;
+                        size_t input_spatial = input_valid ?
+                            ((size_t)input_row * task->cna.input.width +
+                             input_column) * task->cna.input.atom : 0;
+                        unsigned int kernel =
+                            kernel_row * task->cna.kernel_width +
+                            kernel_column;
 
-                        for (unsigned int channel = first_channel;
-                             channel < last_channel; channel++) {
+                        if (!task->core.depthwise) {
+                            unsigned int execution_channels =
+                                rockchip_rknn_cna_execution_channels(
+                                    &task->cna);
+
+                            for (unsigned int channel = 0;
+                                 channel < execution_channels;) {
+                                size_t chunk = MIN(
+                                    execution_channels - channel,
+                                    task->cna.input.atom -
+                                        channel % task->cna.input.atom);
+                                size_t weight_index =
+                                    rockchip_rknn_weight_index(
+                                        weight_storage_channels,
+                                        task->cna.weight_kernels,
+                                        weight_kernel_area, out, kernel,
+                                        channel);
+                                const int8_t *input_chunk = input_valid ?
+                                    input + input_channel_offsets[channel] +
+                                        input_spatial :
+                                    padding_values + channel;
+
+                                chunk = MIN(chunk, 32 - channel % 32);
+                                if (weight_index > weight_bytes ||
+                                    chunk > weight_bytes - weight_index) {
+                                    return
+                                        ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+                                }
+                                accumulator += rockchip_rknn_dot_i8(
+                                    input_chunk, weights + weight_index,
+                                    chunk);
+                                if (mode ==
+                                    ROCKCHIP_RKNN_EXECUTION_DPU_INT8_BRDMA) {
+                                    accumulator +=
+                                        rockchip_rknn_sum_i8(input_chunk,
+                                                             chunk) *
+                                        (int16_t)task->dpu.bs_ow_op;
+                                }
+                                channel += chunk;
+                            }
+                        } else {
+                            unsigned int channel = out;
                             int8_t input_value =
-                                rockchip_rknn_cna_padding_value(
-                                    &task->cna, channel);
-                            unsigned int kernel =
-                                kernel_row * task->cna.kernel_width +
-                                kernel_column;
-                            size_t weight_index = task->core.depthwise ?
+                                padding_values[channel];
+                            size_t weight_index =
                                 rockchip_rknn_depthwise_weight_index(
                                     weight_storage_channels,
-                                    weight_kernel_area, kernel, channel) :
-                                rockchip_rknn_weight_index(
-                                    weight_storage_channels,
-                                    task->cna.weight_kernels,
-                                    task->cna.kernel_width *
-                                    task->cna.kernel_height,
-                                    out, kernel, channel);
+                                    weight_kernel_area, kernel, channel);
                             int32_t weight_value;
 
                             if (weight_index >= weight_bytes) {
@@ -4810,16 +4882,10 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                                 weight_value = weights[weight_index];
                             }
 
-                            if (input_row >= 0 &&
-                                input_row < task->cna.input.height &&
-                                input_column >= 0 &&
-                                input_column < task->cna.input.width) {
-                                size_t input_index =
+                            if (input_valid) {
+                                input_value = input[
                                     input_channel_offsets[channel] +
-                                    (input_row * task->cna.input.width +
-                                     input_column) * task->cna.input.atom;
-
-                                input_value = input[input_index];
+                                    input_spatial];
                             }
                             accumulator += input_value * weight_value;
                             if (int8_qd_brdma && task->core.depthwise) {
