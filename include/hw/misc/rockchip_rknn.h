@@ -137,7 +137,6 @@ struct RockchipRKNNCoreState {
     uint8_t pending_final_ppu_bank;
     uint32_t pending_dma_error_bits;
     bool pending_slave;
-    bool functional;
     bool busy;
     bool irq_level;
     uint64_t functional_max_host_bytes;

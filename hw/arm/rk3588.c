@@ -219,7 +219,6 @@ struct RK3588MachineState {
     bool zvm_ram;
     bool rknpu;
     bool rknpu_vendor_fdt;
-    bool rknpu_functional;
     RK3588BootROM bootrom_state;
 };
 
@@ -2728,10 +2727,6 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         RK3588_RKNN2_SPI,
     };
 
-    if (s->rknpu_functional && !s->rknpu) {
-        error_report("rknpu-functional requires rknpu=on");
-        exit(EXIT_FAILURE);
-    }
     if (s->rknpu_vendor_fdt && !s->rknpu) {
         error_report("rknpu-vendor-fdt requires rknpu=on");
         exit(EXIT_FAILURE);
@@ -2763,7 +2758,6 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
 
         s->rknn[i] = qdev_new(TYPE_ROCKCHIP_RKNN_CORE);
         qdev_prop_set_uint32(s->rknn[i], "core-index", i);
-        qdev_prop_set_bit(s->rknn[i], "functional", s->rknpu_functional);
         object_property_set_link(OBJECT(s->rknn[i]), "iommu",
                                  OBJECT(s->rknn_mmu[i]), &error_fatal);
         object_property_add_child(OBJECT(s), name, OBJECT(s->rknn[i]));
@@ -3234,20 +3228,6 @@ static void rk3588_set_rknpu_vendor_fdt(Object *obj, bool value, Error **errp)
     s->rknpu_vendor_fdt = value;
 }
 
-static bool rk3588_get_rknpu_functional(Object *obj, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    return s->rknpu_functional;
-}
-
-static void rk3588_set_rknpu_functional(Object *obj, bool value, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    s->rknpu_functional = value;
-}
-
 void rk3588_machine_instance_configure(Object *obj,
                                        const RK3588BoardConfig *board)
 {
@@ -3266,7 +3246,6 @@ void rk3588_machine_instance_configure(Object *obj,
     s->zvm_ram = board->default_zvm_ram;
     s->rknpu = false;
     s->rknpu_vendor_fdt = false;
-    s->rknpu_functional = false;
 }
 
 void rk3588_machine_class_configure(ObjectClass *oc,
@@ -3292,20 +3271,14 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     object_class_property_add_bool(oc, "rknpu", rk3588_get_rknpu,
                                    rk3588_set_rknpu);
     object_class_property_set_description(oc, "rknpu",
-                                          "Enable RK3588 RKNN/RKNPU fake "
-                                          "completion accelerator cores");
+                                          "Enable RK3588 RKNN/RKNPU "
+                                          "accelerator cores");
     object_class_property_add_bool(oc, "rknpu-vendor-fdt",
                                    rk3588_get_rknpu_vendor_fdt,
                                    rk3588_set_rknpu_vendor_fdt);
     object_class_property_set_description(
         oc, "rknpu-vendor-fdt",
         "Expose the aggregate vendor-driver RK3588 RKNPU FDT binding");
-    object_class_property_add_bool(oc, "rknpu-functional",
-                                   rk3588_get_rknpu_functional,
-                                   rk3588_set_rknpu_functional);
-    object_class_property_set_description(
-        oc, "rknpu-functional",
-        "Enable hardware-pipeline functional execution for validated tasks");
 }
 
 static const TypeInfo rk3588_machine_typeinfo = {
