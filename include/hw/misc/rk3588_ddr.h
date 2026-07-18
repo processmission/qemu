@@ -1,0 +1,40 @@
+/*
+ * Rockchip RK3588 DDR controller compatibility model
+ *
+ * Copyright (c) 2026 Chao Liu
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#ifndef HW_MISC_RK3588_DDR_H
+#define HW_MISC_RK3588_DDR_H
+
+#include "hw/core/sysbus.h"
+#include "qom/object.h"
+
+#define TYPE_RK3588_DDR "rk3588-ddr"
+OBJECT_DECLARE_SIMPLE_TYPE(RK3588DDRState, RK3588_DDR)
+
+#define RK3588_DDR_CHANNEL_COUNT       8
+
+#define RK3588_DDR_LEGACY_MMIO_SIZE    0x00010000
+#define RK3588_DDR_GLOBAL_MMIO_SIZE    0x00020000
+#define RK3588_DDR_CHANNEL_MMIO_SIZE   0x00020000
+#define RK3588_DDR_CHANNEL_MMIO_STRIDE 0x00020000
+#define RK3588_DDRPHY_MMIO_SIZE        0x00001000
+#define RK3588_DDR_PHY_GATE_MMIO_SIZE  0x00010000
+
+enum RK3588DDRMMIOIndex {
+    RK3588_DDR_MMIO_LEGACY = 0,
+    RK3588_DDR_MMIO_GLOBAL,
+    RK3588_DDR_MMIO_CHANNEL0,
+    RK3588_DDR_MMIO_DDRPHY = RK3588_DDR_MMIO_CHANNEL0 +
+                             RK3588_DDR_CHANNEL_COUNT,
+    RK3588_DDR_MMIO_PHY_GATE,
+    RK3588_DDR_MMIO_COUNT,
+};
+
+#define RK3588_DDR_MMIO_CHANNEL(_channel) \
+    (RK3588_DDR_MMIO_CHANNEL0 + (_channel))
+
+#endif /* HW_MISC_RK3588_DDR_H */
