@@ -1028,6 +1028,20 @@ F: roms/vbootrom
 F: docs/system/arm/nuvoton.rst
 F: tests/functional/arm/test_quanta_gsj.py
 
+Rockchip RK3588 boards
+M: Chao Liu <chao.liu@processmission.com>
+L: qemu-arm@nongnu.org
+S: Maintained
+F: configs/devices/aarch64-softmmu/rk3588*.mak
+F: configs/devices/aarch64-softmmu/rock-5b-plus.mak
+F: docs/system/arm/rk3588.rst
+F: hw/arm/rk3588*
+F: hw/arm/rock5b_plus.c
+F: hw/*/rk3588*
+F: include/hw/*/rk3588*
+F: tests/qtest/rk3588*
+F: tests/qtest/rock5b-plus-test.c
+
 Raspberry Pi
 M: Peter Maydell <peter.maydell@linaro.org>
 R: Philippe Mathieu-Daudé <philmd@mailo.com>
