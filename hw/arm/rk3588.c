@@ -28,6 +28,7 @@
 #include "hw/arm/linux-boot-if.h"
 #include "rk3588-internal.h"
 #include "hw/gpio/rockchip_gpio.h"
+#include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
@@ -277,6 +278,7 @@ struct RK3588MachineState {
     DeviceState *gmac0;
     DeviceState *gmac1;
     DeviceState *gpio[5];
+    DeviceState *crypto;
     RockchipSysconState *pmu0grf;
     RockchipSysconState *pmu1grf;
 
@@ -359,6 +361,7 @@ enum {
     RK3588_STIMER,
     RK3588_FIREWALL_DDR,
     RK3588_FIREWALL_SYSMEM,
+    RK3588_CRYPTO,
     RK3588_IRAM,
     RK3588_BROM,
     RK3588_FIRMWARE_MMIO,
@@ -422,6 +425,8 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_STIMER] =       { 0xfd8c8000, ROCKCHIP_STIMER_SIZE },
     [RK3588_FIREWALL_DDR] = { 0xfe030000, 0x00001000 },
     [RK3588_FIREWALL_SYSMEM] = { 0xfe038000, 0x00001000 },
+    [RK3588_CRYPTO] =       { 0xfe370000,
+                              ROCKCHIP_CRYPTO_V2_MMIO_SIZE },
     [RK3588_IRAM] =         { 0xff000000, RK3588_IRAM_SIZE },
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
     [RK3588_FIRMWARE_MMIO] = { 0xf7000000, RK3588_FIRMWARE_MMIO_SIZE },
@@ -2652,6 +2657,22 @@ static void rk3588_create_syscon_devices(RK3588MachineState *s)
     rk3588_seed_firmware_sysregs(s);
 }
 
+static void rk3588_create_crypto(RK3588MachineState *s)
+{
+    const RK3588FirmwareProfile *profile = s->board->firmware_profile;
+    SysBusDevice *sbd;
+
+    if (!profile || !profile->crypto_v2_sha256) {
+        return;
+    }
+
+    s->crypto = qdev_new(TYPE_ROCKCHIP_CRYPTO_V2);
+    object_property_add_child(OBJECT(s), "crypto", OBJECT(s->crypto));
+    sbd = SYS_BUS_DEVICE(s->crypto);
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_CRYPTO].base);
+}
+
 static void rk3588_init(MachineState *machine)
 {
     RK3588MachineState *s = RK3588_MACHINE(machine);
@@ -2685,6 +2706,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_cru(s);
     rk3588_create_stimer(s);
     rk3588_create_scmi(s);
+    rk3588_create_crypto(s);
     rk3588_active_machine = s;
     rk3588_create_uart(s);
     rk3588_create_sdhci(s);

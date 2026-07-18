@@ -19,6 +19,7 @@ static const char * const rock_5b_plus_compatible[] = {
 
 static const RK3588FirmwareProfile rock_5b_plus_firmware = {
     .unfused_secure_otp = true,
+    .crypto_v2_sha256 = true,
 };
 
 static const RK3588BoardConfig rock_5b_plus_board = {
