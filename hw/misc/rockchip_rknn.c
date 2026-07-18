@@ -5196,7 +5196,7 @@ static void rockchip_rknn_complete(void *opaque)
     unsigned int final_ppu_bank;
     uint32_t dma_error_bits;
 
-    if (s->functional && s->pending_task_index < s->pending_task_count &&
+    if (s->pending_task_index < s->pending_task_count &&
         !s->pending_fetch_error && !s->pending_execution_error) {
         RockchipRKNNExecutionMode mode =
             ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
@@ -5288,27 +5288,22 @@ static void rockchip_rknn_complete(void *opaque)
         task_finished = true;
     }
 
-    if (s->functional) {
-        if (s->pending_fetch_error || s->pending_execution_error) {
-            s->pc_regs[R_PC_TASK_STATUS] =
-                ROCKCHIP_RKNN_TASK_STATUS_FETCH_ERROR |
-                s->pending_task_index;
-        } else if (slave_submission) {
-            s->pc_regs[R_PC_TASK_STATUS] = 0x00005000;
-        } else if (s->pending_final_ppu_attempted) {
-            s->pc_regs[R_PC_TASK_STATUS] = ROCKCHIP_RKNN_PPU_TASK_STATUS;
-        } else if (s->pending_task_count) {
-            s->pc_regs[R_PC_TASK_STATUS] = ROCKCHIP_RKNN_TASK_STATUS_SUCCESS;
-        } else {
-            s->pc_regs[R_PC_TASK_STATUS] = 0;
-        }
+    if (s->pending_fetch_error || s->pending_execution_error) {
+        s->pc_regs[R_PC_TASK_STATUS] =
+            ROCKCHIP_RKNN_TASK_STATUS_FETCH_ERROR |
+            s->pending_task_index;
+    } else if (slave_submission) {
+        s->pc_regs[R_PC_TASK_STATUS] = 0x00005000;
+    } else if (s->pending_final_ppu_attempted) {
+        s->pc_regs[R_PC_TASK_STATUS] = ROCKCHIP_RKNN_PPU_TASK_STATUS;
+    } else if (s->pending_task_count) {
+        s->pc_regs[R_PC_TASK_STATUS] = ROCKCHIP_RKNN_TASK_STATUS_SUCCESS;
     } else {
-        s->pc_regs[R_PC_TASK_STATUS] = slave_submission ? 0x00005000 :
-            s->pc_regs[R_PC_TASK_CON] & ROCKCHIP_RKNN_TASK_NUMBER_MASK;
+        s->pc_regs[R_PC_TASK_STATUS] = 0;
     }
     completed_success = !s->pending_fetch_error &&
         !s->pending_execution_error && task_finished &&
-        (s->functional ? s->pending_task_count : true);
+        s->pending_task_count;
     final_pipeline_attempted = s->pending_final_pipeline_attempted;
     final_ppu_attempted = s->pending_final_ppu_attempted;
     final_ppu_success = s->pending_final_ppu_success;
@@ -5751,9 +5746,7 @@ static void rockchip_rknn_start(RockchipRKNNCoreState *s)
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE_ERROR)) {
         rockchip_rknn_trace_regcmd_sample(s);
     }
-    if (s->functional) {
-        rockchip_rknn_prepare_pipeline(s);
-    }
+    rockchip_rknn_prepare_pipeline(s);
     timer_mod(&s->complete_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               ROCKCHIP_RKNN_COMPLETE_DELAY_NS);
@@ -5770,9 +5763,7 @@ static void rockchip_rknn_start_slave(RockchipRKNNCoreState *s,
     s->busy = true;
     s->pending_slave = true;
     s->pc_regs[R_PC_TASK_STATUS] = 0;
-    if (s->functional) {
-        rockchip_rknn_prepare_slave_pipeline(s, enabled_blocks);
-    }
+    rockchip_rknn_prepare_slave_pipeline(s, enabled_blocks);
     timer_mod(&s->complete_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               ROCKCHIP_RKNN_COMPLETE_DELAY_NS);
@@ -6671,7 +6662,6 @@ static const Property rockchip_rknn_properties[] = {
     DEFINE_PROP_LINK("iommu", RockchipRKNNCoreState, iommu,
                      TYPE_ROCKCHIP_IOMMU, RockchipIOMMUState *),
     DEFINE_PROP_UINT32("core-index", RockchipRKNNCoreState, core_index, 0),
-    DEFINE_PROP_BOOL("functional", RockchipRKNNCoreState, functional, false),
     DEFINE_PROP_UINT64("functional-max-host-bytes", RockchipRKNNCoreState,
                        functional_max_host_bytes,
                        ROCKCHIP_RKNN_DEFAULT_MAX_HOST_BYTES),

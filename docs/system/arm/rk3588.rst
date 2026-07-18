@@ -60,8 +60,8 @@ RK3588 kernel and ZVM smoke tests:
   scanning.
 * Optional RK3588 RKNN/RKNPU core register model, enabled with
   ``-machine ...,rknpu=on``.  This exposes the three RK3588 RKNN cores and
-  implements the Linux mainline ``rocket`` driver's register-level job
-  submission path with fake completion interrupts.
+  implements hardware-pipeline execution for register-level jobs submitted
+  through the Linux mainline ``rocket`` or vendor ``rknpu`` driver.
 
 The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
 machine source refers to GIC Shared Peripheral Interrupt numbers.
@@ -73,10 +73,9 @@ attach, map, zap, and report translation or permission faults through the open
 can walk the RK3588 IOMMU v2 page tables, sample submitted register command
 buffers, decode command prefixes, and report raw or unknown command words.
 
-An experimental functional mode is available with
-``-machine ...,rknpu=on,rknpu-functional=on``.  It routes PC-fetched commands
-or slave-mode CNA/CORE/DPU MMIO writes into banked register files, then decodes
-an immutable hardware-pipeline task.  Slave mode is selected with
+When enabled, the RKNPU routes PC-fetched commands or slave-mode CNA/CORE/DPU
+MMIO writes into banked register files, then decodes an immutable
+hardware-pipeline task.  Slave mode is selected with
 ``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
 PC task descriptors are incremental: register values in both hardware banks
 persist after completion, so a later sparse descriptor inherits fields that it
@@ -273,8 +272,8 @@ output before raising
 the normal completion interrupt.  DMA mapping failures follow the modeled
 IOMMU and stage status behavior.  Operator controls that are not implemented
 yet are reported as explicit execution capability errors rather than being
-treated as model or shape restrictions.  Functional execution defaults to
-QEMU host-safety ceilings of 256 MiB of aggregate temporary buffers,
+treated as model or shape restrictions.  Execution enforces QEMU host-safety
+ceilings of 256 MiB of aggregate temporary buffers,
 ``2^28`` MAC operations or element conversions per DPU task, and ``2^24``
 work items per PPU task.
 These are implementation safety boundaries rather than RK3588 shape limits;
@@ -285,9 +284,7 @@ field.  The captured MobileNet
 submission contains 120 logical descriptors that reuse 107 immutable command
 payloads behind three PC roots of 50, 34, and 23 payloads.  Slave mode
 supports one directly configured task and reports its hardware-observed task
-status.  The property is off by default; when it is off the model performs no
-functional DMA reads or writes.  Other DPU-RDMA data modes, precisions, and
-notch layouts, as well as
+status.  Other DPU-RDMA data modes, precisions, and notch layouts, as well as
 other PPU execution modes and cycle timing remain unimplemented.  The current
 PPU/RDMA executor handles signed INT8 identity and max-pooling semantics with
 per-surface DMA, row stride, padding, and channel-surface iteration.  Max
