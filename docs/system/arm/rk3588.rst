@@ -66,15 +66,12 @@ RK3588 kernel and ZVM smoke tests:
 The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
 machine source refers to GIC Shared Peripheral Interrupt numbers.
 
-The optional RKNPU model is not a full neural-network accelerator emulator. It
-does not generally execute RKNN command streams, model IOMMU faults, generate
-IOMMU fault IRQs, or claim compatibility with the vendor ``rknpu2``/RKNN
-Runtime stack.  It includes a minimal Rockchip IOMMU control-plane stub so Linux
-can probe, attach, map, and zap through the open ``rocket`` driver path.  For
-debugging, trace events can walk the RK3588 IOMMU v2 page tables, sample
-submitted ``rocket`` register command buffers, decode bounded command prefixes,
-report raw or unknown command words, and update internal non-migrated shadow
-register state for trace analysis.
+The optional RKNPU model is not yet a complete neural-network accelerator
+emulator.  Its control path includes a Rockchip IOMMU model so Linux can probe,
+attach, map, zap, and report translation or permission faults through the open
+``rocket`` driver and the vendor ``rknpu`` driver.  For debugging, trace events
+can walk the RK3588 IOMMU v2 page tables, sample submitted register command
+buffers, decode command prefixes, and report raw or unknown command words.
 
 An experimental functional mode is available with
 ``-machine ...,rknpu=on,rknpu-functional=on``.  It routes PC-fetched commands
@@ -93,6 +90,11 @@ tensor shapes.  Captured model tasks are regression and differential vectors,
 not execution allowlists.  A new workload using an implemented combination of
 formats, layouts, and stages therefore follows the same data path without a
 model-specific enablement change.
+The implemented subset has been exercised through the unmodified vendor RKNN
+Runtime with RK3588 MobileNet V1, YOLOv8, and YOLOv5 models.  Their final
+classification or detection results match the corresponding board runs.  This
+is workload evidence for the decoded formats, layouts, and stages, not a claim
+that every RKNN model or RKNPU control combination is implemented.
 The current integer backend executes signed INT8 CNA/MAC pipelines with
 signed INT8 and INT32 DPU output.  It covers width-one Matmul-style surfaces,
 two-dimensional 1x1 direct convolution with stride one and no padding, and
