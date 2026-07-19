@@ -453,6 +453,7 @@
 #define GPIO_PIN0_SET (GPIO_PIN0_WE | GPIO_PIN0)
 #define GPIO_PIN0_CLEAR GPIO_PIN0_WE
 #define RK3588_EVB_MACHINE "rk3588-evb"
+#define RK3588S_ROC_PC_MACHINE "rk3588s-roc-pc"
 
 static QTestState *rk3588_qtest_start(unsigned int cpus)
 {
@@ -5962,7 +5963,7 @@ static char *rk3588_fdtget(const char *fdtget, const char *dtb,
     return stdout_text;
 }
 
-static char *rk3588_dump_rknpu_dtb(const char *extra_machine_options)
+static char *rk3588_dump_rknpu_dtb(const char *machine_type)
 {
     const char *qemu = g_getenv("QTEST_QEMU_BINARY");
     g_autofree char *kernel = rk3588_create_dummy_kernel();
@@ -5979,9 +5980,7 @@ static char *rk3588_dump_rknpu_dtb(const char *extra_machine_options)
     g_assert_cmpint(fd, >=, 0);
     close(fd);
 
-    machine = g_strdup_printf(RK3588_EVB_MACHINE
-                              ",rknpu=on%s,dumpdtb=%s",
-                              extra_machine_options, dtb);
+    machine = g_strdup_printf("%s,rknpu=on,dumpdtb=%s", machine_type, dtb);
     argv[0] = (char *)qemu;
     argv[1] = (char *)"-machine";
     argv[2] = machine;
@@ -6674,7 +6673,7 @@ static void test_rk3588_rknpu_disabled_by_default(void)
     qtest_quit(qts);
 }
 
-static void test_rk3588_rknpu_fdt(void)
+static void test_rk3588s_roc_pc_rknpu_fdt(void)
 {
     static const struct {
         const char *node;
@@ -6725,7 +6724,7 @@ static void test_rk3588_rknpu_fdt(void)
         return;
     }
 
-    dtb = rk3588_dump_rknpu_dtb("");
+    dtb = rk3588_dump_rknpu_dtb(RK3588S_ROC_PC_MACHINE);
 
     for (unsigned int i = 0; i < ARRAY_SIZE(nodes); i++) {
         g_autofree char *compatible =
@@ -6828,7 +6827,7 @@ static void test_rk3588_rknpu_fdt(void)
     unlink(dtb);
 }
 
-static void test_rk3588_rknpu_vendor_fdt(void)
+static void test_rk3588_evb_rknpu_fdt(void)
 {
     static const uint32_t core_base[] = {
         RK3588_RKNN0_PC_BASE,
@@ -6901,7 +6900,7 @@ static void test_rk3588_rknpu_vendor_fdt(void)
         return;
     }
 
-    dtb = rk3588_dump_rknpu_dtb(",rknpu-vendor-fdt=on");
+    dtb = rk3588_dump_rknpu_dtb(RK3588_EVB_MACHINE);
     g_assert_true(rk3588_fdt_has_node(fdtget, dtb, npu));
     g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdac0000"));
     g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdad0000"));
@@ -16192,9 +16191,9 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588-evb/gpio-bank", test_rk3588_gpio_bank);
     qtest_add_func("/rk3588/rknpu-disabled-by-default",
                    test_rk3588_rknpu_disabled_by_default);
-    qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_rknpu_fdt);
-    qtest_add_func("/rk3588/rknpu-vendor-fdt",
-                   test_rk3588_rknpu_vendor_fdt);
+    qtest_add_func("/rk3588s-roc-pc/rknpu-fdt",
+                   test_rk3588s_roc_pc_rknpu_fdt);
+    qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_evb_rknpu_fdt);
     qtest_add_func("/rk3588/rknpu-version-and-cores",
                    test_rk3588_rknpu_version_and_cores);
     qtest_add_func("/rk3588/rknpu-ppu-windows-all-cores",

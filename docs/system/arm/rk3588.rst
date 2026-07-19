@@ -304,13 +304,13 @@ Successful execution reports PPU/PPU-RDMA status ``0xc`` on the captured bank;
 the tested IOMMU translation or permission faults report ``0x5``, abort DMA,
 and do not add generic PC DMA read/write status bits.
 
-By default, ``rknpu=on`` exposes three independent
-``rockchip,rk3588-rknn-core`` device-tree nodes for the mainline Rocket driver.
-Adding ``rknpu-vendor-fdt=on`` instead exposes the same modeled MMIO and IRQ
-resources through the aggregate ``rockchip,rk3588-rknpu`` node and four-window
-``rockchip,iommu-v2`` node used by the Rockchip vendor driver.  This option
-changes only the generated guest binding; it does not add a second accelerator
-or alter register behavior.
+The generated RKNPU binding follows the selected board.  With ``rknpu=on``,
+``rk3588-evb`` exposes the aggregate ``rockchip,rk3588-rknpu`` node and
+four-window ``rockchip,iommu-v2`` node used by the Rockchip vendor driver.
+``rk3588s-roc-pc`` exposes three independent
+``rockchip,rk3588-rknn-core`` nodes for the mainline Rocket driver.  Both
+bindings describe the same modeled MMIO, IRQ, and accelerator behavior; the
+machine type fixes only the board's guest-visible topology.
 
 The decoder keeps software-visible valid and storage dimensions separate.
 For the current INT8 path, CNA ``DATA_SIZE1`` supplies valid and storage input

@@ -29,6 +29,11 @@ typedef struct RK3588FirmwareProfile {
     uint32_t fit_alignment;
 } RK3588FirmwareProfile;
 
+typedef enum RK3588RknpuFdtTopology {
+    RK3588_RKNPU_FDT_PER_CORE,
+    RK3588_RKNPU_FDT_AGGREGATE,
+} RK3588RknpuFdtTopology;
+
 typedef struct RK3588BoardConfig {
     const char *machine_name;
     const char *desc;
@@ -46,6 +51,7 @@ typedef struct RK3588BoardConfig {
     bool pcie3x2_link_down;
     bool swap_gmac_aliases;
     bool default_zvm_ram;
+    RK3588RknpuFdtTopology rknpu_fdt_topology;
     const RK3588FirmwareProfile *firmware_profile;
 } RK3588BoardConfig;
 

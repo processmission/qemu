@@ -32,6 +32,7 @@ static const RK3588BoardConfig rk3588_evb_board = {
     .gmac_mask = BIT(0) | BIT(1),
     .pcie3x4_num_lanes = 4,
     .default_zvm_ram = false,
+    .rknpu_fdt_topology = RK3588_RKNPU_FDT_AGGREGATE,
 };
 
 static void rk3588_evb_machine_instance_init(Object *obj)
