@@ -182,6 +182,10 @@ are written as zero.
 The standalone raw16 tail profile preserves its one valid FP16 lane and fills
 the other seven storage lanes with the 16-bit ``DPU_OFFSET_PEND`` value, as
 used by the MobileNet softmax prelude.
+With ``NONALIGN`` and ``RGP_TYPE=2``, DPU-RDMA compacts lane zero from each
+raw16 spatial atom to its low eight bits.  The decoded ``SURF_LEN`` specifies
+the packed byte extent in 16-byte atoms; this path is used by compact
+single-channel graph outputs.
 The DPU-RDMA FP16 min/max profile scans all storage channels, including
 partial-channel padding lanes.  ``MINMAX_CTL`` selects the global minimum or
 maximum; when probability-only mode is clear, the second raw16 result word is
