@@ -3845,6 +3845,9 @@ static void test_rk3588_rknpu_dpu_rdma_int8_binary(void)
         EW_SURFACE_STRIDE_ATOMS = EW_SURFACE_ATOMS * 2,
         EW_SURFACE_STRIDE_BYTES = EW_SURFACE_STRIDE_ATOMS * 16,
         EW_STORAGE_BYTES = EW_SURFACE_STRIDE_BYTES + EW_SURFACE_BYTES,
+        EW_GAPPED_STRIDE_BYTES = 0x3000,
+        EW_GAPPED_STRIDE_ATOMS = EW_GAPPED_STRIDE_BYTES / 16,
+        EW_GAPPED_PTE_INDEX = 8,
     };
     uint64_t commands[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
     int8_t input[INPUT_BYTES];
@@ -3878,6 +3881,58 @@ static void test_rk3588_rknpu_dpu_rdma_int8_binary(void)
                    input, sizeof(input));
     qtest_memwrite(qts, RK3588_RKNN_MATMUL_RDMA_ADDR,
                    ew_storage, sizeof(ew_storage));
+    qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
+                 rk3588_rknn_register_amount(command_count));
+    rk3588_rknn_start_matmul(qts);
+    qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
+    qtest_memread(qts, RK3588_RKNN_MATMUL_OUTPUT_ADDR0 + 0x800,
+                  output, sizeof(output));
+    for (unsigned int row = 0;
+         row < RK3588_RKNN_DPU_RDMA_FP16_HEIGHT; row++) {
+        for (unsigned int column = 0;
+             column < RK3588_RKNN_DPU_RDMA_FP16_WIDTH; column++) {
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_DPU_RDMA_FP16_CHANNELS; channel++) {
+                size_t index = rk3588_rknn_spatial_feature_index(
+                    RK3588_RKNN_DPU_RDMA_FP16_WIDTH,
+                    RK3588_RKNN_DPU_RDMA_FP16_HEIGHT, 16,
+                    channel, row, column);
+                int expected = channel <
+                    RK3588_RKNN_DPU_RDMA_FP16_VALID_CHANNELS ?
+                    CLAMP(input[index] + ew_input[index] + 5,
+                          INT8_MIN, INT8_MAX) : 0;
+
+                g_assert_cmpint(output[index], ==, expected);
+            }
+        }
+    }
+    g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
+                                RKNN_PC_TASK_STATUS), ==,
+                    RKNN_TASK_STATUS_SUCCESS);
+    qtest_quit(qts);
+
+    rk3588_rknn_patch_regcmd(
+        commands, command_count, RKNN_REGCMD_TARGET_DPU_RDMA, 0x5040,
+        EW_GAPPED_STRIDE_ATOMS << 4);
+    rk3588_rknn_patch_regcmd(
+        commands, command_count, RKNN_REGCMD_TARGET_DPU_RDMA, 0x506c,
+        (EW_GAPPED_STRIDE_ATOMS - EW_SURFACE_ATOMS) << 4);
+    qts = rk3588_qtest_start_rknpu_matmul();
+    rk3588_rknn_prepare_matmul(qts, true, 0xa5);
+    qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + 5 * 4,
+                 RK3588_RKNN_MATMUL_RDMA_ADDR | RK_IOMMU_PTE_RW);
+    qtest_writel(qts,
+                 RK3588_RKNN_MATMUL_PTE_ADDR + EW_GAPPED_PTE_INDEX * 4,
+                 (RK3588_RKNN_MATMUL_RDMA_ADDR + 0x1000) |
+                 RK_IOMMU_PTE_RW);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_REGCMD_ADDR,
+                   commands, command_count * sizeof(*commands));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_INPUT_ADDR,
+                   input, sizeof(input));
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_RDMA_ADDR,
+                   ew_input, EW_SURFACE_BYTES);
+    qtest_memwrite(qts, RK3588_RKNN_MATMUL_RDMA_ADDR + 0x1000,
+                   ew_input + EW_SURFACE_BYTES, EW_SURFACE_BYTES);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
                  rk3588_rknn_register_amount(command_count));
     rk3588_rknn_start_matmul(qts);
