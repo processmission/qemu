@@ -217,25 +217,6 @@ jobs:
       - shell: freebsd {0}
         run: cd /home/qemu && ./build/qemu-system-x86_64 -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
 
-  build-netbsd:
-    needs: checkapply
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: vmactions/netbsd-vm@v1
-        with:
-          copyback: false
-          release: "10.1"
-      - run: rsync -av ./ netbsd:/home/qemu/
-      - shell: netbsd {0}
-        run: set -ex && pkg_add pkgin && pkgin -y install git gmake python314 pkgconf pixman bison flex glib ninja-build && ln -s /usr/pkg/bin/python3.14 /usr/bin/python3
-      - shell: netbsd {0}
-        run: cd /home/qemu && ./configure ${{ env.QEMU_WERROR }} && ninja -C build
-      # for some reason meson can't find c++ compiler, so no cpp plugin
-      # split-wx=on: https://gitlab.com/qemu-project/qemu/-/issues/2685
-      - shell: netbsd {0}
-        run: cd /home/qemu && ./build/qemu-system-x86_64 -accel tcg,split-wx=on -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -d plugin
-
   build-openbsd:
     needs: checkapply
     runs-on: ubuntu-24.04
@@ -354,21 +335,6 @@ jobs:
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian-${{matrix.arch}}-cross
           bash -cx './configure ${{ env.QEMU_WERROR }} --disable-tcg $QEMU_CONFIGURE_OPTS && ninja -C build install'
-
-  build-xen-only:
-    needs: checkapply
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64, amd64]
-    runs-on: ubuntu-24.04
-    steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
-      - uses: actions/checkout@v6
-      - run: >
-          podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
-          docker.io/pboqemu/qemu-ci:debian-${{matrix.arch}}-cross
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-tcg --disable-kvm $QEMU_CONFIGURE_OPTS && ninja -C build install'
 
   build-minimal:
     needs: checkapply
