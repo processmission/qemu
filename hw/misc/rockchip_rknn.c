@@ -5465,12 +5465,6 @@ rockchip_rknn_execute_dpu_rdma_int8_pipeline(
         !rockchip_rknn_host_budget_add(s, &host_bytes, output_bytes)) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
-    if (ew_rdma &&
-        !rockchip_rknn_iommu_range_mapped(s, rdma->ew_iova,
-                                           ew_input_accessed, false)) {
-        return ROCKCHIP_RKNN_EXECUTION_DMA_READ_FAULT;
-    }
-
     input = g_try_malloc(input_bytes);
     if (ew_rdma) {
         ew_input = g_try_malloc(ew_input_bytes);
