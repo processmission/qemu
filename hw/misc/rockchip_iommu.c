@@ -164,6 +164,18 @@ static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
     return true;
 }
 
+static bool rockchip_iommu_paging_enabled(RockchipIOMMUState *s,
+                                          unsigned int num_mmu)
+{
+    for (unsigned int i = 0; i < num_mmu; i++) {
+        if (s->regs[i][R_STATUS] & R_STATUS_PAGING_ENABLED_MASK) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool rockchip_iommu_iova_to_phys(RockchipIOMMUState *s, uint32_t iova,
                                  hwaddr *phys, unsigned int *bank,
                                  const char **reason)
@@ -173,6 +185,13 @@ bool rockchip_iommu_iova_to_phys(RockchipIOMMUState *s, uint32_t iova,
     if (!num_mmu) {
         *reason = "no-mmu-bank";
         return false;
+    }
+
+    if (!rockchip_iommu_paging_enabled(s, num_mmu)) {
+        *phys = iova;
+        *bank = 0;
+        *reason = "paging-disabled-bypass";
+        return true;
     }
 
     for (unsigned int i = 0; i < num_mmu; i++) {
@@ -196,6 +215,13 @@ bool rockchip_iommu_translate(RockchipIOMMUState *s, uint32_t iova,
     if (!num_mmu) {
         *reason = "no-mmu-bank";
         return false;
+    }
+
+    if (!rockchip_iommu_paging_enabled(s, num_mmu)) {
+        *phys = iova;
+        *bank = 0;
+        *reason = "paging-disabled-bypass";
+        return true;
     }
 
     for (unsigned int i = 0; i < num_mmu; i++) {
