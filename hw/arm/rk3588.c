@@ -218,7 +218,6 @@ struct RK3588MachineState {
     bool firmware_atf_entered;
     bool zvm_ram;
     bool rknpu;
-    bool rknpu_vendor_fdt;
     RK3588BootROM bootrom_state;
 };
 
@@ -1350,7 +1349,7 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
                               its1_phandle);
     if (s->rknpu) {
-        if (s->rknpu_vendor_fdt) {
+        if (s->board->rknpu_fdt_topology == RK3588_RKNPU_FDT_AGGREGATE) {
             rk3588_fdt_add_rknpu_vendor_node(fdt, cru_phandle, clk_phandle);
         } else {
             rk3588_fdt_add_rknpu_core_nodes(fdt, cru_phandle, clk_phandle);
@@ -2727,10 +2726,6 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         RK3588_RKNN2_SPI,
     };
 
-    if (s->rknpu_vendor_fdt && !s->rknpu) {
-        error_report("rknpu-vendor-fdt requires rknpu=on");
-        exit(EXIT_FAILURE);
-    }
     if (!s->rknpu) {
         return;
     }
@@ -3214,20 +3209,6 @@ static void rk3588_set_rknpu(Object *obj, bool value, Error **errp)
     s->rknpu = value;
 }
 
-static bool rk3588_get_rknpu_vendor_fdt(Object *obj, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    return s->rknpu_vendor_fdt;
-}
-
-static void rk3588_set_rknpu_vendor_fdt(Object *obj, bool value, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    s->rknpu_vendor_fdt = value;
-}
-
 void rk3588_machine_instance_configure(Object *obj,
                                        const RK3588BoardConfig *board)
 {
@@ -3245,7 +3226,6 @@ void rk3588_machine_instance_configure(Object *obj,
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
     s->rknpu = false;
-    s->rknpu_vendor_fdt = false;
 }
 
 void rk3588_machine_class_configure(ObjectClass *oc,
@@ -3273,12 +3253,6 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     object_class_property_set_description(oc, "rknpu",
                                           "Enable RK3588 RKNN/RKNPU "
                                           "accelerator cores");
-    object_class_property_add_bool(oc, "rknpu-vendor-fdt",
-                                   rk3588_get_rknpu_vendor_fdt,
-                                   rk3588_set_rknpu_vendor_fdt);
-    object_class_property_set_description(
-        oc, "rknpu-vendor-fdt",
-        "Expose the aggregate vendor-driver RK3588 RKNPU FDT binding");
 }
 
 static const TypeInfo rk3588_machine_typeinfo = {

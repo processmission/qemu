@@ -34,6 +34,7 @@ static const RK3588BoardConfig rk3588s_roc_pc_board = {
     .pcie3x4_num_lanes = 4,
     .swap_gmac_aliases = true,
     .default_zvm_ram = true,
+    .rknpu_fdt_topology = RK3588_RKNPU_FDT_PER_CORE,
 };
 
 static void rk3588s_roc_pc_machine_instance_init(Object *obj)
