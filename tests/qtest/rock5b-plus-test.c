@@ -8,6 +8,9 @@
 
 #include "qemu/osdep.h"
 #include <libfdt.h>
+#include "qemu/bitops.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "libqtest.h"
 
 #define ROCK_5B_PLUS_MACHINE "rock-5b-plus"
@@ -20,6 +23,7 @@
 #define RK3588_PCIE3X4_DBI_BASE 0xa40000000ULL
 #define RK3588_PCIE3X2_APB_BASE 0xfe160000ULL
 #define RK3588_PCIE3X2_DBI_BASE 0xa40400000ULL
+#define RK3588_PCIE3X2_CFG_BASE 0xf1000000ULL
 #define RK3588_GMAC0_BASE 0xfe1b0000ULL
 #define RK3588_GMAC1_BASE 0xfe1c0000ULL
 #define RK3588_SDMMC_BASE 0xfe2c0000ULL
@@ -43,6 +47,16 @@
 
 #define DWC_PCIE_VENDOR_DEVICE 0x0000
 #define DWC_PCIE_LTSSM_STATUS 0x0300
+#define DWC_PCIE_ATU_VIEWPORT 0x0900
+#define DWC_PCIE_ATU_CR1 0x0904
+#define DWC_PCIE_ATU_CR2 0x0908
+#define DWC_PCIE_ATU_LOWER_BASE 0x090c
+#define DWC_PCIE_ATU_UPPER_BASE 0x0910
+#define DWC_PCIE_ATU_LIMIT 0x0914
+#define DWC_PCIE_ATU_LOWER_TARGET 0x0918
+#define DWC_PCIE_ATU_UPPER_TARGET 0x091c
+#define DWC_PCIE_ATU_TYPE_CFG0 0x4
+#define DWC_PCIE_ATU_ENABLE BIT(31)
 #define DWMAC4_MAC_VERSION 0x0110
 #define DWMAC4_SNPSVER_0x51 0x00000051
 #define DW_MMC_VERID 0x006c
@@ -223,6 +237,52 @@ static void test_rock_5b_plus_pcie3x2_fdt(void)
 
     g_assert_cmpint(g_unlink(kernel_path), ==, 0);
     g_assert_cmpint(g_unlink(dtb_path), ==, 0);
+}
+
+static void test_rock_5b_plus_pcie3x2_bus_number(void)
+{
+    QTestState *qts = rock_5b_plus_qtest_start(1);
+    QDict *response;
+    QList *buses;
+    QListEntry *entry;
+    uint32_t dbi_id;
+    bool bus_10_found = false;
+
+    response = qtest_qmp(qts, "{ 'execute': 'query-pci' }");
+    g_assert(qdict_haskey(response, "return"));
+    buses = qdict_get_qlist(response, "return");
+
+    QLIST_FOREACH_ENTRY(buses, entry) {
+        QDict *bus = qobject_to(QDict, qlist_entry_obj(entry));
+
+        if (qdict_get_int(bus, "bus") == 0x10) {
+            bus_10_found = true;
+            break;
+        }
+    }
+    g_assert_true(bus_10_found);
+    qobject_unref(response);
+
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_VIEWPORT, 0);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_CR1,
+                 DWC_PCIE_ATU_TYPE_CFG0);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_LOWER_BASE,
+                 RK3588_PCIE3X2_CFG_BASE);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_UPPER_BASE, 0);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_LIMIT,
+                 RK3588_PCIE3X2_CFG_BASE + 0xfffff);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_LOWER_TARGET,
+                 0x10 << 24);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_UPPER_TARGET, 0);
+    qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + DWC_PCIE_ATU_CR2,
+                 DWC_PCIE_ATU_ENABLE);
+
+    dbi_id = qtest_readl(qts, RK3588_PCIE3X2_DBI_BASE +
+                         DWC_PCIE_VENDOR_DEVICE);
+    g_assert_cmphex(dbi_id, !=, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X2_CFG_BASE), ==, dbi_id);
+
+    qtest_quit(qts);
 }
 
 static void test_rock_5b_plus_machine_creation(void)
@@ -479,6 +539,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_smp_creation);
     qtest_add_func("/rock-5b-plus/pcie3x2-fdt",
                    test_rock_5b_plus_pcie3x2_fdt);
+    qtest_add_func("/rock-5b-plus/pcie3x2-bus-number",
+                   test_rock_5b_plus_pcie3x2_bus_number);
     qtest_add_func("/rock-5b-plus/unfused-secure-otp",
                    test_rock_5b_plus_unfused_secure_otp);
     qtest_add_func("/rock-5b-plus/crypto-sha256",

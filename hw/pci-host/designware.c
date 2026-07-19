@@ -55,16 +55,25 @@
 #define DESIGNWARE_PCIE_ATU_DEVFN(x)               (((x) >> 16) & 0xff)
 #define DESIGNWARE_PCIE_ATU_UPPER_TARGET           0x91C
 
+static int designware_pcie_root_bus_num(PCIBus *bus)
+{
+    DesignwarePCIEHost *host = DESIGNWARE_PCIE_HOST(BUS(bus)->parent);
+
+    return host->bus_nr;
+}
+
 static void designware_pcie_root_bus_class_init(ObjectClass *klass,
                                                 const void *data)
 {
     BusClass *k = BUS_CLASS(klass);
+    PCIBusClass *pbc = PCI_BUS_CLASS(klass);
 
     /*
      * Designware has only a single root complex. Enforce the limit on the
      * parent bus
      */
     k->max_dev = 1;
+    pbc->bus_num = designware_pcie_root_bus_num;
 }
 
 static DesignwarePCIEHost *
@@ -615,7 +624,7 @@ static uint64_t designware_pcie_host_mmio_read(void *opaque, hwaddr addr,
                                                unsigned int size)
 {
     PCIHostState *pci = PCI_HOST_BRIDGE(opaque);
-    PCIDevice *device = pci_find_device(pci->bus, 0, 0);
+    PCIDevice *device = pci_find_device(pci->bus, pci_bus_num(pci->bus), 0);
 
     return pci_host_config_read_common(device,
                                        addr,
@@ -627,7 +636,7 @@ static void designware_pcie_host_mmio_write(void *opaque, hwaddr addr,
                                             uint64_t val, unsigned int size)
 {
     PCIHostState *pci = PCI_HOST_BRIDGE(opaque);
-    PCIDevice *device = pci_find_device(pci->bus, 0, 0);
+    PCIDevice *device = pci_find_device(pci->bus, pci_bus_num(pci->bus), 0);
 
     return pci_host_config_write_common(device,
                                         addr,
@@ -726,6 +735,10 @@ static const VMStateDescription vmstate_designware_pcie_host = {
     }
 };
 
+static const Property designware_pcie_host_properties[] = {
+    DEFINE_PROP_UINT8("bus-nr", DesignwarePCIEHost, bus_nr, 0),
+};
+
 static void designware_pcie_host_class_init(ObjectClass *klass,
                                             const void *data)
 {
@@ -736,6 +749,7 @@ static void designware_pcie_host_class_init(ObjectClass *klass,
     dc->realize = designware_pcie_host_realize;
     dc->fw_name = "pci";
     dc->vmsd = &vmstate_designware_pcie_host;
+    device_class_set_props(dc, designware_pcie_host_properties);
 }
 
 static void designware_pcie_host_init(Object *obj)
