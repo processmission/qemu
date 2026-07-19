@@ -67,7 +67,6 @@ struct RockchipPCIEHost {
     MemoryRegion dbi_tail;
     bool link_up;
     uint32_t domain;
-    uint8_t bus_nr;
     char root_bus_path[8];
 
     /*

@@ -70,7 +70,6 @@ static uint64_t rockchip_pcie_apb_read(void *opaque, hwaddr offset,
 static const Property rockchip_pcie_host_properties[] = {
     DEFINE_PROP_BOOL("link-up", RockchipPCIEHost, link_up, true),
     DEFINE_PROP_UINT32("domain", RockchipPCIEHost, domain, 0),
-    DEFINE_PROP_UINT8("bus-nr", RockchipPCIEHost, bus_nr, 0),
 };
 
 static void rockchip_pcie_apb_write(void *opaque, hwaddr offset, uint64_t val,
@@ -127,7 +126,7 @@ static void rockchip_pcie_host_realize(DeviceState *dev, Error **errp)
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     snprintf(s->root_bus_path, sizeof(s->root_bus_path), "%04x:%02x",
-             s->domain, s->bus_nr);
+             s->domain, s->parent_obj.bus_nr);
 
     /*
      * Realize the parent designware host first. This registers its
