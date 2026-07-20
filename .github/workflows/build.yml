@@ -43,6 +43,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
 
@@ -71,7 +72,18 @@ jobs:
               exit 1
           fi
 
-          base="$(git merge-base "$PUSH_BEFORE_SHA" "$CURRENT_SHA")"
+          zero_sha=0000000000000000000000000000000000000000
+          if [ "$PUSH_BEFORE_SHA" = "$zero_sha" ]; then
+              if [ -z "$DEFAULT_BRANCH" ]; then
+                  echo "::error::Missing default branch for new push"
+                  exit 1
+              fi
+
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
+              base="$(git merge-base "origin/$DEFAULT_BRANCH" "$CURRENT_SHA")"
+          else
+              base="$(git merge-base "$PUSH_BEFORE_SHA" "$CURRENT_SHA")"
+          fi
           echo "range=$base..$CURRENT_SHA" >> "$GITHUB_OUTPUT"
       - run: >
           ./scripts/checkpatch.pl --no-strict
