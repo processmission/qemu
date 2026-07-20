@@ -10,7 +10,7 @@ slow_qtests = {
   'npcm7xx_watchdog_timer-test': 120,
   'qmp-cmd-test' : 120,
   'qom-test' : 900,
-  'rk3588-evb-test': 180,
+  'rk3588-rknpu-test': 180,
   'stm32l4x5_usart-test' : 600,
   'test-hmp' : 240,
   'pxe-test': 610,
@@ -278,6 +278,7 @@ qtests_aarch64 = \
    config_all_devices.has_key('CONFIG_ARM_VIRT') ?
    ['iommu-smmuv3-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-evb-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-rknpu-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588S_ROC_PC') ? ['rk3588s-roc-pc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_PHYTIUMPI') ? ['phytiumpi-test'] : []) + \
