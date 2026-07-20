@@ -83,18 +83,15 @@ class Vnc(QemuSystemTest):
         self.vm.cmd('change-vnc-password',
                     password='new_password')
 
-    def do_test_change_listen(self, a, b, c):
+    def do_test_change_listen(self, ports, a):
         self.assertFalse(check_connect(a))
-        self.assertFalse(check_connect(b))
-        self.assertFalse(check_connect(c))
 
         self.vm.add_args('-nodefaults', '-S', '-vnc', f'{VNC_ADDR}:{a - 5900}')
         self.launch_guarded()
         self.assertEqual(self.vm.qmp('query-vnc')['return']['service'], str(a))
         self.assertTrue(check_connect(a))
-        self.assertFalse(check_connect(b))
-        self.assertFalse(check_connect(c))
 
+        b, c = ports.find_free_ports(2)
         self.vm.cmd('display-update', type='vnc',
                     addresses=[{'type': 'inet', 'host': VNC_ADDR,
                                 'port': str(b)},
@@ -108,8 +105,8 @@ class Vnc(QemuSystemTest):
     def test_change_listen(self):
         self.set_machine('none')
         with Ports() as ports:
-            a, b, c = ports.find_free_ports(3)
-            self.do_test_change_listen(a, b, c)
+            a = ports.find_free_port()
+            self.do_test_change_listen(ports, a)
 
 
 if __name__ == '__main__':
