@@ -454,6 +454,7 @@
 #define GPIO_PIN0_CLEAR GPIO_PIN0_WE
 #define RK3588_EVB_MACHINE "rk3588-evb"
 #define RK3588S_ROC_PC_MACHINE "rk3588s-roc-pc"
+#define ROCK_5B_PLUS_MACHINE "rock-5b-plus"
 
 static QTestState *rk3588_qtest_start(unsigned int cpus)
 {
@@ -6933,7 +6934,7 @@ static void test_rk3588s_roc_pc_rknpu_fdt(void)
     unlink(dtb);
 }
 
-static void test_rk3588_evb_rknpu_fdt(void)
+static void rk3588_test_rknpu_aggregate_fdt(const char *machine_type)
 {
     static const uint32_t core_base[] = {
         RK3588_RKNN0_PC_BASE,
@@ -7006,7 +7007,7 @@ static void test_rk3588_evb_rknpu_fdt(void)
         return;
     }
 
-    dtb = rk3588_dump_rknpu_dtb(RK3588_EVB_MACHINE);
+    dtb = rk3588_dump_rknpu_dtb(machine_type);
     g_assert_true(rk3588_fdt_has_node(fdtget, dtb, npu));
     g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdac0000"));
     g_assert_false(rk3588_fdt_has_node(fdtget, dtb, "/npu@fdad0000"));
@@ -7149,6 +7150,21 @@ static void test_rk3588_evb_rknpu_fdt(void)
                      g_array_index(iommu_phandle, uint32_t, 0));
 
     unlink(dtb);
+}
+
+static void test_rk3588_evb_rknpu_fdt(void)
+{
+    rk3588_test_rknpu_aggregate_fdt(RK3588_EVB_MACHINE);
+}
+
+static void test_rock_5b_plus_rknpu_fdt(void)
+{
+    if (!qtest_has_machine(ROCK_5B_PLUS_MACHINE)) {
+        g_test_skip(ROCK_5B_PLUS_MACHINE " machine not available");
+        return;
+    }
+
+    rk3588_test_rknpu_aggregate_fdt(ROCK_5B_PLUS_MACHINE);
 }
 
 static void test_rk3588_rknpu_version_and_cores(void)
@@ -16438,6 +16454,8 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588s-roc-pc/rknpu-fdt",
                    test_rk3588s_roc_pc_rknpu_fdt);
     qtest_add_func("/rk3588/rknpu-fdt", test_rk3588_evb_rknpu_fdt);
+    qtest_add_func("/rock-5b-plus/rknpu-fdt",
+                   test_rock_5b_plus_rknpu_fdt);
     qtest_add_func("/rk3588/rknpu-version-and-cores",
                    test_rk3588_rknpu_version_and_cores);
     qtest_add_func("/rk3588/rknpu-ppu-windows-all-cores",

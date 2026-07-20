@@ -305,9 +305,9 @@ the tested IOMMU translation or permission faults report ``0x5``, abort DMA,
 and do not add generic PC DMA read/write status bits.
 
 The generated RKNPU binding follows the selected board.  With ``rknpu=on``,
-``rk3588-evb`` exposes the aggregate ``rockchip,rk3588-rknpu`` node and
-four-window ``rockchip,iommu-v2`` node used by the Rockchip vendor driver.
-``rk3588s-roc-pc`` exposes three independent
+``rk3588-evb`` and ``rock-5b-plus`` expose the aggregate
+``rockchip,rk3588-rknpu`` node and four-window ``rockchip,iommu-v2`` node used
+by the Rockchip vendor driver.  ``rk3588s-roc-pc`` exposes three independent
 ``rockchip,rk3588-rknn-core`` nodes for the mainline Rocket driver.  Both
 bindings describe the same modeled MMIO, IRQ, and accelerator behavior; the
 machine type fixes only the board's guest-visible topology.
