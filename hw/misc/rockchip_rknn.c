@@ -1555,15 +1555,29 @@ static bool rockchip_rknn_dpu_ew_is_supported(uint32_t cfg,
     return data_mode == 0 && data_size == 0;
 }
 
-static bool rockchip_rknn_dpu_qd_cpend_is_supported(
+static bool rockchip_rknn_dpu_qd_bs_ow_is_supported(
     const RockchipRKNNPipelineTask *task)
 {
-    uint32_t expected = task->core.depthwise ?
+    uint32_t cpend_cfg = task->core.depthwise ?
+        ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE :
+        ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV;
+    uint32_t no_cpend_cfg = task->core.depthwise ?
+        ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE_NO_CPEND :
+        ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV_NO_CPEND;
+
+    return (task->dpu.bs_ow_cfg == cpend_cfg ||
+            task->dpu.bs_ow_cfg == no_cpend_cfg) &&
+           task->dpu.bs_ow_op == ROCKCHIP_RKNN_DPU_BS_OW_OP_SUPPORTED;
+}
+
+static bool rockchip_rknn_dpu_qd_uses_cpend(
+    const RockchipRKNNPipelineTask *task)
+{
+    uint32_t cpend_cfg = task->core.depthwise ?
         ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE :
         ROCKCHIP_RKNN_DPU_BS_OW_CFG_CONV;
 
-    return task->dpu.bs_ow_cfg == expected &&
-           task->dpu.bs_ow_op == ROCKCHIP_RKNN_DPU_BS_OW_OP_SUPPORTED;
+    return task->dpu.bs_ow_cfg == cpend_cfg;
 }
 
 static bool rockchip_rknn_brdma_layout_is_supported(
@@ -3252,7 +3266,7 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
         task->dpu_rdma.width == task->dpu.output.width &&
         task->dpu_rdma.height == task->dpu.output.height &&
         task->dpu_rdma.channels == task->dpu.output.channels &&
-        rockchip_rknn_dpu_qd_cpend_is_supported(task) &&
+        rockchip_rknn_dpu_qd_bs_ow_is_supported(task) &&
         (stage->bs_mul_cfg & ROCKCHIP_RKNN_DPU_MUL_SOURCE) &&
         !(stage->bs_mul_cfg & ROCKCHIP_RKNN_DPU_MUL_TRUNCATE_SOURCE) &&
         (erdma_disabled ?
@@ -3266,8 +3280,8 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
             task->dpu_rdma.height != task->dpu.output.height ||
             task->dpu_rdma.channels != task->dpu.output.channels) {
             *reason = "dpu-qd-rdma-shape";
-        } else if (!rockchip_rknn_dpu_qd_cpend_is_supported(task)) {
-            *reason = "dpu-qd-cpend";
+        } else if (!rockchip_rknn_dpu_qd_bs_ow_is_supported(task)) {
+            *reason = "dpu-qd-bs-ow";
         } else if (!(stage->bs_mul_cfg & ROCKCHIP_RKNN_DPU_MUL_SOURCE) ||
                    (stage->bs_mul_cfg &
                     ROCKCHIP_RKNN_DPU_MUL_TRUNCATE_SOURCE)) {
@@ -3306,7 +3320,7 @@ static RockchipRKNNExecutionMode rockchip_rknn_execution_mode(
         *reason = "dpu-int8-brdma";
         return ROCKCHIP_RKNN_EXECUTION_DPU_INT8_BRDMA;
     }
-    if (task->dpu.output_precision == 0 && task->core.quantify &&
+    if (task->dpu.output_precision == 0 &&
         task->enabled_blocks == dpu_blocks) {
         uint32_t bs_ow_cfg = task->core.depthwise ?
             ROCKCHIP_RKNN_DPU_BS_OW_CFG_DEPTHWISE_NO_CPEND :
@@ -6629,6 +6643,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
     }
     const bool int8_qd_brdma =
         mode == ROCKCHIP_RKNN_EXECUTION_DPU_INT8_QD_BRDMA;
+    const bool int8_qd_cpend = int8_qd_brdma &&
+        rockchip_rknn_dpu_qd_uses_cpend(task);
     const bool int8_writeback =
         mode == ROCKCHIP_RKNN_EXECUTION_DPU_INT8 || int8_qd_brdma ||
         mode == ROCKCHIP_RKNN_EXECUTION_DPU_INT8_BRDMA;
@@ -7166,8 +7182,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_pipeline(
                     const unsigned int lane = out % 8;
                     const uint8_t *coefficients = bs_data + group * 0x40;
                     int32_t alu = ldl_le_p(coefficients + lane * 4);
-                    int16_t cpend = lduw_le_p(
-                        coefficients + 0x20 + lane * 2);
+                    int16_t cpend = int8_qd_cpend ?
+                        lduw_le_p(coefficients + 0x20 + lane * 2) : 0;
                     int16_t mul = lduw_le_p(
                         coefficients + 0x30 + lane * 2);
 

@@ -319,12 +319,14 @@ channels, CNA ``WEIGHT_SIZE2`` supplies weight kernels, and DPU
 DPU WDMA channel, width, and height fields are checked against the cube size.
 The DPU ``DATA_CUBE_HEIGHT.MINMAX_CTL`` field is decoded and non-zero values
 are reported as unsupported until min/max output semantics are modeled.
-The INT8 QD BRDMA path additionally requires the board-validated external
-CPEND operand selection (``BS_OW_CFG=0x125`` for ordinary convolution and
-``0x36d`` for depthwise, with ``BS_OW_OP=0``); the corresponding BRDMA feature
-modes are ``0x7810`` and ``0x7816``.  Other CPEND operand and bypass modes are
-reported as unsupported until their semantics are modeled.  Hardware-level
-shape checks use the documented register
+The INT8 QD BRDMA path supports the board-validated external CPEND operand
+selection (``BS_OW_CFG=0x125`` for ordinary convolution and ``0x36d`` for
+depthwise) and CPEND bypass (``0x124`` and ``0x36c``, respectively), all with
+``BS_OW_OP=0``.  The corresponding BRDMA feature modes are ``0x7810`` and
+``0x7816``.  Board differentials with non-zero CPEND data show that the
+external modes consume the operand while the bypass modes do not.  Other
+CPEND operand sources are reported as unsupported until their semantics are
+modeled.  Hardware-level shape checks use the documented register
 relationships.  The direct INT32 executor uses a four-channel storage atom.
 The depthwise INT32 path derives its channel-plane width and rows per surface
 from the DPU cube channels, valid channels, output atom, and ``SURFACE_ADD``;
