@@ -25,7 +25,7 @@ The ``k3-pico-itx`` machine supports:
 * an ACLINT software interrupt and machine timer block with a 24 MHz timebase;
 * machine- and supervisor-level APLIC and IMSIC interrupt controllers;
 * the 8250-compatible UART0 at ``0xd4017000``, using interrupt source 42;
-* the SDHCI0 controller at ``0xd4280000``, using interrupt source 99; and
+* the SDHCI0 controller at ``0xd4280000``, using interrupt source 99;
 * the SD clock/reset and boot-mode registers used by U-Boot; and
 * the standard RISC-V register interface of the T100 IOMMU at ``0xc0f00000``,
   using interrupt source 234.
