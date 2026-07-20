@@ -18,6 +18,7 @@
 #include "hw/intc/riscv_aplic.h"
 #include "hw/intc/riscv_imsic.h"
 #include "hw/riscv/boot.h"
+#include "hw/riscv/iommu.h"
 #include "hw/riscv/machines-qom.h"
 #include "hw/riscv/spacemit-k3.h"
 #include "hw/sd/sd.h"
@@ -38,6 +39,7 @@
 const MemMapEntry spacemit_k3_memmap[] = {
     [K3_DEV_SRAM]         = { 0xc0800000,      0x80000 },
     [K3_DEV_DDR_TRAINING] = { 0xc08d0000,     0x100 },
+    [K3_DEV_IOMMU]        = { 0xc0f00000,     0x1000 },
     [K3_DEV_UART0]        = { 0xd4017000,        0x100 },
     [K3_DEV_SDHCI0]       = { 0xd4280000,        0x200 },
     [K3_DEV_APMU]         = { 0xd4282800,        0x400 },
@@ -177,6 +179,25 @@ static void spacemit_k3_soc_reset(void *opaque)
            spacemit_k3_memmap[K3_DEV_DDR_TRAINING].size);
 }
 
+static bool k3_pico_itx_create_iommu(SpacemitK3SoCState *s, Error **errp)
+{
+    s->iommu = qdev_new(TYPE_RISCV_IOMMU_SYS);
+    object_property_add_child(OBJECT(s), "iommu", OBJECT(s->iommu));
+    object_property_set_uint(OBJECT(s->iommu), "addr",
+                             spacemit_k3_memmap[K3_DEV_IOMMU].base,
+                             &error_abort);
+    object_property_set_uint(OBJECT(s->iommu), "base-irq",
+                             K3_PICO_ITX_IOMMU_IRQ, &error_abort);
+    object_property_set_uint(OBJECT(s->iommu), "irq-count", 1,
+                             &error_abort);
+    object_property_set_uint(OBJECT(s->iommu), "pas-bits", 56,
+                             &error_abort);
+    object_property_set_link(OBJECT(s->iommu), "irqchip",
+                             OBJECT(s->m_aplic), &error_abort);
+
+    return sysbus_realize_and_unref(SYS_BUS_DEVICE(s->iommu), errp);
+}
+
 static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
 {
     SpacemitK3SoCState *s = SPACEMIT_K3_SOC(dev);
@@ -244,6 +265,10 @@ static void spacemit_k3_soc_realize(DeviceState *dev, Error **errp)
         K3_PICO_ITX_TIMEBASE_FREQ, true);
 
     k3_pico_itx_create_aia(s);
+
+    if (!k3_pico_itx_create_iommu(s, errp)) {
+        return;
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->apmu), errp)) {
         return;

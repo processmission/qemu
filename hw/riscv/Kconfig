@@ -94,6 +94,7 @@ config SPACEMIT_K3
     select RISCV_ACLINT
     select RISCV_APLIC
     select RISCV_IMSIC
+    select RISCV_IOMMU
     select SERIAL_MM
     select SPACEMIT_K3_CTRL
     select SPACEMIT_K3_SDHCI

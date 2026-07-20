@@ -23,10 +23,12 @@ The ``k3-pico-itx`` machine supports:
 * a 32 MiB firmware window starting at ``0x100000000``;
 * 512 KiB of on-chip SRAM starting at ``0xc0800000``;
 * an ACLINT software interrupt and machine timer block with a 24 MHz timebase;
-* machine- and supervisor-level APLIC and IMSIC interrupt controllers; and
+* machine- and supervisor-level APLIC and IMSIC interrupt controllers;
 * the 8250-compatible UART0 at ``0xd4017000``, using interrupt source 42;
 * the SDHCI0 controller at ``0xd4280000``, using interrupt source 99; and
-* the SD clock/reset and boot-mode registers used by U-Boot.
+* the SD clock/reset and boot-mode registers used by U-Boot; and
+* the standard RISC-V register interface of the T100 IOMMU at ``0xc0f00000``,
+  using interrupt source 234.
 
 Boot options
 ------------
@@ -99,3 +101,15 @@ The A100 and IME harts, eMMC, UFS, SPI flash, PCIe, networking, multimedia
 accelerators, system power management, and most board peripherals are not
 implemented.  SDHCI0 implements the register and DMA behavior required by the
 documented U-Boot-to-Linux path, not every vendor PHY tuning mode.
+
+The IOMMU exposes the standard 4 KiB register window and its single wired
+interrupt.  The machine does not modify the external device tree; the SDK DTS
+currently marks this node disabled, so a guest DTB must enable it before Linux
+can probe it.  No requester is attached yet: K3 maps PCIe0 through PCIe2 to the
+IOMMU, but those host bridges are not modeled, while SDHCI0 is not an IOMMU
+client in the K3 DTS.
+
+The T100 distributed IOATCs, vendor performance events and filters, hybrid
+WSI/MSI interrupt behavior, and PCIe ATS/PRI paths are also not modeled.  The
+reported 56-bit physical address size is a QEMU platform-model choice rather
+than a measured K3 capability value.
