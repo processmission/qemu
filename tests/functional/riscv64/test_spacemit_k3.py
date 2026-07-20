@@ -5,19 +5,24 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 """
-Boot pinned SpacemiT K3 SDK Linux images on k3-pico-itx.
+Boot pinned SpacemiT K3 SDK and eweOS assets on k3-pico-itx.
 """
 
 from qemu_test import Asset, QemuSystemTest
+from qemu_test import exec_command_and_wait_for_pattern
 from qemu_test import wait_for_console_pattern
 
 
 class SpacemitK3Test(QemuSystemTest):
-    """Test direct and U-Boot K3 Pico-ITX Linux boot paths."""
+    """Test direct SDK, eweOS, and U-Boot K3 Pico-ITX boot paths."""
 
     RELEASE_URL = (
         'https://github.com/zevorn/spacemit-k3-qemu-images/releases/'
         'download/sdk-v1.0.2-qemu2/'
+    )
+    EWEOS_RELEASE_URL = (
+        'https://github.com/zevorn/spacemit-k3-qemu-images/releases/'
+        'download/eweos-20260425-k3-qemu1/'
     )
 
     ASSET_KERNEL = Asset(
@@ -41,6 +46,9 @@ class SpacemitK3Test(QemuSystemTest):
     ASSET_SD_IMAGE = Asset(
         RELEASE_URL + 'k3-qemu-sd.raw.xz',
         'b00d9abd9c65e25346c2f76b304af0785755b2fcf49ea7faf6ec877228f32e65')
+    ASSET_EWEOS_INITRAMFS = Asset(
+        EWEOS_RELEASE_URL + 'eweos-k3-initramfs.cpio.gz',
+        'c9631666e2a9d0c7ed220ff31cc2d91d603907ca4e6863e8cfac6f6ca4d796f4')
 
     def _wait_for_linux_boot(self):
         panic = 'Kernel panic - not syncing'
@@ -89,6 +97,50 @@ class SpacemitK3Test(QemuSystemTest):
         self.vm.set_console()
         self.vm.launch()
         self._wait_for_linux_boot()
+
+    def test_eweos_boot(self):
+        self.set_machine('k3-pico-itx')
+
+        kernel_path = self.ASSET_KERNEL.fetch()
+        firmware_path = self.ASSET_FIRMWARE.fetch()
+        initramfs_path = self.ASSET_EWEOS_INITRAMFS.fetch()
+        dtb_path = self.ASSET_DTB.fetch()
+
+        kernel_command_line = (
+            'earlycon=uart8250,mmio32,0xd4017000,115200 '
+            'console=ttyS0,115200 rdinit=/init'
+        )
+        self.vm.add_args('-bios', firmware_path,
+                         '-kernel', kernel_path,
+                         '-initrd', initramfs_path,
+                         '-dtb', dtb_path,
+                         '-append', kernel_command_line,
+                         '-no-reboot')
+        self.vm.set_console()
+        self.vm.launch()
+
+        panic = 'Kernel panic - not syncing'
+        expected = (
+            'Linux version 6.18.3-g0ffac20d9ef9',
+            ('Machine model: SpacemiT K3 Pico-ITX '
+             '(QEMU Linux-first subset)'),
+            'smp: Brought up 1 node, 8 CPUs',
+            'Run /init as init process',
+            'EWEOS_K3_BOOT: name=eweOS id=ewe build=rolling',
+            'EWEOS_K3_BOOT: machine=riscv64 cpus=8',
+            'EWEOS_K3_BOOT_PASS',
+        )
+        for pattern in expected:
+            wait_for_console_pattern(self, pattern, panic)
+
+        exec_command_and_wait_for_pattern(
+            self, 'cat /etc/os-release', 'PRETTY_NAME="eweOS"', panic)
+        exec_command_and_wait_for_pattern(
+            self, '/usr/bin/bash --version',
+            'riscv64-unknown-linux-musl', panic)
+        exec_command_and_wait_for_pattern(
+            self, "printf 'EWEOS_K3_FUNCTIONAL_PASS\\n'",
+            'EWEOS_K3_FUNCTIONAL_PASS', panic)
 
     def test_uboot_sd_boot(self):
         self.set_machine('k3-pico-itx')
