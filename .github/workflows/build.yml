@@ -1,6 +1,12 @@
 name: Upstream QEMU CI
 
-on: push
+on:
+  push:
+    branches:
+      - devel
+  pull_request:
+    branches:
+      - devel
 
 env:
   # p-b-o/qemu-ci is an upstream-series runner. This downstream tree carries
@@ -33,9 +39,12 @@ jobs:
           fetch-depth: 0
       - id: patch-range
         env:
-          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
-          REF_NAME: ${{ github.ref_name }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -47,19 +56,28 @@ jobs:
               exit 0
           fi
 
-          base_ref="$(gh pr list --repo "$REPOSITORY" --head "$REF_NAME" \
-              --state open --json baseRefName --jq '.[0].baseRefName // ""')"
-          if [ -z "$base_ref" ]; then
-              echo "No open PR found for $REF_NAME; skipping checkpatch"
-              echo "range=" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+              if [ -z "$BASE_REF" ] || [ -z "$PR_HEAD_SHA" ]; then
+                  echo "::error::Missing pull request range metadata"
+                  exit 1
+              fi
+
+              git fetch --no-tags origin "$BASE_REF"
+              base="$(git merge-base "origin/$BASE_REF" "$PR_HEAD_SHA")"
+              echo "range=$base..$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
               exit 0
           fi
 
-          git fetch --no-tags origin "$base_ref"
-          base="$(git merge-base "origin/$base_ref" HEAD)"
-          echo "range=$base..HEAD" >> "$GITHUB_OUTPUT"
-      - if: ${{ steps.patch-range.outputs.range != '' }}
-        run: ./scripts/checkpatch.pl "${{ steps.patch-range.outputs.range }}"
+          if [ "$EVENT_NAME" != "push" ] || [ -z "$PUSH_BEFORE_SHA" ]; then
+              echo "::error::Missing push range metadata"
+              exit 1
+          fi
+
+          base="$(git merge-base "$PUSH_BEFORE_SHA" "$CURRENT_SHA")"
+          echo "range=$base..$CURRENT_SHA" >> "$GITHUB_OUTPUT"
+      - run: >
+          ./scripts/checkpatch.pl --no-strict
+          "${{ steps.patch-range.outputs.range }}"
 
   # Use prebuilt images instead of rebuilding them in CI.
   build-cross:
