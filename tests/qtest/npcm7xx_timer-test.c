@@ -444,7 +444,7 @@ static void test_periodic_no_interrupt(gconstpointer test_data)
     tim_write_tcsr(td, CEN | MODE_PERIODIC | PRESCALE(ps));
 
     for (i = 0; i < 4; i++) {
-        clock_step_next();
+        clock_step(tim_calculate_step(count, ps));
 
         g_assert_cmphex(tim_read(td, TISR), ==, tim_timer_bit(td));
         g_assert_false(qtest_get_irq(global_qtest, tim_timer_irq(td)));
@@ -470,7 +470,7 @@ static void test_periodic_interrupt(gconstpointer test_data)
     tim_write_tcsr(td, CEN | IE | MODE_PERIODIC | PRESCALE(ps));
 
     for (i = 0; i < 4; i++) {
-        clock_step_next();
+        clock_step(tim_calculate_step(count, ps));
 
         g_assert_cmphex(tim_read(td, TISR), ==, tim_timer_bit(td));
         g_assert_true(qtest_get_irq(global_qtest, tim_timer_irq(td)));
