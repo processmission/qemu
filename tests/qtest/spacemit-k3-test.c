@@ -7,8 +7,10 @@
 #include "qemu/osdep.h"
 #include <glib/gstdio.h>
 #include <libfdt.h>
+#include "qemu/bitops.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"
+#include "hw/riscv/riscv-iommu-bits.h"
 #include "libqtest.h"
 #include "qobject/qdict.h"
 #include "qobject/qlist.h"
@@ -21,6 +23,7 @@
 #define K3_SRAM_SIZE                  UINT64_C(0x80000)
 #define K3_DDR_TRAINING_BASE          UINT64_C(0xc08d0000)
 #define K3_DDR_TRAINING_SIZE          UINT64_C(0x100)
+#define K3_IOMMU_BASE                 UINT64_C(0xc0f00000)
 #define K3_UART0_BASE                 UINT64_C(0xd4017000)
 #define K3_UART0_SIZE                 UINT64_C(0x100)
 #define K3_SDHCI0_BASE                UINT64_C(0xd4280000)
@@ -59,6 +62,7 @@
 
 #define K3_UART0_IRQ                  42
 #define K3_SDHCI0_IRQ                 99
+#define K3_IOMMU_IRQ                  234
 #define UART_RBR                      0x00
 #define UART_IER                      0x04
 #define UART_LSR                      0x14
@@ -527,6 +531,56 @@ static void test_imsic_hart_routing(void)
     qtest_quit(qts);
 }
 
+static void test_iommu_registers(void)
+{
+    QTestState *qts = k3_qtest_init();
+    uint64_t cap = qtest_readq(qts, K3_IOMMU_BASE + RISCV_IOMMU_REG_CAP);
+
+    g_assert_cmphex(cap & RISCV_IOMMU_CAP_VERSION, ==, 0x10);
+    g_assert_cmphex(cap & RISCV_IOMMU_CAP_IGS, ==,
+                    (uint64_t)RISCV_IOMMU_CAP_IGS_BOTH << 28);
+    g_assert_cmphex(cap & RISCV_IOMMU_CAP_HPM, ==, RISCV_IOMMU_CAP_HPM);
+    g_assert_cmphex(cap & RISCV_IOMMU_CAP_PAS, ==, UINT64_C(56) << 32);
+
+    qtest_writel(qts, K3_IOMMU_BASE + RISCV_IOMMU_REG_ICVEC, UINT16_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                               K3_IOMMU_BASE + RISCV_IOMMU_REG_ICVEC), ==, 0);
+
+    qtest_writel(qts, K3_IOMMU_BASE + RISCV_IOMMU_REG_FCTL,
+                 RISCV_IOMMU_FCTL_WSI);
+    g_assert_cmphex(qtest_readl(qts,
+                               K3_IOMMU_BASE + RISCV_IOMMU_REG_FCTL), ==,
+                    RISCV_IOMMU_FCTL_WSI);
+
+    qtest_quit(qts);
+}
+
+static void test_iommu_aplic_imsic(void)
+{
+    const unsigned int eiid = 12;
+    QTestState *qts = k3_qtest_init();
+
+    k3_route_s_aplic_irq(qts, K3_IOMMU_IRQ, eiid);
+    qtest_writel(qts, K3_IOMMU_BASE + RISCV_IOMMU_REG_FCTL,
+                 RISCV_IOMMU_FCTL_WSI);
+    qtest_writeq(qts, K3_IOMMU_BASE + RISCV_IOMMU_REG_IOHPMCYCLES,
+                 INT64_MAX - 9);
+    qtest_clock_step(qts, 10);
+
+    g_assert_cmphex(qtest_readl(qts,
+                               K3_IOMMU_BASE + RISCV_IOMMU_REG_IOCOUNTOVF) &
+                    RISCV_IOMMU_IOCOUNTOVF_CY, ==,
+                    RISCV_IOMMU_IOCOUNTOVF_CY);
+    g_assert_cmphex(qtest_readl(qts,
+                               K3_IOMMU_BASE + RISCV_IOMMU_REG_IPSR) &
+                    RISCV_IOMMU_IPSR_PMIP, ==, RISCV_IOMMU_IPSR_PMIP);
+    g_assert_cmphex(k3_csr_get(qts, 0, CSR_MIP) & MIP_SEIP, ==, MIP_SEIP);
+    k3_imsic_claim(qts, 0, false, eiid);
+    g_assert_cmphex(k3_csr_get(qts, 0, CSR_MIP) & MIP_SEIP, ==, 0);
+
+    qtest_quit(qts);
+}
+
 static bool k3_wait_for_uart_rx(QTestState *qts)
 {
     for (unsigned int i = 0; i < 10000; i++) {
@@ -770,6 +824,9 @@ int main(int argc, char **argv)
                        test_cpu_requires_vector);
         qtest_add_func("spacemit-k3/timer-sstc", test_timer_and_sstc);
         qtest_add_func("spacemit-k3/imsic-routing", test_imsic_hart_routing);
+        qtest_add_func("spacemit-k3/iommu-registers", test_iommu_registers);
+        qtest_add_func("spacemit-k3/iommu-aplic-imsic",
+                       test_iommu_aplic_imsic);
         qtest_add_func("spacemit-k3/uart-aplic-imsic",
                        test_uart_aplic_imsic);
         qtest_add_func("spacemit-k3/sd-boot-registers",

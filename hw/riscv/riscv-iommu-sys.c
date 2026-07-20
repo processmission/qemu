@@ -31,8 +31,6 @@
 
 #include "riscv-iommu.h"
 
-#define RISCV_IOMMU_SYSDEV_ICVEC_VECTORS 0x3333
-
 #define RISCV_IOMMU_PCI_MSIX_VECTORS 5
 
 /* RISC-V IOMMU System Platform Device Emulation */
@@ -41,6 +39,7 @@ struct RISCVIOMMUStateSys {
     SysBusDevice     parent;
     uint64_t         addr;
     uint32_t         base_irq;
+    uint32_t         irq_count;
     DeviceState      *irqchip;
     RISCVIOMMUState  iommu;
 
@@ -182,7 +181,17 @@ static void riscv_iommu_sys_realize(DeviceState *dev, Error **errp)
     PCIBus *pci_bus;
     qemu_irq irq;
 
-    qdev_realize(DEVICE(&s->iommu), NULL, errp);
+    if (s->irq_count < 1 || s->irq_count > RISCV_IOMMU_INTR_COUNT) {
+        error_setg(errp, "irq-count must be between 1 and %u",
+                   RISCV_IOMMU_INTR_COUNT);
+        return;
+    }
+
+    s->iommu.icvec_avail_vectors =
+        UINT64_C(0x1111) * (s->irq_count - 1);
+    if (!qdev_realize(DEVICE(&s->iommu), NULL, errp)) {
+        return;
+    }
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iommu.regs_mr);
     if (s->addr) {
         sysbus_mmio_map(SYS_BUS_DEVICE(s), 0, s->addr);
@@ -195,8 +204,8 @@ static void riscv_iommu_sys_realize(DeviceState *dev, Error **errp)
 
     s->iommu.notify = riscv_iommu_sysdev_notify;
 
-    /* 4 IRQs are defined starting from s->base_irq */
-    for (int i = 0; i < RISCV_IOMMU_INTR_COUNT; i++) {
+    /* Wired IRQs are defined starting from s->base_irq. */
+    for (unsigned int i = 0; i < s->irq_count; i++) {
         sysbus_init_irq(sysdev, &s->irqs[i]);
         irq = qdev_get_gpio_in(s->irqchip, s->base_irq + i);
         sysbus_connect_irq(sysdev, i, irq);
@@ -213,13 +222,14 @@ static void riscv_iommu_sys_init(Object *obj)
     object_initialize_child(obj, "iommu", iommu, TYPE_RISCV_IOMMU);
     qdev_alias_all_properties(DEVICE(iommu), obj);
 
-    iommu->icvec_avail_vectors = RISCV_IOMMU_SYSDEV_ICVEC_VECTORS;
     riscv_iommu_set_cap_igs(iommu, RISCV_IOMMU_CAP_IGS_BOTH);
 }
 
 static const Property riscv_iommu_sys_properties[] = {
     DEFINE_PROP_UINT64("addr", RISCVIOMMUStateSys, addr, 0),
     DEFINE_PROP_UINT32("base-irq", RISCVIOMMUStateSys, base_irq, 0),
+    DEFINE_PROP_UINT32("irq-count", RISCVIOMMUStateSys, irq_count,
+                       RISCV_IOMMU_INTR_COUNT),
     DEFINE_PROP_LINK("irqchip", RISCVIOMMUStateSys, irqchip,
                      TYPE_DEVICE, DeviceState *),
 };

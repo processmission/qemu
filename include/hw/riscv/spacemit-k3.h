@@ -22,12 +22,14 @@
 #define K3_PICO_ITX_APLIC_NUM_SOURCES  512
 #define K3_PICO_ITX_APLIC_IPRIO_BITS   8
 #define K3_PICO_ITX_IMSIC_NUM_IDS      511
+#define K3_PICO_ITX_IOMMU_IRQ          234
 #define K3_PICO_ITX_UART0_IRQ          42
 #define K3_PICO_ITX_SDHCI0_IRQ         99
 
 enum {
     K3_DEV_SRAM,
     K3_DEV_DDR_TRAINING,
+    K3_DEV_IOMMU,
     K3_DEV_UART0,
     K3_DEV_SDHCI0,
     K3_DEV_APMU,
@@ -62,6 +64,7 @@ struct SpacemitK3SoCState {
     DeviceState *s_imsic[K3_PICO_ITX_NUM_HARTS];
     DeviceState *m_aplic;
     DeviceState *s_aplic;
+    DeviceState *iommu;
     DeviceState *swi;
     DeviceState *mtimer;
     SerialMM *uart0;
