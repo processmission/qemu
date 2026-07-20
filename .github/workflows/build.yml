@@ -11,6 +11,9 @@ env:
   # local board imports with cross-toolchain warnings, so keep Werror strictness
   # only for the source CI repository.
   QEMU_WERROR: ${{ github.repository == 'p-b-o/qemu-ci' && '--enable-werror' || '--disable-werror' }}
+  # Build documentation once in build-misc. Other jobs validate compilers,
+  # targets, or features and do not need duplicate Sphinx builds.
+  QEMU_DOCS: --disable-docs
   # Full thorough functional coverage includes host-sensitive GPU/KVM cases.
   # Keep it in p-b-o/qemu-ci; downstream runs use quick functional smoke.
   QEMU_FUNC_SUITES: ${{ github.repository == 'p-b-o/qemu-ci' && '--suite func-quick --suite func-thorough' || '--suite func-quick' }}
@@ -105,7 +108,7 @@ jobs:
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd)
           -w $(pwd)/tests/docker/
           docker.io/pboqemu/qemu-ci:${{matrix.container}}
-          env QEMU_SRC=$(pwd) QEMU_WERROR="${{ env.QEMU_WERROR }}" ENABLE_RUST=0 EXTRA_CONFIGURE_OPTS=--disable-docs INSTALL_DIR=/ BUILD_DIR=/tmp MAKEFLAGS="-j $(nproc)"
+          env QEMU_SRC=$(pwd) QEMU_WERROR="${{ env.QEMU_WERROR }}" ENABLE_RUST=0 EXTRA_CONFIGURE_OPTS="${{ env.QEMU_DOCS }}" INSTALL_DIR=/ BUILD_DIR=/tmp MAKEFLAGS="-j $(nproc)"
           ./test-build
 
   build:
@@ -115,10 +118,8 @@ jobs:
         include:
           - arch: x86_64
             image: ubuntu-24.04
-            configure_options: ""
           - arch: aarch64
             image: ubuntu-24.04-arm
-            configure_options: --disable-docs
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
@@ -127,8 +128,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }}
-          ${{ matrix.configure_options }} &&
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} &&
           ninja -C build install'
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -148,7 +148,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:fedora-win64-cross
-          bash -cx './configure ${{ env.QEMU_WERROR }} $QEMU_CONFIGURE_OPTS && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} $QEMU_CONFIGURE_OPTS && ninja -C build install'
 
   build-windows:
     needs: checkapply
@@ -196,7 +196,7 @@ jobs:
       - run: pushd ./MINGW-packages/mingw-w64-qemu && (makepkg --syncdeps --nobuild --noprepare --noconfirm --skippgpcheck PKGBUILD || true) && popd
       # Install debug tools (gflags, cdb), included in wdk:
       - run: /c/ProgramData/Chocolatey/bin/choco install -y windowsdriverkit11
-      - run: ./configure ${{ env.QEMU_WERROR }} --disable-docs && ninja -C build
+      - run: ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       # detect dll issue by loading qemu binary with cdb (run + quit)
       # enable verbose load debug with gflags
       # https://ten0s.github.io/blog/2022/07/01/debugging-dll-loading-errors
@@ -223,7 +223,7 @@ jobs:
       - run: |
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
-      - run: ./configure ${{ env.QEMU_WERROR }} && ninja -C build
+      - run: ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       - run: ./build/qemu-system-x86_64-unsigned -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
 
   build-freebsd:
@@ -239,7 +239,7 @@ jobs:
       - shell: freebsd {0}
         run: set -ex && pkg update && pkg install -y git gcc gmake python pkgconf pixman bison flex glib ninja
       - shell: freebsd {0}
-        run: cd /home/qemu && ./configure ${{ env.QEMU_WERROR }} && ninja -C build
+        run: cd /home/qemu && ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       - shell: freebsd {0}
         run: cd /home/qemu && ./build/qemu-x86_64 -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000  -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin ./build/qemu-x86_64 --version
       - shell: freebsd {0}
@@ -261,7 +261,7 @@ jobs:
       - shell: openbsd {0}
         run: set -ex && pkg_add dtc git pkgconf bzip2 xz ninja bash gmake gsed gettext-tools gnutls capstone sdl2 gtk+3 libxkbcommon zstd libslirp bison flex
       - shell: openbsd {0}
-        run: cd /home/qemu && ./configure ${{ env.QEMU_WERROR }} && ninja -C build
+        run: cd /home/qemu && ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       # split-wx=on: https://gitlab.com/qemu-project/qemu/-/issues/2685
       - shell: openbsd {0}
         run: cd /home/qemu && ./build/qemu-system-x86_64 -accel tcg,split-wx=on -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
@@ -272,10 +272,13 @@ jobs:
     steps:
       - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
+      # Sphinx maps -j auto to Python's CPU count; keep its workers serial.
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-user --disable-system --enable-docs --enable-tools && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-user --disable-system --enable-docs --enable-tools &&
+          PYTHON_CPU_COUNT=1 ninja -C build sphinxdocs &&
+          ninja -C build install'
 
   build-big-endian:
     needs: checkapply
@@ -286,7 +289,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian-s390x-cross
-          bash -cx './configure ${{ env.QEMU_WERROR }} $QEMU_CONFIGURE_OPTS && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} $QEMU_CONFIGURE_OPTS && ninja -C build install'
 
   build-debug:
     needs: checkapply
@@ -297,7 +300,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --enable-rust --enable-debug --enable-modules && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --enable-rust --enable-debug --enable-modules && ninja -C build install'
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
@@ -312,7 +315,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-system --disable-tools --disable-guest-agent --disable-docs --static && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --disable-system --disable-tools --disable-guest-agent --static && ninja -C build install'
 
   build-tsan:
     needs: checkapply
@@ -323,7 +326,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --enable-tsan && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --enable-tsan && ninja -C build install'
 
   build-clang:
     needs: checkapply
@@ -334,7 +337,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --cxx=clang++ --cc=clang --host-cc=clang --enable-debug && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --cxx=clang++ --cc=clang --host-cc=clang --enable-debug && ninja -C build install'
 
   build-clang-22:
     needs: checkapply
@@ -347,7 +350,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx 'cp /usr/bin/echo /usr/bin/sqv && LLVM_VERSION=22 && apt update && apt install -y lsb-release wget gnupg && wget https://apt.llvm.org/llvm.sh && bash llvm.sh ${LLVM_VERSION} && ./configure ${{ env.QEMU_WERROR }} --disable-docs --cxx=clang++-${LLVM_VERSION} --cc=clang-${LLVM_VERSION} --host-cc=clang-${LLVM_VERSION} --enable-debug && ninja -C build install'
+          bash -cx 'cp /usr/bin/echo /usr/bin/sqv && LLVM_VERSION=22 && apt update && apt install -y lsb-release wget gnupg && wget https://apt.llvm.org/llvm.sh && bash llvm.sh ${LLVM_VERSION} && ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --cxx=clang++-${LLVM_VERSION} --cc=clang-${LLVM_VERSION} --host-cc=clang-${LLVM_VERSION} --enable-debug && ninja -C build install'
 
   build-kvm-only:
     needs: checkapply
@@ -362,7 +365,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian-${{matrix.arch}}-cross
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-tcg $QEMU_CONFIGURE_OPTS && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --disable-tcg $QEMU_CONFIGURE_OPTS && ninja -C build install'
 
   build-minimal:
     needs: checkapply
@@ -373,7 +376,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --without-default-features --without-default-devices --disable-kvm --disable-tcg && ninja -C build install'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --without-default-features --without-default-devices --disable-kvm --disable-tcg && ninja -C build install'
 
   build-oss-fuzz:
     needs: checkapply
@@ -407,7 +410,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
       - run: >
           podman run --pull newer --init --privileged --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
@@ -434,7 +437,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
       - run: bash -c "[ -e /dev/kvm ] && sudo chown $USER:$USER /dev/kvm || true"
       # run podman without -t to avoid interactive output of meson test
       - run: >
@@ -464,7 +467,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --enable-rust --enable-debug-tcg --enable-debug-graph-lock --enable-debug-mutex && ninja -C build'
       - run: bash -c "[ -e /dev/kvm ] && sudo chown $USER:$USER /dev/kvm || true"
       # run podman without -t to avoid interactive output of meson test
       - run: >
@@ -487,7 +490,7 @@ jobs:
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
           docker.io/pboqemu/qemu-ci:debian
-          bash -cx './configure ${{ env.QEMU_WERROR }} --disable-docs --target-list=aarch64-softmmu && ninja -C build qemu-system-aarch64 qemu-img'
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --target-list=aarch64-softmmu && ninja -C build qemu-system-aarch64 qemu-img'
       - run: |
           podman run --pull newer --init --privileged --rm -i \
               -v $(pwd):$(pwd) -w $(pwd) \
