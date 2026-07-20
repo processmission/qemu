@@ -22,7 +22,7 @@ class SpacemitK3Test(QemuSystemTest):
     )
     EWEOS_RELEASE_URL = (
         'https://github.com/zevorn/spacemit-k3-qemu-images/releases/'
-        'download/eweos-20260425-k3-qemu1/'
+        'download/eweos-20260425-k3-qemu2/'
     )
 
     ASSET_KERNEL = Asset(
@@ -48,7 +48,7 @@ class SpacemitK3Test(QemuSystemTest):
         'b00d9abd9c65e25346c2f76b304af0785755b2fcf49ea7faf6ec877228f32e65')
     ASSET_EWEOS_INITRAMFS = Asset(
         EWEOS_RELEASE_URL + 'eweos-k3-initramfs.cpio.gz',
-        'c9631666e2a9d0c7ed220ff31cc2d91d603907ca4e6863e8cfac6f6ca4d796f4')
+        '911c88733ca5c8c76311033cc051f1672b94861ef8a525368f5cd9d4b64fc943')
 
     def _wait_for_linux_boot(self):
         panic = 'Kernel panic - not syncing'
@@ -138,6 +138,11 @@ class SpacemitK3Test(QemuSystemTest):
         exec_command_and_wait_for_pattern(
             self, '/usr/bin/bash --version',
             'riscv64-unknown-linux-musl', panic)
+        exec_command_and_wait_for_pattern(
+            self, ("fastfetch --logo none && "
+                   "printf 'EWEOS_K3_FASTFETCH_PASS\\n'"),
+            'eweOS riscv64', panic)
+        wait_for_console_pattern(self, 'EWEOS_K3_FASTFETCH_PASS', panic)
         exec_command_and_wait_for_pattern(
             self, "printf 'EWEOS_K3_FUNCTIONAL_PASS\\n'",
             'EWEOS_K3_FUNCTIONAL_PASS', panic)
