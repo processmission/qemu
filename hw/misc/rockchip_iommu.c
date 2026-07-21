@@ -3,8 +3,8 @@
  *
  * This is a minimal RK3588-oriented model for Linux rockchip-iommu driver
  * bring-up. It accepts the control path used for domain attach/map/zap and
- * exposes bounded v2 page-table translation to the RKNN functional backend.
- * It does not generate IOMMU faults/IRQs.
+ * exposes bounded v2 page-table translation through QEMU's standard IOMMU
+ * memory-region interface. It does not generate IOMMU faults/IRQs.
  *
  * Copyright (c) 2026 Process Mission
  *
@@ -16,6 +16,7 @@
 #include "hw/core/registerfields.h"
 #include "hw/misc/rockchip_iommu.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/module.h"
 #include "system/dma.h"
 #include "trace.h"
@@ -61,6 +62,7 @@ enum {
 #define ROCKCHIP_IOMMU_V2_DESC_HI_MASK2 0x000000f0U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT1 24
 #define ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT2 32
+#define ROCKCHIP_IOMMU_PAGE_SIZE 0x1000
 
 static unsigned int rockchip_iommu_bank(RegisterInfo *reg)
 {
@@ -106,11 +108,10 @@ static hwaddr rockchip_iommu_v2_desc_address(uint32_t desc)
            (raw & ROCKCHIP_IOMMU_V2_DESC_ADDRESS_MASK);
 }
 
-static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
-                                             unsigned int i, uint32_t iova,
-                                             bool check_access, bool write,
-                                             hwaddr *phys,
-                                             const char **reason)
+static bool rockchip_iommu_bank_translate(RockchipIOMMUState *s,
+                                          unsigned int i, uint32_t iova,
+                                          hwaddr *phys,
+                                          IOMMUAccessFlags *perm)
 {
     hwaddr dt_addr = rockchip_iommu_v2_desc_address(s->regs[i][R_DTE_ADDR]);
     uint32_t dte_index = extract32(iova, 22, 10);
@@ -119,48 +120,35 @@ static bool rockchip_iommu_bank_iova_to_phys(RockchipIOMMUState *s,
     uint32_t dte;
     uint32_t pte;
 
-    if (check_access && !(s->regs[i][R_STATUS] &
-                          R_STATUS_PAGING_ENABLED_MASK)) {
-        *reason = "paging-disabled";
+    if (!(s->regs[i][R_STATUS] & R_STATUS_PAGING_ENABLED_MASK)) {
         return false;
     }
 
     if (!dt_addr) {
-        *reason = "no-dte-addr";
         return false;
     }
 
     if (!rockchip_iommu_read_u32(dt_addr + dte_index * sizeof(uint32_t),
                                  &dte)) {
-        *reason = "dte-read-failed";
         return false;
     }
 
     if (!(dte & ROCKCHIP_IOMMU_DTE_VALID)) {
-        *reason = "dte-invalid";
         return false;
     }
 
     if (!rockchip_iommu_read_u32(rockchip_iommu_v2_desc_address(dte) +
                                  pte_index * sizeof(uint32_t), &pte)) {
-        *reason = "pte-read-failed";
         return false;
     }
 
     if (!(pte & ROCKCHIP_IOMMU_PTE_VALID)) {
-        *reason = "pte-invalid";
-        return false;
-    }
-
-    if (check_access &&
-        ((write && !(pte & ROCKCHIP_IOMMU_PTE_WRITABLE)) ||
-         (!write && !(pte & ROCKCHIP_IOMMU_PTE_READABLE)))) {
-        *reason = write ? "pte-not-writable" : "pte-not-readable";
         return false;
     }
 
     *phys = rockchip_iommu_v2_desc_address(pte) + page_offset;
-    *reason = "ok";
+    *perm = IOMMU_ACCESS_FLAG(pte & ROCKCHIP_IOMMU_PTE_READABLE,
+                              pte & ROCKCHIP_IOMMU_PTE_WRITABLE);
     return true;
 }
 
@@ -176,64 +164,116 @@ static bool rockchip_iommu_paging_enabled(RockchipIOMMUState *s,
     return false;
 }
 
-bool rockchip_iommu_iova_to_phys(RockchipIOMMUState *s, uint32_t iova,
-                                 hwaddr *phys, unsigned int *bank,
-                                 const char **reason)
+static IOMMUTLBEntry rockchip_iommu_translate_internal(
+    RockchipIOMMUState *s, hwaddr addr, IOMMUAccessFlags flag,
+    unsigned int *translated_bank)
 {
     unsigned int num_mmu = MIN(s->num_mmu, ROCKCHIP_IOMMU_MAX_MMU);
+    IOMMUTLBEntry entry = {
+        .target_as = &address_space_memory,
+        .iova = addr & ~(ROCKCHIP_IOMMU_PAGE_SIZE - 1),
+        .translated_addr = 0,
+        .addr_mask = ROCKCHIP_IOMMU_PAGE_SIZE - 1,
+        .perm = IOMMU_NONE,
+    };
+    IOMMUAccessFlags perm;
+    hwaddr phys;
 
-    if (!num_mmu) {
-        *reason = "no-mmu-bank";
-        return false;
+    if (!num_mmu || addr > UINT32_MAX) {
+        return entry;
     }
 
     if (!rockchip_iommu_paging_enabled(s, num_mmu)) {
-        *phys = iova;
-        *bank = 0;
-        *reason = "paging-disabled-bypass";
-        return true;
+        entry.translated_addr = entry.iova;
+        entry.perm = IOMMU_RW;
+        if (translated_bank) {
+            *translated_bank = 0;
+        }
+        return entry;
     }
 
     for (unsigned int i = 0; i < num_mmu; i++) {
-        if (rockchip_iommu_bank_iova_to_phys(s, i, iova, false, false,
-                                             phys, reason)) {
-            *bank = i;
-            return true;
+        if (rockchip_iommu_bank_translate(s, i, addr, &phys, &perm) &&
+            (flag == IOMMU_NONE || (perm & flag) == flag)) {
+            entry.translated_addr = phys & ~entry.addr_mask;
+            entry.perm = perm;
+            if (translated_bank) {
+                *translated_bank = i;
+            }
+            return entry;
         }
     }
 
-    *bank = 0;
-    return false;
+    return entry;
 }
 
-bool rockchip_iommu_translate(RockchipIOMMUState *s, uint32_t iova,
-                              bool write, hwaddr *phys,
-                              unsigned int *bank, const char **reason)
+static IOMMUTLBEntry rockchip_iommu_memory_region_translate(
+    IOMMUMemoryRegion *iommu, hwaddr addr, IOMMUAccessFlags flag,
+    int iommu_idx)
 {
-    unsigned int num_mmu = MIN(s->num_mmu, ROCKCHIP_IOMMU_MAX_MMU);
+    RockchipIOMMUState *s = container_of(iommu, RockchipIOMMUState,
+                                         iommu_mr);
 
-    if (!num_mmu) {
-        *reason = "no-mmu-bank";
+    return rockchip_iommu_translate_internal(s, addr, flag, NULL);
+}
+
+static int rockchip_iommu_notify_flag_changed(
+    IOMMUMemoryRegion *iommu, IOMMUNotifierFlag old_flags,
+    IOMMUNotifierFlag new_flags, Error **errp)
+{
+    if (new_flags & ~IOMMU_NOTIFIER_UNMAP) {
+        error_setg(errp, TYPE_ROCKCHIP_IOMMU_MEMORY_REGION
+                   " only supports IOMMU UNMAP notifiers");
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+MemoryRegion *rockchip_iommu_get_memory_region(RockchipIOMMUState *s)
+{
+    return MEMORY_REGION(&s->iommu_mr);
+}
+
+bool rockchip_iommu_find_translation_bank(IOMMUMemoryRegion *iommu,
+                                           hwaddr addr,
+                                           IOMMUAccessFlags flag,
+                                           unsigned int *bank)
+{
+    RockchipIOMMUState *s;
+    IOMMUTLBEntry entry;
+
+    if (!bank || !object_dynamic_cast(OBJECT(iommu),
+                                      TYPE_ROCKCHIP_IOMMU_MEMORY_REGION)) {
         return false;
     }
 
-    if (!rockchip_iommu_paging_enabled(s, num_mmu)) {
-        *phys = iova;
-        *bank = 0;
-        *reason = "paging-disabled-bypass";
-        return true;
-    }
+    s = container_of(iommu, RockchipIOMMUState, iommu_mr);
+    entry = rockchip_iommu_translate_internal(s, addr, flag, bank);
+    return entry.target_as && entry.perm != IOMMU_NONE &&
+           (flag == IOMMU_NONE || (entry.perm & flag) == flag);
+}
 
-    for (unsigned int i = 0; i < num_mmu; i++) {
-        if (rockchip_iommu_bank_iova_to_phys(s, i, iova, true, write,
-                                             phys, reason)) {
-            *bank = i;
-            return true;
-        }
-    }
+static void rockchip_iommu_notify_unmap(RockchipIOMMUState *s,
+                                        hwaddr iova, hwaddr addr_mask)
+{
+    IOMMUTLBEvent event = {
+        .type = IOMMU_NOTIFIER_UNMAP,
+        .entry = {
+            .target_as = &address_space_memory,
+            .iova = iova & ~addr_mask,
+            .translated_addr = 0,
+            .addr_mask = addr_mask,
+            .perm = IOMMU_NONE,
+        },
+    };
 
-    *bank = 0;
-    return false;
+    memory_region_notify_iommu(&s->iommu_mr, 0, event);
+}
+
+static void rockchip_iommu_notify_unmap_all(RockchipIOMMUState *s)
+{
+    rockchip_iommu_notify_unmap(s, 0, UINT32_MAX);
 }
 
 static void rockchip_iommu_dte_addr_postw(RegisterInfo *reg, uint64_t val)
@@ -242,6 +282,7 @@ static void rockchip_iommu_dte_addr_postw(RegisterInfo *reg, uint64_t val)
 
     trace_rockchip_iommu_dte_addr(s->core_index, rockchip_iommu_bank(reg),
                                   val);
+    rockchip_iommu_notify_unmap_all(s);
 }
 
 static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
@@ -249,15 +290,18 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
     unsigned int i = rockchip_iommu_bank(reg);
     uint32_t status = s->regs[i][R_STATUS];
+    bool invalidate = false;
 
     trace_rockchip_iommu_command(s->core_index, i, val);
 
     switch (val) {
     case RK_MMU_CMD_ENABLE_PAGING:
         status |= R_STATUS_PAGING_ENABLED_MASK;
+        invalidate = true;
         break;
     case RK_MMU_CMD_DISABLE_PAGING:
         status &= ~R_STATUS_PAGING_ENABLED_MASK;
+        invalidate = true;
         break;
     case RK_MMU_CMD_ENABLE_STALL:
         if (status & R_STATUS_PAGING_ENABLED_MASK) {
@@ -270,6 +314,7 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
         status |= R_STATUS_STALL_NOT_ACTIVE_MASK;
         break;
     case RK_MMU_CMD_ZAP_CACHE:
+        invalidate = true;
         break;
     case RK_MMU_CMD_PAGE_FAULT_DONE:
         status &= ~(R_STATUS_PAGE_FAULT_ACTIVE_MASK |
@@ -283,6 +328,7 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
         s->regs[i][R_INT_STATUS] = 0;
         s->regs[i][R_PAGE_FAULT_ADDR] = 0;
         status = ROCKCHIP_IOMMU_STATUS_RESET;
+        invalidate = true;
         break;
     default:
         break;
@@ -290,6 +336,9 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
 
     status |= R_STATUS_IDLE_MASK | R_STATUS_REPLAY_BUFFER_EMPTY_MASK;
     s->regs[i][R_STATUS] = status;
+    if (invalidate) {
+        rockchip_iommu_notify_unmap_all(s);
+    }
 }
 
 static uint64_t rockchip_iommu_int_clear_prew(RegisterInfo *reg, uint64_t val)
@@ -318,6 +367,7 @@ static void rockchip_iommu_zap_one_line_postw(RegisterInfo *reg, uint64_t val)
 
     trace_rockchip_iommu_zap_one_line(s->core_index, rockchip_iommu_bank(reg),
                                       val);
+    rockchip_iommu_notify_unmap(s, val, ROCKCHIP_IOMMU_PAGE_SIZE - 1);
 }
 
 static const RegisterAccessInfo rockchip_iommu_regs_info[] = {
@@ -368,6 +418,7 @@ static void rockchip_iommu_reset(DeviceState *dev)
         }
         rockchip_iommu_update_irq(s, i);
     }
+    rockchip_iommu_notify_unmap_all(s);
 }
 
 static void rockchip_iommu_init(Object *obj)
@@ -384,6 +435,9 @@ static void rockchip_iommu_init(Object *obj)
                                   ROCKCHIP_IOMMU_WINDOW_SIZE);
         sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->reg_array[i]->mem);
     }
+    memory_region_init_iommu(&s->iommu_mr, sizeof(s->iommu_mr),
+                             TYPE_ROCKCHIP_IOMMU_MEMORY_REGION, obj,
+                             "rockchip-iommu-dma", UINT64_C(1) << 32);
 }
 
 static const VMStateDescription vmstate_rockchip_iommu = {
@@ -422,8 +476,24 @@ static const TypeInfo rockchip_iommu_info = {
     .class_init = rockchip_iommu_class_init,
 };
 
+static void rockchip_iommu_memory_region_class_init(ObjectClass *klass,
+                                                    const void *data)
+{
+    IOMMUMemoryRegionClass *imrc = IOMMU_MEMORY_REGION_CLASS(klass);
+
+    imrc->translate = rockchip_iommu_memory_region_translate;
+    imrc->notify_flag_changed = rockchip_iommu_notify_flag_changed;
+}
+
+static const TypeInfo rockchip_iommu_memory_region_info = {
+    .name = TYPE_ROCKCHIP_IOMMU_MEMORY_REGION,
+    .parent = TYPE_IOMMU_MEMORY_REGION,
+    .class_init = rockchip_iommu_memory_region_class_init,
+};
+
 static void rockchip_iommu_register_types(void)
 {
+    type_register_static(&rockchip_iommu_memory_region_info);
     type_register_static(&rockchip_iommu_info);
 }
 

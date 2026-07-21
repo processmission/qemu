@@ -1,19 +1,19 @@
 /*
- * Rockchip RK3588 RKNN/RKNPU core
+ * Rockchip RK3588 RKNPU core
  *
  * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#ifndef HW_MISC_ROCKCHIP_RKNN_H
-#define HW_MISC_ROCKCHIP_RKNN_H
+#ifndef HW_MISC_RK3588_RKNPU_H
+#define HW_MISC_RK3588_RKNPU_H
 
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
-#include "hw/misc/rockchip_iommu.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
+#include "system/memory.h"
 
 #define TYPE_ROCKCHIP_RKNN_CORE "rockchip.rk3588-rknn-core"
 OBJECT_DECLARE_SIMPLE_TYPE(RockchipRKNNCoreState, ROCKCHIP_RKNN_CORE)
@@ -107,7 +107,8 @@ struct RockchipRKNNCoreState {
 
     QEMUTimer complete_timer;
     qemu_irq irq;
-    RockchipIOMMUState *iommu;
+    MemoryRegion *dma_mr;
+    AddressSpace *dma_as;
     uint32_t core_index;
     uint32_t regcmd_shadow_pc[ROCKCHIP_RKNN_PC_R_MAX];
     uint32_t regcmd_shadow_cna[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
@@ -156,4 +157,4 @@ struct RockchipRKNNCoreState {
     uint32_t lut_lo_slope_shift;
 };
 
-#endif /* HW_MISC_ROCKCHIP_RKNN_H */
+#endif /* HW_MISC_RK3588_RKNPU_H */

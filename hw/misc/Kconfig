@@ -226,7 +226,7 @@ config RK3588_GRF
 config RK3588_SCMI
     bool
 
-config ROCKCHIP_RKNN
+config RK3588_RKNPU
     bool
     select REGISTER
 
