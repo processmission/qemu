@@ -1,5 +1,5 @@
 /*
- * Rockchip RK3588 RKNN/RKNPU core
+ * Rockchip RK3588 RKNPU core
  *
  * The functional backend decodes RK3588 register command streams and executes
  * the hardware modes modeled below. Board captures are regression evidence;
@@ -14,8 +14,10 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/registerfields.h"
-#include "hw/misc/rockchip_rknn.h"
+#include "hw/misc/rk3588_rknpu.h"
+#include "hw/misc/rockchip_iommu.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/int128.h"
 #include "qemu/module.h"
 #include "fpu/softfloat.h"
@@ -534,17 +536,31 @@ static bool rockchip_rknn_iommu_range_mapped(RockchipRKNNCoreState *s,
                                              uint32_t iova, size_t length,
                                              bool write)
 {
+    IOMMUMemoryRegion *iommu = memory_region_get_iommu(s->dma_mr);
+    IOMMUMemoryRegionClass *imrc;
+    IOMMUAccessFlags access = write ? IOMMU_WO : IOMMU_RO;
+    MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
+    int iommu_idx;
+
+    if (!iommu) {
+        return false;
+    }
+
+    imrc = memory_region_get_iommu_class_nocheck(iommu);
+    iommu_idx = memory_region_iommu_attrs_to_index(iommu, attrs);
     while (length) {
-        unsigned int bank;
-        const char *reason;
-        hwaddr phys;
+        IOMMUTLBEntry entry;
+        hwaddr page_offset;
         size_t chunk;
 
-        if (!rockchip_iommu_translate(s->iommu, iova, write, &phys, &bank,
-                                     &reason)) {
+        entry = imrc->translate(iommu, iova, access, iommu_idx);
+        if (!entry.target_as || (entry.perm & access) != access) {
             return false;
         }
-        chunk = MIN(length, 0x1000 - (size_t)(phys & 0xfff));
+
+        page_offset = iova & entry.addr_mask;
+        chunk = entry.addr_mask == HWADDR_MAX ? length :
+                MIN(length, (size_t)(entry.addr_mask - page_offset + 1));
         if (chunk < length && iova > UINT32_MAX - chunk) {
             return false;
         }
@@ -559,45 +575,22 @@ static RockchipRKNNDMAResult rockchip_rknn_iommu_dma_result(
     RockchipRKNNCoreState *s, uint32_t iova, void *buffer, size_t length,
     bool write)
 {
-    uint8_t *bytes = buffer;
+    MemTxResult result;
 
     if (!rockchip_rknn_iommu_range_mapped(s, iova, length, write)) {
         return ROCKCHIP_RKNN_DMA_IOMMU_FAULT;
     }
 
-    while (length) {
-        unsigned int bank;
-        const char *reason;
-        hwaddr phys;
-        size_t chunk;
-        MemTxResult result;
-
-        if (!rockchip_iommu_translate(s->iommu, iova, write, &phys, &bank,
-                                     &reason)) {
-            return ROCKCHIP_RKNN_DMA_IOMMU_FAULT;
-        }
-
-        chunk = MIN(length, 0x1000 - (size_t)(phys & 0xfff));
-        if (write) {
-            result = dma_memory_write(&address_space_memory, phys, bytes,
-                                      chunk, MEMTXATTRS_UNSPECIFIED);
-        } else {
-            result = dma_memory_read(&address_space_memory, phys, bytes,
-                                     chunk, MEMTXATTRS_UNSPECIFIED);
-        }
-        if (result != MEMTX_OK) {
-            return ROCKCHIP_RKNN_DMA_BUS_ERROR;
-        }
-
-        if (chunk < length && iova > UINT32_MAX - chunk) {
-            return ROCKCHIP_RKNN_DMA_IOMMU_FAULT;
-        }
-        iova += chunk;
-        bytes += chunk;
-        length -= chunk;
+    if (write) {
+        result = dma_memory_write(s->dma_as, iova, buffer, length,
+                                  MEMTXATTRS_UNSPECIFIED);
+    } else {
+        result = dma_memory_read(s->dma_as, iova, buffer, length,
+                                 MEMTXATTRS_UNSPECIFIED);
     }
 
-    return ROCKCHIP_RKNN_DMA_OK;
+    return result == MEMTX_OK ? ROCKCHIP_RKNN_DMA_OK :
+                                ROCKCHIP_RKNN_DMA_BUS_ERROR;
 }
 
 static bool rockchip_rknn_iommu_dma(RockchipRKNNCoreState *s, uint32_t iova,
@@ -775,7 +768,7 @@ static bool rockchip_rknn_fetch_register_file(RockchipRKNNCoreState *s,
 {
     g_autofree uint64_t *commands = NULL;
 
-    if (!s->iommu) {
+    if (!s->dma_mr) {
         return false;
     }
     commands = g_new(uint64_t, command_count);
@@ -5111,14 +5104,19 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_fp16(
                                        &required_weight_bytes)) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
+    if (compact_output) {
+        rounded_output_channels = task->dpu.wdma_channels;
+        if (!rounded_output_channels) {
+            return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+        }
+    } else if (!rockchip_rknn_size_round_up(task->dpu.output.channels,
+                                            task->dpu.output.atom,
+                                            &rounded_output_channels)) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
     if (required_weight_bytes != task->cna.weight_bytes ||
         !rockchip_rknn_iova_length_valid(task->cna.weight_iova,
                                          required_weight_bytes) ||
-        (compact_output ?
-         !(rounded_output_channels = task->dpu.wdma_channels) :
-         !rockchip_rknn_size_round_up(task->dpu.output.channels,
-                                      task->dpu.output.atom,
-                                      &rounded_output_channels)) ||
         !rockchip_rknn_size_mul3(task->core.width, task->core.height,
                                  rounded_output_channels, &output_values) ||
         !rockchip_rknn_size_mul(output_values, output_element_bytes,
@@ -5427,7 +5425,6 @@ rockchip_rknn_execute_dpu_rdma_int8_pipeline(
     uint64_t input_accessed;
     unsigned int input_surfaces;
 
-
     if (!rockchip_rknn_dpu_work_budget_valid(
             s, output_view->width, output_view->height,
             task->dpu.output_channels_valid) ||
@@ -5437,11 +5434,15 @@ rockchip_rknn_execute_dpu_rdma_int8_pipeline(
                                      output_view->atom,
                                      &output_storage_channels) ||
         !rockchip_rknn_size_mul3(rdma->width, rdma->height,
-                                 input_storage_channels, &input_bytes) ||
-        !(input_surfaces = DIV_ROUND_UP(input_storage_channels, 16)) ||
-        signed_input_surface_atoms <= 0 ||
-        (input_surface_atoms = signed_input_surface_atoms) == 0 ||
-        !rockchip_rknn_u64_mul(input_surfaces - 1, input_surface_atoms,
+                                 input_storage_channels, &input_bytes)) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
+    input_surfaces = DIV_ROUND_UP(input_storage_channels, 16);
+    if (!input_surfaces || signed_input_surface_atoms <= 0) {
+        return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
+    }
+    input_surface_atoms = signed_input_surface_atoms;
+    if (!rockchip_rknn_u64_mul(input_surfaces - 1, input_surface_atoms,
                                &input_accessed) ||
         __builtin_add_overflow(
             input_accessed,
@@ -7938,21 +7939,38 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
         trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_SAMPLE);
     bool trace_words = trace_event_get_state(TRACE_ROCKCHIP_RKNN_REGCMD_WORD);
     bool trace_ingest = rockchip_rknn_regcmd_trace_ingest_enabled();
-    unsigned int bank = 0;
-    const char *reason = NULL;
+    IOMMUMemoryRegion *iommu;
+    IOMMUMemoryRegionClass *imrc;
+    IOMMUTLBEntry entry;
+    unsigned int bank;
+    int iommu_idx;
     hwaddr phys = 0;
     uint8_t sample[ROCKCHIP_RKNN_REGCMD_SAMPLE_BYTES_MAX] = { 0 };
 
-    if (!s->iommu) {
+    iommu = memory_region_get_iommu(s->dma_mr);
+    if (!iommu) {
         trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
                                                 "no-iommu-link");
         return;
     }
 
-    if (!rockchip_iommu_iova_to_phys(s->iommu, iova, &phys, &bank, &reason)) {
-        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova, reason);
+    imrc = memory_region_get_iommu_class_nocheck(iommu);
+    iommu_idx = memory_region_iommu_attrs_to_index(
+        iommu, MEMTXATTRS_UNSPECIFIED);
+    entry = imrc->translate(iommu, iova, IOMMU_RO, iommu_idx);
+    if (!entry.target_as || !(entry.perm & IOMMU_RO)) {
+        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
+                                                "translation-failed");
         return;
     }
+    if (!rockchip_iommu_find_translation_bank(iommu, iova, IOMMU_RO,
+                                               &bank)) {
+        trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
+                                                "bank-lookup-failed");
+        return;
+    }
+    phys = (entry.translated_addr & ~entry.addr_mask) |
+           (iova & entry.addr_mask);
 
     if (!trace_sample && !trace_words && !trace_ingest) {
         return;
@@ -7961,11 +7979,15 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
     sample_bytes = MIN(command_bytes, trace_words || trace_ingest ?
                        ROCKCHIP_RKNN_REGCMD_SAMPLE_BYTES_MAX :
                        ROCKCHIP_RKNN_REGCMD_SUMMARY_BYTES);
-    sample_bytes = MIN(sample_bytes, 0x1000 - (uint32_t)(phys & 0xfff));
+    if (entry.addr_mask != HWADDR_MAX) {
+        sample_bytes = MIN(sample_bytes,
+                           (uint32_t)(entry.addr_mask -
+                                      (iova & entry.addr_mask) + 1));
+    }
     sample_commands = trace_words || trace_ingest ?
                       sample_bytes / sizeof(uint64_t) : 0;
 
-    if (dma_memory_read(&address_space_memory, phys, sample, sample_bytes,
+    if (dma_memory_read(s->dma_as, iova, sample, sample_bytes,
                         MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
         trace_rockchip_rknn_regcmd_sample_error(s->core_index, iova,
                                                 "sample-read-failed");
@@ -7976,7 +7998,7 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
         uint32_t summary_bytes = MIN(sample_bytes,
                                      ROCKCHIP_RKNN_REGCMD_SUMMARY_BYTES);
 
-        trace_rockchip_rknn_regcmd_sample(s->core_index, bank, iova, phys,
+        trace_rockchip_rknn_regcmd_sample(s->core_index, iova, phys,
                                           command_bytes, summary_bytes,
                                           ldl_le_p(sample),
                                           ldl_le_p(sample + 4),
@@ -8566,6 +8588,36 @@ static void rockchip_rknn_finalize(Object *obj)
     g_clear_pointer(&s->pending_pipeline, g_free);
 }
 
+static void rockchip_rknn_realize(DeviceState *dev, Error **errp)
+{
+    RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
+    IOMMUMemoryRegion *iommu;
+
+    if (!s->dma_mr) {
+        error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE " 'dma' link not set");
+        return;
+    }
+    iommu = memory_region_get_iommu(s->dma_mr);
+    if (!iommu || MEMORY_REGION(iommu) != s->dma_mr) {
+        error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
+                   " 'dma' link is not a direct IOMMU memory region");
+        return;
+    }
+
+    s->dma_as = g_new0(AddressSpace, 1);
+    address_space_init(s->dma_as, s->dma_mr, "rk3588-rknpu-dma");
+}
+
+static void rockchip_rknn_unrealize(DeviceState *dev)
+{
+    RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
+
+    if (s->dma_as) {
+        address_space_destroy_free(s->dma_as);
+        s->dma_as = NULL;
+    }
+}
+
 static const VMStateDescription vmstate_rockchip_rknn_tensor = {
     .name = "rockchip-rknn-tensor",
     .version_id = 1,
@@ -8934,8 +8986,8 @@ static const VMStateDescription vmstate_rockchip_rknn = {
 };
 
 static const Property rockchip_rknn_properties[] = {
-    DEFINE_PROP_LINK("iommu", RockchipRKNNCoreState, iommu,
-                     TYPE_ROCKCHIP_IOMMU, RockchipIOMMUState *),
+    DEFINE_PROP_LINK("dma", RockchipRKNNCoreState, dma_mr,
+                     TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_UINT32("core-index", RockchipRKNNCoreState, core_index, 0),
     DEFINE_PROP_UINT64("functional-max-host-bytes", RockchipRKNNCoreState,
                        functional_max_host_bytes,
@@ -8953,6 +9005,8 @@ static void rockchip_rknn_class_init(ObjectClass *klass, const void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     device_class_set_legacy_reset(dc, rockchip_rknn_reset);
+    dc->realize = rockchip_rknn_realize;
+    dc->unrealize = rockchip_rknn_unrealize;
     dc->vmsd = &vmstate_rockchip_rknn;
     device_class_set_props(dc, rockchip_rknn_properties);
     dc->user_creatable = false;

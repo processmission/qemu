@@ -31,7 +31,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_iommu.h"
-#include "hw/misc/rockchip_rknn.h"
+#include "hw/misc/rk3588_rknpu.h"
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_atf_ddr.h"
 #include "hw/misc/rk3588_ddr.h"
@@ -2749,12 +2749,14 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn); i++) {
         g_autofree char *name = g_strdup_printf("rknn%u", i);
+        MemoryRegion *dma_mr = rockchip_iommu_get_memory_region(
+            ROCKCHIP_IOMMU(s->rknn_mmu[i]));
         SysBusDevice *sbd;
 
         s->rknn[i] = qdev_new(TYPE_ROCKCHIP_RKNN_CORE);
         qdev_prop_set_uint32(s->rknn[i], "core-index", i);
-        object_property_set_link(OBJECT(s->rknn[i]), "iommu",
-                                 OBJECT(s->rknn_mmu[i]), &error_fatal);
+        object_property_set_link(OBJECT(s->rknn[i]), "dma",
+                                 OBJECT(dma_mr), &error_fatal);
         object_property_add_child(OBJECT(s), name, OBJECT(s->rknn[i]));
         sbd = SYS_BUS_DEVICE(s->rknn[i]);
         sysbus_realize(sbd, &error_fatal);

@@ -337,9 +337,9 @@ static uint32_t rk3588_rknn_register_amount(size_t command_count)
     return DIV_ROUND_UP(command_count, 2) - 1;
 }
 
-static char *rk3588_run_rknpu_trace_regcmd_event(const uint64_t *regcmd,
-                                                 size_t regcmd_count,
-                                                 const char *event)
+static char *rk3588_run_rknpu_trace_regcmd_event_mmu(
+    const uint64_t *regcmd, size_t regcmd_count, const char *event,
+    uint64_t mmu_base)
 {
     g_autoptr(GError) error = NULL;
     g_autofree char *trace = NULL;
@@ -360,15 +360,15 @@ static char *rk3588_run_rknpu_trace_regcmd_event(const uint64_t *regcmd,
     qtest_writel(qts, RK3588_RKNN_TEST_DTE_ADDR,
                  RK3588_RKNN_TEST_PTE_ADDR | 1);
     qtest_writel(qts, RK3588_RKNN_TEST_PTE_ADDR,
-                 RK3588_RKNN_TEST_REGCMD_ADDR | 1);
+                 RK3588_RKNN_TEST_REGCMD_ADDR | RK_IOMMU_PTE_RW);
     for (size_t i = 0; i < regcmd_count; i++) {
         qtest_writeq(qts, RK3588_RKNN_TEST_REGCMD_ADDR +
                           i * sizeof(uint64_t), regcmd[i]);
     }
 
-    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
+    qtest_writel(qts, mmu_base + RK_IOMMU_DTE_ADDR,
                  RK3588_RKNN_TEST_DTE_ADDR);
-    qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
+    qtest_writel(qts, mmu_base + RK_IOMMU_COMMAND,
                  RK_IOMMU_CMD_ENABLE_PAGING);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS, 0);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
@@ -385,11 +385,27 @@ static char *rk3588_run_rknpu_trace_regcmd_event(const uint64_t *regcmd,
     return contents;
 }
 
+static char *rk3588_run_rknpu_trace_regcmd_event(const uint64_t *regcmd,
+                                                 size_t regcmd_count,
+                                                 const char *event)
+{
+    return rk3588_run_rknpu_trace_regcmd_event_mmu(
+        regcmd, regcmd_count, event, RK3588_RKNN0_MMU_BASE);
+}
+
 static char *rk3588_run_rknpu_trace_regcmd(const uint64_t *regcmd,
                                            size_t regcmd_count)
 {
     return rk3588_run_rknpu_trace_regcmd_event(
         regcmd, regcmd_count, "rockchip_rknn_regcmd_*");
+}
+
+static char *rk3588_run_rknpu_trace_regcmd_mmu1(const uint64_t *regcmd,
+                                                size_t regcmd_count)
+{
+    return rk3588_run_rknpu_trace_regcmd_event_mmu(
+        regcmd, regcmd_count, "rockchip_rknn_regcmd_*",
+        RK3588_RKNN0_MMU1_BASE);
 }
 
 static uint64_t rk3588_rknn_regcmd(uint32_t target, uint32_t reg,
@@ -15428,6 +15444,31 @@ static void test_rk3588_rknpu_regcmd_ingest_trace(void)
                             "value=0x00000001"));
 }
 
+static void test_rk3588_rknpu_regcmd_mmu1_trace(void)
+{
+    static const uint64_t regcmd[] = {
+        /* CNA.CBUF_CON0 */
+        0x0201000000001040ULL,
+        /* DPU.S_POINTER */
+        0x10010000000e4004ULL,
+    };
+    g_autofree char *contents = NULL;
+
+    contents = rk3588_run_rknpu_trace_regcmd_mmu1(
+        regcmd, ARRAY_SIZE(regcmd));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_sample core=0 "
+                            "iova=0x00000000 phys=0x00212000"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_ingest core=0 bank=1 "
+                            "commands=2 ingested=2 pc=0 cna=1 "
+                            "core_writes=0 dpu_writes=1 raw=0 unknown=0"));
+    g_assert_nonnull(strstr(contents,
+                            "rockchip_rknn_regcmd_shadow_write core=0 "
+                            "bank=1 index=1 domain=DPU rel=0x004 "
+                            "value=0x0000000e"));
+}
+
 static void test_rk3588_rknpu_regcmd_ingest_ppu_event(void)
 {
     static const uint64_t regcmd[] = {
@@ -16038,6 +16079,8 @@ int main(int argc, char **argv)
                    test_rk3588_rknpu_slave_reset_then_pc);
     qtest_add_func("/rk3588/rknpu-regcmd-ingest-trace",
                    test_rk3588_rknpu_regcmd_ingest_trace);
+    qtest_add_func("/rk3588/rknpu-regcmd-mmu1-trace",
+                   test_rk3588_rknpu_regcmd_mmu1_trace);
     qtest_add_func("/rk3588/rknpu-regcmd-ingest-ppu-event",
                    test_rk3588_rknpu_regcmd_ingest_ppu_event);
     qtest_add_func("/rk3588/rknpu-regcmd-sample-window-trace",
