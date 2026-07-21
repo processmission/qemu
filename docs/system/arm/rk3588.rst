@@ -66,281 +66,34 @@ RK3588 kernel and ZVM smoke tests:
 The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
 machine source refers to GIC Shared Peripheral Interrupt numbers.
 
-The optional RKNPU model is not yet a complete neural-network accelerator
-emulator.  Its control path includes a Rockchip IOMMU model so Linux can probe,
-attach, map, zap, and report translation or permission faults through the open
-``rocket`` driver and the vendor ``rknpu`` driver.  For debugging, trace events
-can walk the RK3588 IOMMU v2 page tables, sample submitted register command
-buffers, decode command prefixes, and report raw or unknown command words.
+The optional RKNPU model exposes the three accelerator cores and their
+Rockchip IOMMU.  It is enabled with ``-machine ...,rknpu=on``.  The selected
+machine type determines the guest-visible binding: ``rk3588-evb`` and
+``rock-5b-plus`` use the aggregate binding expected by the vendor ``rknpu``
+driver, while ``rk3588s-roc-pc`` exposes the per-core binding used by the
+mainline ``rocket`` driver.
 
-When enabled, the RKNPU routes PC-fetched commands or slave-mode CNA/CORE/DPU
-MMIO writes into banked register files, then decodes an immutable
-hardware-pipeline task.  Slave mode is selected with
-``PC_BASE_ADDRESS.bit0`` and triggered through ``GLOBAL_OPERATION_ENABLE``.
-PC task descriptors are incremental: register values in both hardware banks
-persist after completion, so a later sparse descriptor inherits fields that it
-does not rewrite.  Registers that have not yet been written read their hardware
-reset value rather than making descriptor completeness an execution
-requirement.  The persistent banks and the in-flight task snapshot are both
-migration state.
-Execution is selected from decoded register fields and active hardware stages;
-the functional backend does not recognize model names, task numbers, or fixed
-tensor shapes.  Captured model tasks are regression and differential vectors,
-not execution allowlists.  A new workload using an implemented combination of
-formats, layouts, and stages therefore follows the same data path without a
-model-specific enablement change.
-The implemented subset has been exercised through the unmodified vendor RKNN
-Runtime with RK3588 MobileNet V1, YOLOv8, and YOLOv5 models.  Their final
-classification or detection results match the corresponding board runs.  This
-is workload evidence for the decoded formats, layouts, and stages, not a claim
-that every RKNN model or RKNPU control combination is implemented.
-The current integer backend executes signed INT8 CNA/MAC pipelines with
-signed INT8 and INT32 DPU output.  It covers width-one Matmul-style surfaces,
-two-dimensional 1x1 direct convolution with stride one and no padding, and
-3x3 direct convolution with stride one or two and one-cell top/left padding.
-The stride-one profile also covers the hardware-observed asymmetric case with
-left/bottom padding but no top/right padding.
-INT8 depthwise convolution is executed when CNA and DPU select convolution
-mode 3 and CORE enables depthwise operation.  Compact weights use 64-channel
-groups, with kernel-row, kernel-column, channel order inside each group, and
-each output channel multiplies only the corresponding input channel.  CNA
-``PAD_CON1`` supplies the input domain padding value; interleaved input
-converts it through the per-channel CVT path before convolution.
-The functional backend also executes the board-validated FP16 Matmul profile:
-inputs and weights are FP16, accumulation is FP32, and DPU writeback is either
-FP16 or FP32.  FP16 grouped weights use the hardware's 16-output-channel
-groups, while tensor dimensions, strides, and channel validity remain
-register-derived.  The current FP16 profile requires direct CNA/CORE/DPU
-execution, bypassed BS/BN/EW stages, zero ``PAD_CON1``, and a destination
-surface stride large enough for one complete surface.  For FP16
-partial-channel output, ``OFFSET_PEND`` supplies the raw16 value for storage
-lanes beyond ``OUTPUT_CHANNELS_VALID``; the same control remains unsupported
-for other precisions.  Unsupported controls fail explicitly rather than
-being silently ignored.
-The FP16 compact profile selected by ``NONALIGN_DMA``, ``GROUP_LINE_OFF``,
-and ``ARGB_IN=8`` reads the register-sized input atom and consumes contiguous
-input tensor and output-major weights without synthetic 32-input or 16-output
-grouping.  This also covers multi-surface channel reductions and broadcasts
-with register-derived valid and storage channel counts.
-``BS_OW_CFG=0x126`` writes its FP16 storage lanes contiguously when the
-destination surface stride is zero.  This covers the board-validated 1x1
-broadcast reduction while retaining register-derived tensor dimensions.
-The DPU-only main-RDMA path also executes signed INT8 feature data to FP16
-writeback.  It derives dimensions, valid and storage channels, source and
-destination addresses, and destination surface stride from the DPU and
-DPU-RDMA registers.  Source features use 16-channel INT8 atoms, destination
-features use eight-channel FP16 atoms, conversion is round-to-nearest-even,
-and destination padding lanes are zero.  BS, BN, EW, BRDMA, and ERDMA must be
-bypassed for this mode; unsupported flying-mode, precision, converter,
-padding, notch, and layout controls fail before DMA.
-The same main-RDMA frontend executes a composable integer pipeline over
-16-channel INT8 atoms.  The main input passes through decoded BS, bypassed BN,
-optional ERDMA-backed EW addition, and ``OUT_CVT`` stages before saturating to
-INT8.  Register operands, signed multiplier shifts, both EW converter orders,
-EW truncation, output rounding, valid channels, and destination surfaces are
-applied from their control fields; unsupported active sources and modes fail
-before DMA.  Neutral controls reduce this path to an exact copy.  Source,
-ERDMA, and destination may overlap because all inputs are read before
-writeback.  Storage lanes beyond ``OUTPUT_CHANNELS_VALID`` are cleared.
-The main-RDMA frontend also implements the board-validated INT16 unpool mode.
-For ``SRC_DMA_CFG=0x1249``, each eight-lane INT16 source atom is preserved as
-its 16 raw little-endian bytes, exposed as one 16-lane INT8 output atom, and
-repeated twice in both spatial directions.  All decoded input surfaces are
-consumed and written as consecutive output surfaces.  Tensor dimensions,
-channel counts, surface count, and DMA addresses remain register-derived;
-unsupported unpool, padding, notch, stage, or conversion controls fail before
-DMA.
-The main-RDMA FP16 pipeline composes decoded BS and EW stages in hardware
-order.  BS can add the FP32 ``BS_ALU_CFG`` operand and multiply by the FP16
-operand in ``BS_MUL_CFG``; EW can independently bypass or consume an ERDMA
-FP16 surface for subtraction or division.  Intermediate values remain FP32
-through active stages and convert once to FP16 at writeback.  BS, ALU, MUL,
-BN, and EW bypass bits are stage semantics rather than complete-register
-profile signatures.  Unsupported source, truncate, shift, ReLU, converter,
-and RDMA layout controls fail before DMA.  Input and output dimensions,
-storage channels, valid channels, surface stride, and IOVA addresses are
-derived from registers and bounded by the functional backend's resource
-limits.  ``CORE.QUANTIFY`` and BS operand-source controls do not alter FP16
-execution while the BS stage is bypassed.
-The board-validated EW division path truncates its quotient to 14 significant
-bits before the final round-to-nearest FP16 conversion.
-The DPU-RDMA FP16 LUT profile is also register-driven.  It accepts FP16 input
-surfaces, applies the decoded BN FP16 multiplier and FP32 add operand, selects
-the LE or LO table using the configured LUT boundaries and five-bit index
-fraction, performs rounded adjacent-entry interpolation, and converts the
-result using ``OUT_CVT`` ``minus_exp`` before FP16 writeback.  The validated
-profile includes the board-observed LE underflow clamp and table-specific
-rounding: LE interpolation truncates before applying its output offset, while
-LO interpolation strictly rounds upward, including exact integer
-interpolation results, without that offset.  Its LUT road, slope,
-precision, and stage controls
-are capability-checked; unsupported combinations fail before DMA rather than
-being treated as this profile.  Tensor dimensions and valid/storage channels
-remain register-derived: all valid FP16 lanes are converted, including the
-board-observed 1,008-lane softmax stage, while non-valid storage tail lanes
-are written as zero.
-The standalone raw16 tail profile preserves its one valid FP16 lane and fills
-the other seven storage lanes with the 16-bit ``DPU_OFFSET_PEND`` value, as
-used by the MobileNet softmax prelude.
-With ``NONALIGN`` and ``RGP_TYPE=2``, DPU-RDMA compacts lane zero from each
-raw16 spatial atom to its low eight bits.  The decoded ``SURF_LEN`` specifies
-the packed byte extent in 16-byte atoms; this path is used by compact
-single-channel graph outputs.
-The DPU-RDMA FP16 min/max profile scans all storage channels, including
-partial-channel padding lanes.  ``MINMAX_CTL`` selects the global minimum or
-maximum; when probability-only mode is clear, the second raw16 result word is
-the first matching storage-lane index.  The result is written to the decoded
-``DST_BASE_ADDR``.  Remaining auxiliary result words are not assigned stable
-semantics because board captures show submit-context-dependent values.
-The standalone FP16 EW profile consumes the decoded ERDMA FP16 operand and
-performs the board-validated subtract or divide-and-convert operation.  Its EW
-algorithm, per-lane ERDMA operand tensor, data format, source layout, and
-output stride are capability-checked; mutations of those controls fail before
-output DMA.
-The modeled data path includes CORE round-to-nearest-even truncate, immediate
-DPU BS/BN/EW add and multiply, BS subtract and ReLU, and the integer DPU output
-converter's two add/multiply orderings, signed offset, scale, shift, rounding,
-and signed INT32 saturation path.  BS and BN multiplication use independent
-nonnegative and negative-result shifts with round-to-nearest-even.  BS, BN,
-and EW stage results also saturate to signed INT32, and EW immediate
-multiplication uses a signed 16-bit operand.  EW add and multiply apply
-independent nonnegative and negative-result truncate fields with
-round-to-nearest-even; EW bypass ignores those fields.  The OUT_CVT
-``minus_exp`` field is accepted and has no
-effect in the hardware-validated INT32 output mode.  These stages can be
-composed in hardware order.  ``MC_SURF_OUT`` scatters at most eight 32-value
-output blocks using the hardware-observed ``SURFACE_ADD`` layout.  Blocks
-advance through flattened two-dimensional spatial positions before the next
-32-channel group; unwritten holes remain untouched and overlapping block
-addresses are written in task order.  External/RDMA operands are functionally executed for the first
-per-pixel signed INT8 profile.  It supports EW add and multiply, plus the EW
-operand converter's signed offset, unsigned scale, six-bit shift, and both
-round-to-nearest-even and ties-away-from-zero modes.  Operand conversion runs
-before EW arithmetic; the existing EW truncate and output-conversion stages
-follow it.  Hardware-observed 16-channel source and EW surfaces across
-multiple 32-channel groups, including notch progression, are read through
-the modeled IOMMU.  The
-validated BRDMA profile reads one signed INT32 BS add operand per output
-channel across multiple 32-channel groups and broadcasts it across spatial
-positions before BN and EW.  Its convolution weight is the signed packed
-weight plus ``BS_OW_OP``; ``BS_OW_OP`` is not a post-accumulation divisor.
-Compact input and output tails use the exact decoded weight byte count rather
-than a rounded host-side allocation.  Compact FP16 output is contiguous; the
-ordinary multi-surface stride field does not alter that compact layout.
-Compact FP16 weights and output can be combined with ordinary planar input;
-input feature layout is decoded independently from weight/output layout.
-BS/BN RELUX are functionally modeled when their respective ``*_RELUX_EN``
-bit is set, using the signed INT32 clamp interval ``[0, *_RELUX_CMP_VALUE]``.
-EW RELUX is modeled for the validated ``0x20580`` immediate-add configuration
-with a zero operand and the operand converter bypassed; the EW stage itself is
-enabled.
-BS/BN PRELU are modeled for their validated immediate multiply configurations:
-the positive path is unchanged while the negative path uses the stage factor
-and shift.  EW PRELU is modeled for the validated ``0x3a4`` immediate
-multiply configuration, using the EW operand as the negative factor.  LUT
-storage models the two hardware-observed 513-entry tables.  Writes with
-``LUT_ACCESS_TYPE=1`` select a table through ``LUT_TABLE_ID`` and
-auto-increment the 10-bit entry address.  Functional execution covers the
-board-validated ``EW_CFG=0x302``, ``LUT_CFG=0x68``, ``LUT_INFO=0x50500``
-profile with LE/LO endpoints and direct table interpolation; a constant-table
-case and unique-entry positive/negative cases are differential-tested against
-RK3588 hardware.  Negative inputs select LE (table 0) and nonnegative inputs
-select LO (table 1); within the observed endpoints, the index is the
-floor-divided input offset at 32 units per entry, with out-of-range values
-clamped to entry 0 or 512 when the corresponding slope is zero.  The vendor
-LO overflow profile is also modeled: ``LO_SLOPE_SCALE=0x40320000`` encodes
-overflow scale ``0x4032``, and ``LO_SLOPE_SHIFT=0x1a0`` encodes shift 13.
-Values above ``LO_END`` add the truncated product
-``((input - LO_END) * 0x4032) >> 13`` to table 1 entry 512.  Other slope
-profiles and general Sigmoid/Tanh profiles are not modeled yet.  Other
-external operand formats and floating-point output converter modes outside the
-FP16/FP32 writeback profile are not generally functionally executed yet.
-The executor derives tensor dimensions, strides, channel validity, and output
-layout from each submitted register file.  Hardware captures validate
-arithmetic and layout; they are not a whitelist of shapes or model tasks.
-The CNA input path supports the board-validated interleaved RGB888 mode with
-``NONALIGN_DMA`` and ``GROUP_LINE_OFF`` enabled.  Per-channel CVT offset,
-scale, truncation, rounding, and signed-input selection are applied before
-convolution.  The validated MobileNet input profile converts unsigned bytes
-with ``(input - 128) * 16384 >> 14``.  Its 16-channel weight atom, complete
-QD convolution-window sum, stride, padding, and right-edge clipping are
-derived from the submitted registers; output surfaces use the programmed DPU
-surface stride.
-The validated spatial EW DPU-RDMA profile uses the same 16-channel operand
-planes with output-space surface stride/notch.  Spatial BRDMA reads one
-signed INT32 bias per channel and broadcasts it across the output surface.
-The mode uses the
-modeled RK3588 IOMMU page tables, including paging state and PTE read/write
-permissions, to read commands, input, and weights and writes the NPU-layout
-output before raising
-the normal completion interrupt.  DMA mapping failures follow the modeled
-IOMMU and stage status behavior.  Operator controls that are not implemented
-yet are reported as explicit execution capability errors rather than being
-treated as model or shape restrictions.  Execution enforces QEMU host-safety
-ceilings of 256 MiB of aggregate temporary buffers,
-``2^28`` MAC operations or element conversions per DPU task, and ``2^24``
-work items per PPU task.
-These are implementation safety boundaries rather than RK3588 shape limits;
-tasks exceeding them fail before allocation or DMA.  PC mode streams
-sequential task chains through one pending task snapshot and schedules one
-logical task per timer callback, including for the full 12-bit task-count
-field.  The captured MobileNet
-submission contains 120 logical descriptors that reuse 107 immutable command
-payloads behind three PC roots of 50, 34, and 23 payloads.  Slave mode
-supports one directly configured task and reports its hardware-observed task
-status.  Other DPU-RDMA data modes, precisions, and notch layouts, as well as
-other PPU execution modes and cycle timing remain unimplemented.  The current
-PPU/RDMA executor handles signed INT8 identity and max-pooling semantics with
-per-surface DMA, row stride, padding, and channel-surface iteration.  Max
-pooling compares complete signed bytes and copies the first winning byte.
-Identity execution copies all 32 bytes without arithmetic.  The PPU and
-PPU-RDMA windows expose their
-``S_STATUS`` and ``S_POINTER`` registers.  Successful standalone completion
-reports task status ``0xf000``, raw stage status ``0xc0000000``, and the
-pointer-selected ``0x400`` or ``0x800`` low completion bit; those low bits are
-independently cleared through PC ``INT_CLEAR``.  PPU-to-DPU chains retain the
-PPU stage status while the final DPU owns the normal job completion interrupt.
-Successful execution reports PPU/PPU-RDMA status ``0xc`` on the captured bank;
-the tested IOMMU translation or permission faults report ``0x5``, abort DMA,
-and do not add generic PC DMA read/write status bits.
+Jobs may be submitted through PC-fetched command descriptors or slave-mode
+register banks.  PC descriptors inherit register values not rewritten by a
+later sparse descriptor.  The banked register state and any in-flight task are
+included in migration state.  The IOMMU implements the mapping, invalidation,
+translation, and permission-fault behavior required by both drivers.
 
-The generated RKNPU binding follows the selected board.  With ``rknpu=on``,
-``rk3588-evb`` and ``rock-5b-plus`` expose the aggregate
-``rockchip,rk3588-rknpu`` node and four-window ``rockchip,iommu-v2`` node used
-by the Rockchip vendor driver.  ``rk3588s-roc-pc`` exposes three independent
-``rockchip,rk3588-rknn-core`` nodes for the mainline Rocket driver.  Both
-bindings describe the same modeled MMIO, IRQ, and accelerator behavior; the
-machine type fixes only the board's guest-visible topology.
+The functional backend is register-driven and does not identify model names,
+task numbers, or fixed tensor shapes.  The implemented subset covers INT8 and
+FP16 CNA/CORE/DPU pipelines for matrix multiplication and direct or depthwise
+convolution, DPU-RDMA data movement and arithmetic, conversion and LUT stages,
+and PPU identity and max-pooling operations.  Tensor dimensions, strides,
+valid and storage channels, layouts, and DMA addresses are decoded from the
+submitted register state.
 
-The decoder keeps software-visible valid and storage dimensions separate.
-For the current INT8 path, CNA ``DATA_SIZE1`` supplies valid and storage input
-channels, CNA ``WEIGHT_SIZE2`` supplies weight kernels, and DPU
-``DATA_CUBE_CHANNEL`` supplies original and cube output channels.  CORE and
-DPU WDMA channel, width, and height fields are checked against the cube size.
-The DPU ``DATA_CUBE_HEIGHT.MINMAX_CTL`` field is decoded and non-zero values
-are reported as unsupported until min/max output semantics are modeled.
-The INT8 QD BRDMA path supports the board-validated external CPEND operand
-selection (``BS_OW_CFG=0x125`` for ordinary convolution and ``0x36d`` for
-depthwise) and CPEND bypass (``0x124`` and ``0x36c``, respectively), all with
-``BS_OW_OP=0``.  The corresponding BRDMA feature modes are ``0x7810`` and
-``0x7816``.  Board differentials with non-zero CPEND data show that the
-external modes consume the operand while the bypass modes do not.  Other
-CPEND operand sources are reported as unsupported until their semantics are
-modeled.  Hardware-level shape checks use the documented register
-relationships.  The direct INT32 executor uses a four-channel storage atom.
-The depthwise INT32 path derives its channel-plane width and rows per surface
-from the DPU cube channels, valid channels, output atom, and ``SURFACE_ADD``;
-inactive lanes in each physical plane are cleared.  Other DPU output layouts
-remain under implementation.  Partial valid/storage and valid/cube
-submissions are decoded using their register-provided packed layout; the
-partial-channel qtest verifies that valid lanes execute while padding lanes
-remain zero.  These implementation details are not hardware shape
-restrictions.  In particular, hardware captures with ``M=2``,
-``M=3``, and ``M=5`` prove that M need not be a multiple of four.
-The qtest suite directly replays and byte-compares the smallest captured
-``M=1,K=64,N=32`` vector in
-``tests/data/rk3588-rknpu-matmul-int8-m1-k64-n32``; its provenance and input,
-weight, command, and output checksums are recorded alongside the files.
+The model has been exercised with unmodified ``rocket`` and vendor ``rknpu``
+drivers and with RKNN Runtime workloads.  This validates the implemented
+formats and stage combinations, but does not imply complete RK3588 NPU or
+model coverage.  Unsupported active controls and layouts fail explicitly
+rather than being interpreted as a known workload profile.  Host-memory and
+work limits bound functional execution so malformed guest jobs cannot block or
+exhaust QEMU.
 
 Common IP boundaries
 --------------------
