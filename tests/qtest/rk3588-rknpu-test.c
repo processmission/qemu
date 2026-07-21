@@ -105,20 +105,32 @@
     ((RK3588_RKNN_CONTROL_CHAIN_TASKS - 1) * \
      RK3588_RKNN_CONTROL_CHAIN_LINK_COMMANDS + \
      RK3588_RKNN_MATMUL_COMMANDS)
-#define RK3588_RKNN_MOBILENET_TASK6_ADDR (RK3588_RAM_BASE + 0x100000)
-#define RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA 0x10000000U
-#define RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA 0x10010000U
-#define RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA 0x10050000U
-#define RK3588_RKNN_MOBILENET_TASK6_BS_IOVA 0x10051000U
-#define RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA 0x10060000U
-#define RK3588_RKNN_MOBILENET_TASK6_WIDTH 112
-#define RK3588_RKNN_MOBILENET_TASK6_HEIGHT 12
-#define RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS 32
-#define RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS 64
-#define RK3588_RKNN_MOBILENET_TASK6_ATOM 16
-#define RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES 200704
-#define RK3588_RKNN_MOBILENET_TASK6_COMMANDS 130
-#define RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES 256
+#define RK3588_RKNN_SYNTH_CONV_ADDR (RK3588_RAM_BASE + 0x100000)
+#define RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA 0x10000000U
+#define RK3588_RKNN_SYNTH_CONV_INPUT_IOVA 0x10010000U
+#define RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA 0x10050000U
+#define RK3588_RKNN_SYNTH_CONV_BS_IOVA 0x10051000U
+#define RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA 0x10060000U
+#define RK3588_RKNN_SYNTH_CONV_WIDTH 112
+#define RK3588_RKNN_SYNTH_CONV_HEIGHT 12
+#define RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS 32
+#define RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS 64
+#define RK3588_RKNN_SYNTH_CONV_ATOM 16
+#define RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES 200704
+#define RK3588_RKNN_SYNTH_CONV_COMMANDS \
+    (RK3588_RKNN_DPU_RDMA_FP16_COMMANDS + 2)
+#define RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES 256
+#define RK3588_RKNN_SYNTH_CONV_INPUT_BYTES \
+    (RK3588_RKNN_SYNTH_CONV_WIDTH * RK3588_RKNN_SYNTH_CONV_HEIGHT * \
+     RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS)
+#define RK3588_RKNN_SYNTH_CONV_WEIGHT_BYTES \
+    (RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * \
+     RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS)
+#define RK3588_RKNN_SYNTH_CONV_BS_BYTES \
+    (RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * 8)
+#define RK3588_RKNN_SYNTH_CONV_OUTPUT_BYTES \
+    (RK3588_RKNN_SYNTH_CONV_WIDTH * RK3588_RKNN_SYNTH_CONV_HEIGHT * \
+     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS)
 #define RK3588_RKNN_RGB_CVT_INPUT_WIDTH 8
 #define RK3588_RKNN_RGB_CVT_INPUT_HEIGHT 5
 #define RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH 4
@@ -4026,31 +4038,266 @@ static void test_rk3588_rknpu_matmul_slave(void)
     qtest_quit(qts);
 }
 
-static void rk3588_rknn_load_mobilenet_task6_file(
-    const char *name, void **data, gsize *length)
-{
-    g_autofree char *path = g_build_filename(
-        "tests", "data", "rk3588-rknpu-mobilenet-v1-task6", name, NULL);
-    g_autoptr(GError) error = NULL;
-    char *contents = NULL;
+typedef enum RK3588RKNNSynthConvBuffer {
+    RK3588_RKNN_SYNTH_CONV_REGCMD,
+    RK3588_RKNN_SYNTH_CONV_INPUT,
+    RK3588_RKNN_SYNTH_CONV_WEIGHT,
+    RK3588_RKNN_SYNTH_CONV_BS,
+    RK3588_RKNN_SYNTH_CONV_OUTPUT,
+} RK3588RKNNSynthConvBuffer;
 
-    if (!g_file_get_contents(path, &contents, length, &error)) {
-        g_error("cannot load %s: %s", path, error->message);
-    }
-    *data = contents;
+typedef struct RK3588RKNNSynthConvFixture {
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
+    int8_t input[RK3588_RKNN_SYNTH_CONV_INPUT_BYTES];
+    int8_t weights[RK3588_RKNN_SYNTH_CONV_WEIGHT_BYTES];
+    uint8_t bs[RK3588_RKNN_SYNTH_CONV_BS_BYTES];
+    int8_t output[RK3588_RKNN_SYNTH_CONV_OUTPUT_BYTES];
+} RK3588RKNNSynthConvFixture;
+
+static size_t rk3588_rknn_synth_conv_feature_index(unsigned int channel,
+                                                    unsigned int row,
+                                                    unsigned int column)
+{
+    return (channel / RK3588_RKNN_SYNTH_CONV_ATOM) *
+           RK3588_RKNN_SYNTH_CONV_HEIGHT *
+           RK3588_RKNN_SYNTH_CONV_WIDTH *
+           RK3588_RKNN_SYNTH_CONV_ATOM +
+           (row * RK3588_RKNN_SYNTH_CONV_WIDTH + column) *
+           RK3588_RKNN_SYNTH_CONV_ATOM +
+           channel % RK3588_RKNN_SYNTH_CONV_ATOM;
 }
 
-static uint64_t rk3588_rknn_mobilenet_task6_addr(uint32_t iova)
+static void rk3588_rknn_make_synth_conv_regcmd(uint64_t commands[])
 {
-    return RK3588_RKNN_MOBILENET_TASK6_ADDR +
-           iova - RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA;
+    uint64_t baseline[RK3588_RKNN_DPU_RDMA_FP16_COMMANDS];
+
+    rk3588_rknn_make_dpu_rdma_fp16_regcmd(baseline);
+    memcpy(commands, baseline, (ARRAY_SIZE(baseline) - 3) *
+                               sizeof(*commands));
+    commands[ARRAY_SIZE(baseline) - 3] =
+        rk3588_rknn_regcmd(0x2001, 0x502c, 0);
+    commands[ARRAY_SIZE(baseline) - 2] =
+        baseline[ARRAY_SIZE(baseline) - 3];
+    commands[ARRAY_SIZE(baseline) - 1] =
+        rk3588_rknn_regcmd(0x0201, 0x1060, 0);
+    memcpy(commands + ARRAY_SIZE(baseline),
+           baseline + ARRAY_SIZE(baseline) - 2,
+           2 * sizeof(*commands));
+
+#define PATCH_SYNTH_CONV(_target, _reg, _value) do {                 \
+    rk3588_rknn_patch_regcmd(                                        \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,                   \
+        (_target), (_reg), (_value));                                \
+} while (0)
+    PATCH_SYNTH_CONV(0x0201, 0x100c, 0);
+    PATCH_SYNTH_CONV(0x0201, 0x1010,
+                     (RK3588_RKNN_SYNTH_CONV_HEIGHT + 1) << 4);
+    PATCH_SYNTH_CONV(0x0201, 0x1014, 0x09);
+    PATCH_SYNTH_CONV(0x0201, 0x1020,
+                     (RK3588_RKNN_SYNTH_CONV_WIDTH << 16) |
+                     RK3588_RKNN_SYNTH_CONV_HEIGHT);
+    PATCH_SYNTH_CONV(0x0201, 0x1024,
+                     ((RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS - 1) << 16) |
+                     RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
+    PATCH_SYNTH_CONV(0x0201, 0x1028, RK3588_RKNN_SYNTH_CONV_WIDTH);
+    PATCH_SYNTH_CONV(0x0201, 0x102c,
+                     RK3588_RKNN_SYNTH_CONV_WIDTH *
+                     RK3588_RKNN_SYNTH_CONV_HEIGHT);
+    PATCH_SYNTH_CONV(0x0201, 0x1030,
+                     RK3588_RKNN_SYNTH_CONV_WEIGHT_BYTES);
+    PATCH_SYNTH_CONV(0x0201, 0x1034,
+                     RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
+    PATCH_SYNTH_CONV(0x0201, 0x1038,
+                     (1U << 24) | (1U << 16) |
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS);
+    PATCH_SYNTH_CONV(0x0201, 0x1040, 0x201b);
+    PATCH_SYNTH_CONV(0x0201, 0x1044, 0x38);
+    PATCH_SYNTH_CONV(0x0201, 0x104c, 0x0b);
+    for (uint32_t reg = 0x1050; reg <= 0x105c; reg += 4) {
+        PATCH_SYNTH_CONV(0x0201, reg, 1U << 16);
+    }
+    PATCH_SYNTH_CONV(0x0201, 0x1070,
+                     RK3588_RKNN_SYNTH_CONV_INPUT_IOVA);
+    PATCH_SYNTH_CONV(0x0201, 0x1078, 0x000f000f);
+    PATCH_SYNTH_CONV(0x0201, 0x107c,
+                     RK3588_RKNN_SYNTH_CONV_WIDTH * 4);
+    PATCH_SYNTH_CONV(0x0201, 0x1080,
+                     RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES / 16 -
+                     RK3588_RKNN_SYNTH_CONV_WIDTH * 4);
+    PATCH_SYNTH_CONV(0x0201, 0x1084,
+                     (RK3588_RKNN_SYNTH_CONV_WIDTH << 16) |
+                     RK3588_RKNN_SYNTH_CONV_HEIGHT);
+    PATCH_SYNTH_CONV(0x0201, 0x1088,
+                     RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
+    PATCH_SYNTH_CONV(0x0201, 0x1110,
+                     RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA);
+    PATCH_SYNTH_CONV(0x0201, 0x1180, 0);
+    PATCH_SYNTH_CONV(0x0201, 0x1184, UINT32_C(0xffffff80));
+
+    PATCH_SYNTH_CONV(0x0801, 0x3010, 1);
+    PATCH_SYNTH_CONV(0x0801, 0x3014,
+                     ((RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) << 16) |
+                     (RK3588_RKNN_SYNTH_CONV_WIDTH - 1));
+    PATCH_SYNTH_CONV(0x0801, 0x3018,
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1);
+    PATCH_SYNTH_CONV(0x0801, 0x301c, 0);
+
+    PATCH_SYNTH_CONV(0x1001, 0x400c, 0x1e4);
+    PATCH_SYNTH_CONV(0x1001, 0x4010, 0xe0);
+    PATCH_SYNTH_CONV(0x1001, 0x4020,
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
+    PATCH_SYNTH_CONV(0x1001, 0x4024,
+                     RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES);
+    PATCH_SYNTH_CONV(0x1001, 0x4030,
+                     RK3588_RKNN_SYNTH_CONV_WIDTH - 1);
+    PATCH_SYNTH_CONV(0x1001, 0x4034,
+                     RK3588_RKNN_SYNTH_CONV_HEIGHT - 1);
+    PATCH_SYNTH_CONV(0x1001, 0x403c,
+                     ((RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1) << 16) |
+                     (RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1));
+    PATCH_SYNTH_CONV(0x1001, 0x4040, 0x20140);
+    PATCH_SYNTH_CONV(0x1001, 0x4048, 0xe01);
+    PATCH_SYNTH_CONV(0x1001, 0x4050, 0x125);
+    PATCH_SYNTH_CONV(0x1001, 0x4054, 0);
+    PATCH_SYNTH_CONV(0x1001, 0x4058,
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1);
+    PATCH_SYNTH_CONV(0x1001, 0x405c,
+                     ((RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) << 16) |
+                     (RK3588_RKNN_SYNTH_CONV_WIDTH - 1));
+    PATCH_SYNTH_CONV(0x1001, 0x4060, 0x92);
+    PATCH_SYNTH_CONV(0x1001, 0x406c, 0x2faf);
+    PATCH_SYNTH_CONV(0x1001, 0x4070, 0x383);
+    PATCH_SYNTH_CONV(0x1001, 0x4074, 0);
+    PATCH_SYNTH_CONV(0x1001, 0x4078, 1);
+    PATCH_SYNTH_CONV(0x1001, 0x4080, 0);
+    PATCH_SYNTH_CONV(0x1001, 0x4084, 1);
+    PATCH_SYNTH_CONV(0x1001, 0x4088, 0);
+    PATCH_SYNTH_CONV(0x1001, 0x40c0, 0x62000);
+
+    PATCH_SYNTH_CONV(0x2001, 0x500c,
+                     RK3588_RKNN_SYNTH_CONV_WIDTH - 1);
+    PATCH_SYNTH_CONV(0x2001, 0x5010,
+                     RK3588_RKNN_SYNTH_CONV_HEIGHT - 1);
+    PATCH_SYNTH_CONV(0x2001, 0x5014,
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1);
+    PATCH_SYNTH_CONV(0x2001, 0x5018, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x501c, 0xe);
+    PATCH_SYNTH_CONV(0x2001, 0x5020,
+                     RK3588_RKNN_SYNTH_CONV_BS_IOVA);
+    PATCH_SYNTH_CONV(0x2001, 0x5028, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x502c, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x5034, 1);
+    PATCH_SYNTH_CONV(0x2001, 0x5038, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x5040, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x5044, 0x7810);
+    PATCH_SYNTH_CONV(0x2001, 0x5048, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x504c, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x5064, 0);
+    PATCH_SYNTH_CONV(0x2001, 0x5068, 0x01010101);
+    PATCH_SYNTH_CONV(0x2001, 0x506c, 0);
+    PATCH_SYNTH_CONV(0x0081, RKNN_PC_OPERATION_ENABLE, 0x1d);
+#undef PATCH_SYNTH_CONV
+}
+
+static void rk3588_rknn_init_synth_conv_fixture(
+    RK3588RKNNSynthConvFixture *fixture)
+{
+    rk3588_rknn_make_synth_conv_regcmd(fixture->commands);
+    for (unsigned int row = 0;
+         row < RK3588_RKNN_SYNTH_CONV_HEIGHT; row++) {
+        for (unsigned int column = 0;
+             column < RK3588_RKNN_SYNTH_CONV_WIDTH; column++) {
+            int qd_sum = 0;
+
+            for (unsigned int channel = 0;
+                 channel < RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS;
+                 channel++) {
+                size_t index = rk3588_rknn_synth_conv_feature_index(
+                    channel, row, column);
+                int8_t value = ((row * 5 + column * 3 + channel) % 7) - 3;
+
+                fixture->input[index] = value;
+                qd_sum += value;
+            }
+            for (unsigned int output = 0;
+                 output < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
+                 output++) {
+                unsigned int group = output / 8;
+                unsigned int lane = output % 8;
+                int32_t alu = (int32_t)(output % 3) - 1;
+                uint16_t cpend = output & 1;
+                int value = fixture->input[
+                    rk3588_rknn_synth_conv_feature_index(
+                        output % RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS,
+                        row, column)];
+                size_t output_index = rk3588_rknn_synth_conv_feature_index(
+                    output, row, column);
+
+                value += cpend * qd_sum + alu;
+                fixture->output[output_index] =
+                    CLAMP(value, 0, INT8_MAX);
+                stl_le_p(fixture->bs + group * 0x40 + lane * 4, alu);
+                stw_le_p(fixture->bs + group * 0x40 + 0x20 + lane * 2,
+                         cpend);
+                stw_le_p(fixture->bs + group * 0x40 + 0x30 + lane * 2,
+                         1 << 14);
+            }
+        }
+    }
+    for (unsigned int output = 0;
+         output < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS; output++) {
+        fixture->weights[
+            output * RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS +
+            output % RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS] = 1;
+    }
+}
+
+static void rk3588_rknn_make_synth_conv_buffer(
+    RK3588RKNNSynthConvBuffer kind, void **data, gsize *length)
+{
+    g_autofree RK3588RKNNSynthConvFixture *fixture =
+        g_new0(RK3588RKNNSynthConvFixture, 1);
+    const void *source;
+
+    rk3588_rknn_init_synth_conv_fixture(fixture);
+    switch (kind) {
+    case RK3588_RKNN_SYNTH_CONV_REGCMD:
+        source = fixture->commands;
+        *length = sizeof(fixture->commands);
+        break;
+    case RK3588_RKNN_SYNTH_CONV_INPUT:
+        source = fixture->input;
+        *length = sizeof(fixture->input);
+        break;
+    case RK3588_RKNN_SYNTH_CONV_WEIGHT:
+        source = fixture->weights;
+        *length = sizeof(fixture->weights);
+        break;
+    case RK3588_RKNN_SYNTH_CONV_BS:
+        source = fixture->bs;
+        *length = sizeof(fixture->bs);
+        break;
+    case RK3588_RKNN_SYNTH_CONV_OUTPUT:
+        source = fixture->output;
+        *length = sizeof(fixture->output);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+    *data = g_memdup2(source, *length);
+}
+
+static uint64_t rk3588_rknn_synth_conv_addr(uint32_t iova)
+{
+    return RK3588_RKNN_SYNTH_CONV_ADDR +
+           iova - RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA;
 }
 
 static uint32_t rk3588_rknn_regcmd_value(const uint64_t commands[],
                                          size_t command_count,
                                          uint32_t target, uint32_t reg);
 
-static void rk3588_rknn_prepare_mobilenet_task6(
+static void rk3588_rknn_prepare_synth_conv(
     QTestState *qts, uint64_t *commands, size_t command_count,
     const uint8_t *input, size_t input_length,
     const uint8_t *weights, size_t weights_length,
@@ -4058,11 +4305,11 @@ static void rk3588_rknn_prepare_mobilenet_task6(
     uint32_t brdma_cfg)
 {
     const size_t input_compact_surface_bytes =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
         height *
-        RK3588_RKNN_MOBILENET_TASK6_ATOM;
+        RK3588_RKNN_SYNTH_CONV_ATOM;
     const size_t input_storage_channels =
-        input_length / (RK3588_RKNN_MOBILENET_TASK6_WIDTH * height);
+        input_length / (RK3588_RKNN_SYNTH_CONV_WIDTH * height);
     uint32_t input_surface_delta;
     int32_t signed_input_surface_delta;
     size_t input_dma_surface_bytes;
@@ -4074,25 +4321,25 @@ static void rk3588_rknn_prepare_mobilenet_task6(
                                     (_target), (_reg));                 \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
-    PATCH(0x0201, 0x1070, RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA);
-    PATCH(0x0201, 0x1110, RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA);
+    PATCH(0x0201, 0x1070, RK3588_RKNN_SYNTH_CONV_INPUT_IOVA);
+    PATCH(0x0201, 0x1110, RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA);
     PATCH(0x0201, 0x1020,
-          (RK3588_RKNN_MOBILENET_TASK6_WIDTH << 16) | height);
+          (RK3588_RKNN_SYNTH_CONV_WIDTH << 16) | height);
     PATCH(0x0201, 0x1010, (height + 1) << 4);
     PATCH(0x0201, 0x102c,
-          RK3588_RKNN_MOBILENET_TASK6_WIDTH * height);
+          RK3588_RKNN_SYNTH_CONV_WIDTH * height);
     PATCH(0x0201, 0x1084,
-          (RK3588_RKNN_MOBILENET_TASK6_WIDTH << 16) | height);
+          (RK3588_RKNN_SYNTH_CONV_WIDTH << 16) | height);
     PATCH(0x0801, 0x3014,
           ((height - 1) << 16) |
-          (RK3588_RKNN_MOBILENET_TASK6_WIDTH - 1));
-    PATCH(0x1001, 0x4020, RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+          (RK3588_RKNN_SYNTH_CONV_WIDTH - 1));
+    PATCH(0x1001, 0x4020, RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
     PATCH(0x1001, 0x4034, height - 1);
     PATCH(0x1001, 0x405c,
           ((height - 1) << 16) |
-          (RK3588_RKNN_MOBILENET_TASK6_WIDTH - 1));
+          (RK3588_RKNN_SYNTH_CONV_WIDTH - 1));
     PATCH(0x2001, 0x501c, brdma_cfg);
-    PATCH(0x2001, 0x5020, RK3588_RKNN_MOBILENET_TASK6_BS_IOVA);
+    PATCH(0x2001, 0x5020, RK3588_RKNN_SYNTH_CONV_BS_IOVA);
     PATCH(0x2001, 0x5010, height - 1);
 #undef PATCH
 
@@ -4102,90 +4349,90 @@ static void rk3588_rknn_prepare_mobilenet_task6(
     input_dma_surface_bytes =
         (signed_input_surface_delta + rk3588_rknn_regcmd_value(
              commands, command_count, 0x0201, 0x107c)) *
-        RK3588_RKNN_MOBILENET_TASK6_ATOM;
+        RK3588_RKNN_SYNTH_CONV_ATOM;
 
     g_assert_cmpuint(input_storage_channels, >, 0);
     g_assert_cmpuint(input_storage_channels %
-                     RK3588_RKNN_MOBILENET_TASK6_ATOM, ==, 0);
+                     RK3588_RKNN_SYNTH_CONV_ATOM, ==, 0);
     g_assert_cmpuint(input_length, ==,
-                     RK3588_RKNN_MOBILENET_TASK6_WIDTH * height *
+                     RK3588_RKNN_SYNTH_CONV_WIDTH * height *
                      input_storage_channels);
     g_assert_cmpuint(weights_length, ==,
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
                      input_storage_channels);
     g_assert_cmpuint(bs_length, ==, 64 * 8);
     qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
                  RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
     for (unsigned int page = 0;
-        page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+        page < RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES; page++) {
         qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
-                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     (RK3588_RKNN_SYNTH_CONV_ADDR + page * 0x1000) |
                      RK_IOMMU_PTE_RW);
     }
-    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
+    qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR, commands,
                    command_count * sizeof(*commands));
     for (unsigned int surface = 0;
          surface < input_storage_channels /
-                   RK3588_RKNN_MOBILENET_TASK6_ATOM; surface++) {
+                   RK3588_RKNN_SYNTH_CONV_ATOM; surface++) {
         qtest_memwrite(
             qts,
-            rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA) +
+            rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_INPUT_IOVA) +
                 surface * input_dma_surface_bytes,
             input + surface * input_compact_surface_bytes,
             input_compact_surface_bytes);
     }
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA),
                    weights, weights_length);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_BS_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_BS_IOVA),
                    bs, bs_length);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                  0xa5,
-                 RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES * 0x1000 -
-                 (RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA -
-                  RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA));
+                 RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES * 0x1000 -
+                 (RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA -
+                  RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA));
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
                  RK3588_RKNN_MATMUL_DTE_ADDR);
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
                  RK_IOMMU_CMD_ENABLE_PAGING);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
-                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+                 RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
                  rk3588_rknn_register_amount(command_count));
 }
 
-static void rk3588_rknn_read_mobilenet_task6_output(
+static void rk3588_rknn_read_synth_conv_output(
     QTestState *qts, uint8_t *output, size_t output_length, uint32_t height)
 {
     const size_t surface_bytes =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
         height *
-        RK3588_RKNN_MOBILENET_TASK6_ATOM;
+        RK3588_RKNN_SYNTH_CONV_ATOM;
 
     g_assert_cmpuint(output_length, ==,
-                     RK3588_RKNN_MOBILENET_TASK6_WIDTH *
+                     RK3588_RKNN_SYNTH_CONV_WIDTH *
                      height *
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS);
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS);
     for (unsigned int surface = 0;
-         surface < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS /
-                   RK3588_RKNN_MOBILENET_TASK6_ATOM; surface++) {
+         surface < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS /
+                   RK3588_RKNN_SYNTH_CONV_ATOM; surface++) {
         qtest_memread(
             qts,
-            rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
-                surface * RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES,
+            rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
+                surface * RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES,
             output + surface * surface_bytes, surface_bytes);
         if (surface + 1 <
-            RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS /
-            RK3588_RKNN_MOBILENET_TASK6_ATOM) {
+            RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS /
+            RK3588_RKNN_SYNTH_CONV_ATOM) {
             g_assert_cmphex(qtest_readb(
                 qts,
-                rk3588_rknn_mobilenet_task6_addr(
-                    RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
-                    surface * RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES +
+                rk3588_rknn_synth_conv_addr(
+                    RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
+                    surface * RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES +
                     surface_bytes), ==, 0xa5);
         }
     }
@@ -4259,14 +4506,14 @@ static int64_t rk3588_rknn_rgb_cvt_round_shift(int64_t value,
 }
 
 static int8_t rk3588_rknn_rgb_cvt_convert(
-    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    const uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS],
     unsigned int channel, uint8_t raw)
 {
     uint32_t cfg = rk3588_rknn_regcmd_value(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x104c);
     uint32_t channel_cfg = rk3588_rknn_regcmd_value(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x1050 + channel * 4);
     int input = cfg & (1U << 3) ? (int8_t)raw : raw;
     int16_t offset = channel_cfg;
@@ -4338,7 +4585,7 @@ static void rk3588_rknn_make_rgb_cvt_data(
 }
 
 static int8_t rk3588_rknn_rgb_cvt_expected(
-    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    const uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS],
     const uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES],
     const int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES],
     const uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES],
@@ -4348,7 +4595,7 @@ static int8_t rk3588_rknn_rgb_cvt_expected(
     int convolution = 0;
     int qd_sum = 0;
     uint8_t padding = rk3588_rknn_regcmd_value(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x1184);
 
     for (unsigned int kernel_row = 0;
@@ -4397,7 +4644,7 @@ static int8_t rk3588_rknn_rgb_cvt_expected(
     memcpy(&multiplier_le, bs + group * 0x40 + 0x30 + lane * 2,
            sizeof(multiplier_le));
     if (rk3588_rknn_regcmd_value(
-            commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+            commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
             0x1001, 0x4050) == 0x125) {
         value = convolution + (int16_t)le16_to_cpu(cpend_le) * qd_sum +
                 (int32_t)le32_to_cpu(alu_le);
@@ -4407,10 +4654,10 @@ static int8_t rk3588_rknn_rgb_cvt_expected(
     value *= (int16_t)le16_to_cpu(multiplier_le);
     shift = value < 0 ?
         (rk3588_rknn_regcmd_value(
-             commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+             commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
              0x1001, 0x4010) >> 4) & 0x3f :
         (rk3588_rknn_regcmd_value(
-             commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+             commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
              0x1001, 0x4048) >> 8) & 0x3f;
     value = rk3588_rknn_rgb_cvt_round_shift(value, shift, false);
     if (bn && value < 0) {
@@ -4425,20 +4672,20 @@ static void rk3588_rknn_make_rgb_cvt_regcmd(uint64_t commands[])
     gsize length;
     size_t index;
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", &original, &length);
-    g_assert_cmpuint(length, ==, RK3588_RKNN_MOBILENET_TASK6_COMMANDS *
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, &original, &length);
+    g_assert_cmpuint(length, ==, RK3588_RKNN_SYNTH_CONV_COMMANDS *
                                   sizeof(*commands));
     memcpy(commands, original, length);
 
 #define PATCH_RGB(_target, _reg, _value) do {                         \
     index = rk3588_rknn_find_regcmd(                                  \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,               \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,               \
         (_target), (_reg));                                           \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
     rk3588_rknn_patch_all_regcmd(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x100c, 0x6000a000);
     PATCH_RGB(0x0201, 0x1010,
               RK3588_RKNN_RGB_CVT_INPUT_HEIGHT << 4);
@@ -4473,7 +4720,7 @@ static void rk3588_rknn_make_rgb_cvt_regcmd(uint64_t commands[])
     PATCH_RGB(0x0201, 0x105c, 0x10000);
     PATCH_RGB(0x0201, 0x1068, 0);
     PATCH_RGB(0x0201, 0x1070,
-              RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA);
+              RK3588_RKNN_SYNTH_CONV_INPUT_IOVA);
     PATCH_RGB(0x0201, 0x107c, RK3588_RKNN_RGB_CVT_INPUT_WIDTH);
     PATCH_RGB(0x0201, 0x1080,
               RK3588_RKNN_RGB_CVT_INPUT_WIDTH *
@@ -4483,7 +4730,7 @@ static void rk3588_rknn_make_rgb_cvt_regcmd(uint64_t commands[])
               RK3588_RKNN_RGB_CVT_INPUT_HEIGHT);
     PATCH_RGB(0x0201, 0x1088, RK3588_RKNN_RGB_CVT_STORAGE_CHANNELS);
     PATCH_RGB(0x0201, 0x1110,
-              RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA);
+              RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA);
     PATCH_RGB(0x0201, 0x1180, 0xfff);
     PATCH_RGB(0x0801, 0x3010, 1);
     PATCH_RGB(0x0801, 0x3014,
@@ -4495,7 +4742,7 @@ static void rk3588_rknn_make_rgb_cvt_regcmd(uint64_t commands[])
     PATCH_RGB(0x1001, 0x400c, 0x1e4);
     PATCH_RGB(0x1001, 0x4010, 0);
     PATCH_RGB(0x1001, 0x4020,
-              RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+              RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
     PATCH_RGB(0x1001, 0x4024, RK3588_RKNN_RGB_CVT_SURFACE_STRIDE);
     PATCH_RGB(0x1001, 0x4030,
               RK3588_RKNN_RGB_CVT_OUTPUT_WIDTH - 1);
@@ -4544,25 +4791,25 @@ static void rk3588_rknn_prepare_rgb_cvt(
     qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
                  RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
     for (unsigned int page = 0;
-         page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+         page < RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES; page++) {
         qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
-                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     (RK3588_RKNN_SYNTH_CONV_ADDR + page * 0x1000) |
                      RK_IOMMU_PTE_RW);
     }
-    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
-                   RK3588_RKNN_MOBILENET_TASK6_COMMANDS *
+    qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR, commands,
+                   RK3588_RKNN_SYNTH_CONV_COMMANDS *
                    sizeof(*commands));
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                   RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                   RK3588_RKNN_SYNTH_CONV_INPUT_IOVA),
                    input, RK3588_RKNN_RGB_CVT_INPUT_BYTES);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                   RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                   RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA),
                    weights, RK3588_RKNN_RGB_CVT_WEIGHT_BYTES);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
                        RK3588_RKNN_RGB_CVT_BS_IOVA),
                    bs, RK3588_RKNN_RGB_CVT_BS_BYTES);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                  0xa5, RK3588_RKNN_RGB_CVT_SURFACE_STRIDE +
                        RK3588_RKNN_RGB_CVT_OUTPUT_SURFACE_BYTES + 1);
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
@@ -4570,22 +4817,22 @@ static void rk3588_rknn_prepare_rgb_cvt(
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
                  RK_IOMMU_CMD_ENABLE_PAGING);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
-                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+                 RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
                  rk3588_rknn_register_amount(
-                     RK3588_RKNN_MOBILENET_TASK6_COMMANDS));
+                     RK3588_RKNN_SYNTH_CONV_COMMANDS));
 }
 
 static void rk3588_rknn_assert_rgb_cvt_result(
     QTestState *qts,
-    const uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    const uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS],
     const uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES],
     const int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES],
     const uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES], const uint16_t *bn)
 {
     uint8_t output[RK3588_RKNN_RGB_CVT_OUTPUT_BYTES];
-    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
 
     for (unsigned int surface = 0; surface < 2; surface++) {
         qtest_memread(qts,
@@ -4629,8 +4876,8 @@ static void rk3588_rknn_assert_rgb_cvt_result(
 
 static void rk3588_rknn_assert_rgb_cvt_rejected(QTestState *qts)
 {
-    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
 
     g_assert_cmphex(qtest_readb(qts, output_addr), ==, 0xa5);
     g_assert_cmphex(qtest_readb(
@@ -4644,7 +4891,7 @@ static void rk3588_rknn_assert_rgb_cvt_rejected(QTestState *qts)
 
 static void test_rk3588_rknpu_rgb_cvt_convolution(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
     int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
@@ -4661,14 +4908,14 @@ static void test_rk3588_rknpu_rgb_cvt_convolution(void)
 }
 
 static void rk3588_rknn_enable_rgb_cvt_nrdma(
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS],
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS],
     uint32_t nrdma_cfg, uint32_t bn_mul_cfg, uint32_t bn_iova)
 {
     size_t index;
 
 #define PATCH_NRDMA(_target, _reg, _value) do {                       \
     index = rk3588_rknn_find_regcmd(                                  \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,              \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,              \
         (_target), (_reg));                                           \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
@@ -4681,7 +4928,7 @@ static void rk3588_rknn_enable_rgb_cvt_nrdma(
 
 static void test_rk3588_rknpu_int8_qd_nrdma(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
     int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
@@ -4713,7 +4960,7 @@ static void test_rk3588_rknpu_int8_qd_nrdma(void)
     }
     g_assert_true(changed);
     rk3588_rknn_prepare_rgb_cvt(qts, commands, input, weights, bs);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
                        RK3588_RKNN_RGB_CVT_BN_IOVA), bn, sizeof(bn));
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
@@ -4737,7 +4984,7 @@ static void test_rk3588_rknpu_int8_qd_nrdma_controls(void)
 
     for (unsigned int case_index = 0;
          case_index < ARRAY_SIZE(cases); case_index++) {
-        uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+        uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
         uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
         int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
         uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
@@ -4759,8 +5006,8 @@ static void test_rk3588_rknpu_int8_qd_nrdma_controls(void)
 
 static void test_rk3588_rknpu_int8_qd_brdma_no_cpend(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
-    uint64_t cpend_commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
+    uint64_t cpend_commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
     int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
@@ -4826,7 +5073,7 @@ static void test_rk3588_rknpu_rgb_cvt_control_mutations(void)
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
     for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
-        uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+        uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
         uint8_t input[RK3588_RKNN_RGB_CVT_INPUT_BYTES];
         int8_t weights[RK3588_RKNN_RGB_CVT_WEIGHT_BYTES];
         uint8_t bs[RK3588_RKNN_RGB_CVT_BS_BYTES];
@@ -4860,15 +5107,15 @@ static void rk3588_rknn_enable_int8_erdma(uint64_t commands[],
                                          bool consume_erdma,
                                          bool valid_notch)
 {
-    const uint32_t spatial = RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-                             RK3588_RKNN_MOBILENET_TASK6_HEIGHT;
+    const uint32_t spatial = RK3588_RKNN_SYNTH_CONV_WIDTH *
+                             RK3588_RKNN_SYNTH_CONV_HEIGHT;
     const uint32_t surface_stride = spatial * 2;
     const uint32_t surface_notch = surface_stride * 2 - spatial;
     size_t index;
 
 #define PATCH_QD_ERDMA(_target, _reg, _value) do {                   \
     index = rk3588_rknn_find_regcmd(                                 \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,              \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,              \
         (_target), (_reg));                                          \
     commands[index] = rk3588_rknn_regcmd(                            \
         (_target), (_reg), (_value));                                \
@@ -4879,13 +5126,13 @@ static void rk3588_rknn_enable_int8_erdma(uint64_t commands[],
     PATCH_QD_ERDMA(0x1001, 0x4078, 1);
     PATCH_QD_ERDMA(
         0x2001, 0x5018,
-        consume_erdma ? RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA :
+        consume_erdma ? RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA :
                         0xfff00000);
     PATCH_QD_ERDMA(0x2001, 0x5034, 0x40000004);
     PATCH_QD_ERDMA(
         0x2001, 0x5038,
         consume_erdma ?
-            RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA + spatial * 16 :
+            RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA + spatial * 16 :
             0xfff00000);
     PATCH_QD_ERDMA(0x2001, 0x5040, surface_stride << 4);
     PATCH_QD_ERDMA(0x2001, 0x5044, 0x7d00);
@@ -4898,8 +5145,8 @@ static void rk3588_rknn_enable_int8_erdma(uint64_t commands[],
 static void test_rk3588_rknpu_int8_qd_brdma_erdma(void)
 {
     const size_t spatial =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT;
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_HEIGHT;
     const size_t operand_span = spatial * 128;
     const size_t stale_group_offset = spatial * 96;
     const size_t operand_group_bytes = spatial * 16;
@@ -4916,43 +5163,43 @@ static void test_rk3588_rknpu_int8_qd_brdma_erdma(void)
     gsize output_length;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", (void **)&commands, &command_bytes);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "input-int8-feature.bin", &input, &input_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "weights-int8.bin", &weights, &weights_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "bs-rdma.bin", &bs, &bs_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "output-int8-feature.bin", &expected, &output_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, (void **)&commands, &command_bytes);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_INPUT, &input, &input_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_WEIGHT, &weights, &weights_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_BS, &bs, &bs_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT, &expected, &output_length);
     rk3588_rknn_enable_int8_erdma(commands, true, true);
-    rk3588_rknn_prepare_mobilenet_task6(
+    rk3588_rknn_prepare_synth_conv(
         qts, commands, command_bytes / sizeof(*commands),
         input, input_length, weights, weights_length, bs, bs_length,
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+        RK3588_RKNN_SYNTH_CONV_HEIGHT, 0xe);
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                  0, operand_span);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
                      stale_group_offset,
                  1, operand_group_bytes);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
                      stale_group_offset + spatial * 16,
                  1, operand_group_bytes);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
     actual = g_malloc(output_length);
     for (unsigned int surface = 0;
-         surface < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS /
-                   RK3588_RKNN_MOBILENET_TASK6_ATOM; surface++) {
+         surface < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS /
+                   RK3588_RKNN_SYNTH_CONV_ATOM; surface++) {
         qtest_memread(
             qts,
-            rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
-                surface * RK3588_RKNN_MOBILENET_TASK6_SURFACE_BYTES,
+            rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
+                surface * RK3588_RKNN_SYNTH_CONV_SURFACE_BYTES,
             actual + surface * output_length / 4, output_length / 4);
     }
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
@@ -4980,19 +5227,19 @@ static void test_rk3588_rknpu_int8_qd_brdma_erdma_controls(void)
     gsize bs_length;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", (void **)&commands, &command_bytes);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "input-int8-feature.bin", &input, &input_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "weights-int8.bin", &weights, &weights_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "bs-rdma.bin", &bs, &bs_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, (void **)&commands, &command_bytes);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_INPUT, &input, &input_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_WEIGHT, &weights, &weights_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_BS, &bs, &bs_length);
     rk3588_rknn_enable_int8_erdma(commands, true, false);
-    rk3588_rknn_prepare_mobilenet_task6(
+    rk3588_rknn_prepare_synth_conv(
         qts, commands, command_bytes / sizeof(*commands),
         input, input_length, weights, weights_length, bs, bs_length,
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
+        RK3588_RKNN_SYNTH_CONV_HEIGHT, 0xe);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
@@ -5005,9 +5252,9 @@ static void test_rk3588_rknpu_int8_qd_brdma_partial_channels(void)
 {
     const unsigned int channels = 63;
     const size_t output_length =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_HEIGHT *
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
     g_autofree void *regcmd = NULL;
     g_autofree void *input = NULL;
     g_autofree void *weights = NULL;
@@ -5022,16 +5269,16 @@ static void test_rk3588_rknpu_int8_qd_brdma_partial_channels(void)
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
     size_t index;
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", &regcmd, &regcmd_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "input-int8-feature.bin", &input, &input_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "weights-int8.bin", &weights, &weights_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "bs-rdma.bin", &bs, &bs_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "output-int8-feature.bin", (void **)&expected, &expected_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, &regcmd, &regcmd_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_INPUT, &input, &input_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_WEIGHT, &weights, &weights_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_BS, &bs, &bs_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT, (void **)&expected, &expected_length);
 #define PATCH_QD_CHANNELS(_target, _reg, _value) do {                 \
     index = rk3588_rknn_find_regcmd(                                  \
         regcmd, regcmd_length / sizeof(uint64_t), (_target), (_reg)); \
@@ -5039,7 +5286,7 @@ static void test_rk3588_rknpu_int8_qd_brdma_partial_channels(void)
         rk3588_rknn_regcmd((_target), (_reg), (_value));              \
 } while (0)
     PATCH_QD_CHANNELS(0x0201, 0x1030,
-                      channels * RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS);
+                      channels * RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
     PATCH_QD_CHANNELS(0x0201, 0x1038,
                       (1 << 24) | (1 << 16) | channels);
     PATCH_QD_CHANNELS(0x0801, 0x3018, channels - 1);
@@ -5049,31 +5296,31 @@ static void test_rk3588_rknpu_int8_qd_brdma_partial_channels(void)
     PATCH_QD_CHANNELS(0x2001, 0x5014, channels - 1);
 #undef PATCH_QD_CHANNELS
     g_assert_cmpuint(expected_length, ==, output_length);
-    rk3588_rknn_prepare_mobilenet_task6(
+    rk3588_rknn_prepare_synth_conv(
         qts, regcmd, regcmd_length / sizeof(uint64_t),
         input, input_length, weights, weights_length, bs, bs_length,
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
+        RK3588_RKNN_SYNTH_CONV_HEIGHT, 0xe);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
     actual = g_malloc(output_length);
-    rk3588_rknn_read_mobilenet_task6_output(
-        qts, actual, output_length, RK3588_RKNN_MOBILENET_TASK6_HEIGHT);
+    rk3588_rknn_read_synth_conv_output(
+        qts, actual, output_length, RK3588_RKNN_SYNTH_CONV_HEIGHT);
 
     for (unsigned int row = 0;
-         row < RK3588_RKNN_MOBILENET_TASK6_HEIGHT; row++) {
+         row < RK3588_RKNN_SYNTH_CONV_HEIGHT; row++) {
         for (unsigned int column = 0;
-             column < RK3588_RKNN_MOBILENET_TASK6_WIDTH; column++) {
+             column < RK3588_RKNN_SYNTH_CONV_WIDTH; column++) {
             for (unsigned int channel = 0;
-                 channel < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+                 channel < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
                  channel++) {
                 size_t output_index =
-                    (channel / RK3588_RKNN_MOBILENET_TASK6_ATOM) *
-                    RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-                    RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-                    RK3588_RKNN_MOBILENET_TASK6_ATOM +
-                    (row * RK3588_RKNN_MOBILENET_TASK6_WIDTH + column) *
-                    RK3588_RKNN_MOBILENET_TASK6_ATOM +
-                    channel % RK3588_RKNN_MOBILENET_TASK6_ATOM;
+                    (channel / RK3588_RKNN_SYNTH_CONV_ATOM) *
+                    RK3588_RKNN_SYNTH_CONV_HEIGHT *
+                    RK3588_RKNN_SYNTH_CONV_WIDTH *
+                    RK3588_RKNN_SYNTH_CONV_ATOM +
+                    (row * RK3588_RKNN_SYNTH_CONV_WIDTH + column) *
+                    RK3588_RKNN_SYNTH_CONV_ATOM +
+                    channel % RK3588_RKNN_SYNTH_CONV_ATOM;
 
                 g_assert_cmphex(actual[output_index], ==,
                                 channel < channels ?
@@ -5093,23 +5340,23 @@ static void test_rk3588_rknpu_int8_qd_brdma_storage_channels(void)
         STORAGE_CHANNELS = 48,
         TEST_HEIGHT = 1,
     };
-    const size_t spatial = RK3588_RKNN_MOBILENET_TASK6_WIDTH * TEST_HEIGHT;
+    const size_t spatial = RK3588_RKNN_SYNTH_CONV_WIDTH * TEST_HEIGHT;
     g_autofree void *regcmd = NULL;
     g_autofree uint8_t *input = g_new0(uint8_t,
                                        spatial * STORAGE_CHANNELS);
     g_autofree uint8_t *weights = g_new0(
-        uint8_t, RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+        uint8_t, RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
                  STORAGE_CHANNELS);
     g_autofree uint8_t *bs = g_new0(
-        uint8_t, RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8);
+        uint8_t, RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * 8);
     g_autofree uint8_t *actual = g_malloc(
-        spatial * RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS);
+        spatial * RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS);
     gsize regcmd_length;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
     size_t index;
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", &regcmd, &regcmd_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, &regcmd, &regcmd_length);
 #define PATCH_QD_STORAGE(_target, _reg, _value) do {                 \
     index = rk3588_rknn_find_regcmd(                                  \
         regcmd, regcmd_length / sizeof(uint64_t), (_target), (_reg)); \
@@ -5117,15 +5364,15 @@ static void test_rk3588_rknpu_int8_qd_brdma_storage_channels(void)
         rk3588_rknn_regcmd((_target), (_reg), (_value));              \
 } while (0)
     PATCH_QD_STORAGE(0x0201, 0x1024,
-                     ((RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS - 1) <<
+                     ((RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS - 1) <<
                       16) | STORAGE_CHANNELS);
     PATCH_QD_STORAGE(0x0201, 0x1030,
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
                      STORAGE_CHANNELS);
     PATCH_QD_STORAGE(0x0201, 0x1034, STORAGE_CHANNELS);
     PATCH_QD_STORAGE(0x0201, 0x1080,
                      (1U << 28) -
-                     RK3588_RKNN_MOBILENET_TASK6_WIDTH * 3);
+                     RK3588_RKNN_SYNTH_CONV_WIDTH * 3);
     PATCH_QD_STORAGE(0x0201, 0x1088, STORAGE_CHANNELS);
     PATCH_QD_STORAGE(0x1001, 0x4060, 1);
     PATCH_QD_STORAGE(0x1001, 0x4070, 1);
@@ -5135,41 +5382,41 @@ static void test_rk3588_rknpu_int8_qd_brdma_storage_channels(void)
 #undef PATCH_QD_STORAGE
 
     for (unsigned int column = 0;
-         column < RK3588_RKNN_MOBILENET_TASK6_WIDTH; column++) {
+         column < RK3588_RKNN_SYNTH_CONV_WIDTH; column++) {
         input[rk3588_rknn_spatial_feature_index(
-            RK3588_RKNN_MOBILENET_TASK6_WIDTH, TEST_HEIGHT,
-            RK3588_RKNN_MOBILENET_TASK6_ATOM,
-            RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS,
+            RK3588_RKNN_SYNTH_CONV_WIDTH, TEST_HEIGHT,
+            RK3588_RKNN_SYNTH_CONV_ATOM,
+            RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS,
             0, column)] = 1;
     }
     weights[32 * 32] = 1;
     for (unsigned int output = 0;
-         output < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS; output++) {
+         output < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS; output++) {
         stw_le_p(bs + (output / 8) * 0x40 + 0x30 +
                  (output % 8) * 2, 1 << 14);
     }
 
-    rk3588_rknn_prepare_mobilenet_task6(
+    rk3588_rknn_prepare_synth_conv(
         qts, regcmd, regcmd_length / sizeof(uint64_t),
         input, spatial * STORAGE_CHANNELS,
-        weights, RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
+        weights, RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
                  STORAGE_CHANNELS,
-        bs, RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8,
+        bs, RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * 8,
         TEST_HEIGHT, 0xe);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
-    rk3588_rknn_read_mobilenet_task6_output(
+    rk3588_rknn_read_synth_conv_output(
         qts, actual,
-        spatial * RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS,
+        spatial * RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS,
         TEST_HEIGHT);
     for (unsigned int column = 0;
-         column < RK3588_RKNN_MOBILENET_TASK6_WIDTH; column++) {
+         column < RK3588_RKNN_SYNTH_CONV_WIDTH; column++) {
         for (unsigned int output = 0;
-             output < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+             output < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
              output++) {
             size_t output_index = rk3588_rknn_spatial_feature_index(
-                RK3588_RKNN_MOBILENET_TASK6_WIDTH, TEST_HEIGHT,
-                RK3588_RKNN_MOBILENET_TASK6_ATOM,
+                RK3588_RKNN_SYNTH_CONV_WIDTH, TEST_HEIGHT,
+                RK3588_RKNN_SYNTH_CONV_ATOM,
                 output, 0, column);
 
             g_assert_cmphex(actual[output_index], ==, output ? 0 : 1);
@@ -5197,17 +5444,17 @@ static void test_rk3588_rknpu_int8_qd_brdma_layout_controls(void)
         { 0x1001, 0x4050, 0x127 },
         { 0x1001, 0x4054, 1 },
         { 0x1001, 0x405c,
-          (RK3588_RKNN_MOBILENET_TASK6_HEIGHT << 16) |
-          (RK3588_RKNN_MOBILENET_TASK6_WIDTH - 1) },
+          (RK3588_RKNN_SYNTH_CONV_HEIGHT << 16) |
+          (RK3588_RKNN_SYNTH_CONV_WIDTH - 1) },
         { 0x1001, 0x405c,
-          ((RK3588_RKNN_MOBILENET_TASK6_HEIGHT - 1) << 16) |
-          RK3588_RKNN_MOBILENET_TASK6_WIDTH },
+          ((RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) << 16) |
+          RK3588_RKNN_SYNTH_CONV_WIDTH },
         { 0x1001, 0x4034,
-          (RK3588_RKNN_MOBILENET_TASK6_HEIGHT - 1) | (1U << 22) },
+          (RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) | (1U << 22) },
         { 0x1001, 0x4034,
-          (RK3588_RKNN_MOBILENET_TASK6_HEIGHT - 1) | (1U << 23) },
+          (RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) | (1U << 23) },
         { 0x1001, 0x4034,
-          (RK3588_RKNN_MOBILENET_TASK6_HEIGHT - 1) | (1U << 24) },
+          (RK3588_RKNN_SYNTH_CONV_HEIGHT - 1) | (1U << 24) },
     };
     g_autofree void *original_regcmd = NULL;
     g_autofree void *input = NULL;
@@ -5219,14 +5466,14 @@ static void test_rk3588_rknpu_int8_qd_brdma_layout_controls(void)
     gsize bs_length;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", &original_regcmd, &regcmd_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "input-int8-feature.bin", &input, &input_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "weights-int8.bin", &weights, &weights_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "bs-rdma.bin", &bs, &bs_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, &original_regcmd, &regcmd_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_INPUT, &input, &input_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_WEIGHT, &weights, &weights_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_BS, &bs, &bs_length);
 
     for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
         g_autofree uint64_t *regcmd = g_memdup2(original_regcmd,
@@ -5238,19 +5485,19 @@ static void test_rk3588_rknpu_int8_qd_brdma_layout_controls(void)
         if (i) {
             rk3588_rknpu_reset_fixture(qts);
         }
-        rk3588_rknn_prepare_mobilenet_task6(
+        rk3588_rknn_prepare_synth_conv(
             qts, regcmd, regcmd_length / sizeof(*regcmd),
             input, input_length, weights, weights_length, bs, bs_length,
-            RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 0xe);
+            RK3588_RKNN_SYNTH_CONV_HEIGHT, 0xe);
         regcmd[index] = rk3588_rknn_regcmd(
             cases[i].target, cases[i].reg, cases[i].value);
-        qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR,
+        qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR,
                        regcmd, regcmd_length);
         rk3588_rknn_start_matmul(qts);
         qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
         g_assert_cmphex(qtest_readb(
-            qts, rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA)), ==, 0xa5);
+            qts, rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA)), ==, 0xa5);
         g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                     RKNN_PC_TASK_STATUS), ==,
                         RKNN_TASK_STATUS_FETCH_ERROR | 1);
@@ -5264,9 +5511,9 @@ static void rk3588_rknn_make_int8_brdma_regcmd(uint64_t commands[],
                                                size_t command_count)
 {
     const unsigned int input_valid_channels =
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS / 2;
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS / 2;
     const unsigned int valid_channels =
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS - 1;
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1;
     size_t index;
 
 #define PATCH_INT8_BRDMA(_target, _reg, _value) do {                 \
@@ -5278,10 +5525,10 @@ static void rk3588_rknn_make_int8_brdma_regcmd(uint64_t commands[],
     PATCH_INT8_BRDMA(
         0x0201, 0x1024,
         ((input_valid_channels - 1) << 16) |
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS);
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
     PATCH_INT8_BRDMA(0x1001, 0x403c,
                      ((valid_channels - 1) << 16) |
-                     (RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS - 1));
+                     (RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS - 1));
     PATCH_INT8_BRDMA(0x1001, 0x4040, 0x20150);
     PATCH_INT8_BRDMA(0x1001, 0x4048, 0);
     PATCH_INT8_BRDMA(0x1001, 0x4050, 0x124);
@@ -5302,29 +5549,29 @@ static void rk3588_rknn_make_int8_brdma_data(uint8_t input[],
     memset(weights, 129, weights_length);
     memset(bs, 0, bs_length);
     for (unsigned int channel = 0;
-         channel < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS; channel++) {
+         channel < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS; channel++) {
         int32_t expected = (int32_t)channel + 10;
 
         stl_le_p(bs + channel * sizeof(uint32_t),
-                 expected - RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS);
+                 expected - RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS);
     }
 }
 
 static void test_rk3588_rknpu_int8_brdma(void)
 {
     const size_t input_length =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_HEIGHT *
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS;
     const size_t weights_length =
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS;
     const size_t bs_length =
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8;
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * 8;
     const size_t output_length =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_HEIGHT *
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
     g_autofree uint64_t *commands = NULL;
     g_autofree uint8_t *input = g_malloc(input_length);
     g_autofree uint8_t *weights = g_malloc(weights_length);
@@ -5333,35 +5580,35 @@ static void test_rk3588_rknpu_int8_brdma(void)
     gsize command_bytes;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", (void **)&commands, &command_bytes);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, (void **)&commands, &command_bytes);
     rk3588_rknn_make_int8_brdma_regcmd(
         commands, command_bytes / sizeof(*commands));
     rk3588_rknn_make_int8_brdma_data(
         input, input_length, weights, weights_length, bs, bs_length);
-    rk3588_rknn_prepare_mobilenet_task6(
+    rk3588_rknn_prepare_synth_conv(
         qts, commands, command_bytes / sizeof(*commands),
         input, input_length, weights, weights_length, bs, bs_length,
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 2);
+        RK3588_RKNN_SYNTH_CONV_HEIGHT, 2);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
-    rk3588_rknn_read_mobilenet_task6_output(
-        qts, output, output_length, RK3588_RKNN_MOBILENET_TASK6_HEIGHT);
+    rk3588_rknn_read_synth_conv_output(
+        qts, output, output_length, RK3588_RKNN_SYNTH_CONV_HEIGHT);
 
     for (unsigned int row = 0;
-         row < RK3588_RKNN_MOBILENET_TASK6_HEIGHT; row++) {
+         row < RK3588_RKNN_SYNTH_CONV_HEIGHT; row++) {
         for (unsigned int column = 0;
-             column < RK3588_RKNN_MOBILENET_TASK6_WIDTH; column++) {
+             column < RK3588_RKNN_SYNTH_CONV_WIDTH; column++) {
             for (unsigned int channel = 0;
-                 channel < RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS;
+                 channel < RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS;
                  channel++) {
                 size_t output_index = rk3588_rknn_spatial_feature_index(
-                    RK3588_RKNN_MOBILENET_TASK6_WIDTH,
-                    RK3588_RKNN_MOBILENET_TASK6_HEIGHT,
-                    RK3588_RKNN_MOBILENET_TASK6_ATOM,
+                    RK3588_RKNN_SYNTH_CONV_WIDTH,
+                    RK3588_RKNN_SYNTH_CONV_HEIGHT,
+                    RK3588_RKNN_SYNTH_CONV_ATOM,
                     channel, row, column);
                 int8_t expected = channel + 1 ==
-                    RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS ?
+                    RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS ?
                     0 : (int32_t)channel + 10;
 
                 if ((int8_t)output[output_index] != expected) {
@@ -5396,14 +5643,14 @@ static void test_rk3588_rknpu_int8_brdma_controls(void)
         { 0x2001, 0x5068, 0x01010100 },
     };
     const size_t input_length =
-        RK3588_RKNN_MOBILENET_TASK6_WIDTH *
-        RK3588_RKNN_MOBILENET_TASK6_HEIGHT *
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_WIDTH *
+        RK3588_RKNN_SYNTH_CONV_HEIGHT *
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS;
     const size_t weights_length =
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS *
-        RK3588_RKNN_MOBILENET_TASK6_INPUT_CHANNELS;
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS *
+        RK3588_RKNN_SYNTH_CONV_INPUT_CHANNELS;
     const size_t bs_length =
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_CHANNELS * 8;
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_CHANNELS * 8;
     g_autofree uint64_t *original_commands = NULL;
     g_autofree uint8_t *input = g_malloc(input_length);
     g_autofree uint8_t *weights = g_malloc(weights_length);
@@ -5411,8 +5658,9 @@ static void test_rk3588_rknpu_int8_brdma_controls(void)
     gsize command_bytes;
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", (void **)&original_commands, &command_bytes);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, (void **)&original_commands,
+        &command_bytes);
     rk3588_rknn_make_int8_brdma_data(
         input, input_length, weights, weights_length, bs, bs_length);
     for (unsigned int case_index = 0;
@@ -5429,20 +5677,20 @@ static void test_rk3588_rknpu_int8_brdma_controls(void)
         index = rk3588_rknn_find_regcmd(
             commands, command_bytes / sizeof(*commands),
             cases[case_index].target, cases[case_index].reg);
-        rk3588_rknn_prepare_mobilenet_task6(
+        rk3588_rknn_prepare_synth_conv(
             qts, commands, command_bytes / sizeof(*commands),
             input, input_length, weights, weights_length, bs, bs_length,
-            RK3588_RKNN_MOBILENET_TASK6_HEIGHT, 2);
+            RK3588_RKNN_SYNTH_CONV_HEIGHT, 2);
         commands[index] = rk3588_rknn_regcmd(
             cases[case_index].target, cases[case_index].reg,
             cases[case_index].value);
-        qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR,
+        qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR,
                        commands, command_bytes);
         rk3588_rknn_start_matmul(qts);
         qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
         g_assert_cmphex(qtest_readb(
-            qts, rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA)), ==, 0xa5);
+            qts, rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA)), ==, 0xa5);
         g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                     RKNN_PC_TASK_STATUS), ==,
                         RKNN_TASK_STATUS_FETCH_ERROR | 1);
@@ -5461,14 +5709,15 @@ static void test_rk3588_rknpu_int8_erdma_unused_controls(void)
     gsize weights_length;
     gsize bs_length;
 
-    rk3588_rknn_load_mobilenet_task6_file(
-        "regcmd.bin", (void **)&original_commands, &command_bytes);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "input-int8-feature.bin", &input, &input_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "weights-int8.bin", &weights, &weights_length);
-    rk3588_rknn_load_mobilenet_task6_file(
-        "bs-rdma.bin", &bs, &bs_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_REGCMD, (void **)&original_commands,
+        &command_bytes);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_INPUT, &input, &input_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_WEIGHT, &weights, &weights_length);
+    rk3588_rknn_make_synth_conv_buffer(
+        RK3588_RKNN_SYNTH_CONV_BS, &bs, &bs_length);
 
     for (unsigned int qd = 0; qd < 2; qd++) {
         g_autofree uint64_t *commands = g_memdup2(
@@ -5482,15 +5731,15 @@ static void test_rk3588_rknpu_int8_erdma_unused_controls(void)
                 commands, command_bytes / sizeof(*commands));
         }
         rk3588_rknn_enable_int8_erdma(commands, false, true);
-        rk3588_rknn_prepare_mobilenet_task6(
+        rk3588_rknn_prepare_synth_conv(
             qts, commands, command_bytes / sizeof(*commands),
             input, input_length, weights, weights_length, bs, bs_length,
-            RK3588_RKNN_MOBILENET_TASK6_HEIGHT, qd ? 0xe : 2);
+            RK3588_RKNN_SYNTH_CONV_HEIGHT, qd ? 0xe : 2);
         rk3588_rknn_start_matmul(qts);
         qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
         g_assert_cmphex(qtest_readb(
-            qts, rk3588_rknn_mobilenet_task6_addr(
-                RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA)), ==, 0xa5);
+            qts, rk3588_rknn_synth_conv_addr(
+                RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA)), ==, 0xa5);
         g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                     RKNN_PC_TASK_STATUS), ==,
                         RKNN_TASK_STATUS_FETCH_ERROR | 1);
@@ -6024,12 +6273,12 @@ static void rk3588_rknn_make_depthwise_int8_regcmd(uint64_t commands[])
     rk3588_rknn_make_rgb_cvt_regcmd(commands);
 #define PATCH_DEPTHWISE_INT8(_target, _reg, _value) do {             \
     index = rk3588_rknn_find_regcmd(                                 \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,              \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,              \
         (_target), (_reg));                                          \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
     rk3588_rknn_patch_all_regcmd(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x100c, 3);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1010, (height + 1) << 4);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1014, 0x09);
@@ -6044,7 +6293,7 @@ static void rk3588_rknn_make_depthwise_int8_regcmd(uint64_t commands[])
     PATCH_DEPTHWISE_INT8(0x0201, 0x104c, 0x0b);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1068, 0x11);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1070,
-                         RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA);
+                         RK3588_RKNN_SYNTH_CONV_INPUT_IOVA);
     PATCH_DEPTHWISE_INT8(0x0201, 0x107c, line_stride);
     PATCH_DEPTHWISE_INT8(
         0x0201, 0x1080,
@@ -6052,7 +6301,7 @@ static void rk3588_rknn_make_depthwise_int8_regcmd(uint64_t commands[])
     PATCH_DEPTHWISE_INT8(0x0201, 0x1084, (width << 16) | height);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1088, channels);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1110,
-                         RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA);
+                         RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1180, 0);
     PATCH_DEPTHWISE_INT8(0x0201, 0x1184, 0xffff8080);
     PATCH_DEPTHWISE_INT8(0x0801, 0x3010, 3);
@@ -6062,7 +6311,7 @@ static void rk3588_rknn_make_depthwise_int8_regcmd(uint64_t commands[])
     PATCH_DEPTHWISE_INT8(0x1001, 0x400c, 0x1fc);
     PATCH_DEPTHWISE_INT8(0x1001, 0x4010, 5 << 4);
     PATCH_DEPTHWISE_INT8(0x1001, 0x4020,
-                         RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+                         RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
     PATCH_DEPTHWISE_INT8(0x1001, 0x4024,
                          RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE);
     PATCH_DEPTHWISE_INT8(0x1001, 0x4030, width - 1);
@@ -6087,7 +6336,7 @@ static void rk3588_rknn_make_depthwise_int8_regcmd(uint64_t commands[])
     PATCH_DEPTHWISE_INT8(0x2001, 0x5014, storage - 1);
     PATCH_DEPTHWISE_INT8(0x2001, 0x501c, 0xe);
     PATCH_DEPTHWISE_INT8(0x2001, 0x5020,
-                         RK3588_RKNN_MOBILENET_TASK6_BS_IOVA);
+                         RK3588_RKNN_SYNTH_CONV_BS_IOVA);
     PATCH_DEPTHWISE_INT8(0x2001, 0x5044, 0x7816);
     PATCH_DEPTHWISE_INT8(0x2001, 0x5048, 0);
     PATCH_DEPTHWISE_INT8(0x2001, 0x5064, 0);
@@ -6161,12 +6410,12 @@ static void rk3588_rknn_make_depthwise_int8_deconv_regcmd(
     rk3588_rknn_make_depthwise_int8_regcmd(commands);
 #define PATCH_DEPTHWISE_DECONV(_target, _reg, _value) do {           \
     index = rk3588_rknn_find_regcmd(                                 \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,              \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,              \
         (_target), (_reg));                                          \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
     rk3588_rknn_patch_all_regcmd(
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,
         0x0201, 0x100c, 0x00010003);
     PATCH_DEPTHWISE_DECONV(0x0201, 0x1014, 0x00000909);
     PATCH_DEPTHWISE_DECONV(0x0201, 0x1020,
@@ -6258,35 +6507,35 @@ static void rk3588_rknn_prepare_depthwise_int8(
     qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
                  RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
     for (unsigned int page = 0;
-         page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+         page < RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES; page++) {
         qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
-                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     (RK3588_RKNN_SYNTH_CONV_ADDR + page * 0x1000) |
                      RK_IOMMU_PTE_RW);
     }
-    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
-                   RK3588_RKNN_MOBILENET_TASK6_COMMANDS *
+    qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR, commands,
+                   RK3588_RKNN_SYNTH_CONV_COMMANDS *
                    sizeof(*commands));
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_INPUT_IOVA),
                    input, 2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA),
                    weights, RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_BS_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_BS_IOVA),
                    bs, RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES);
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                  0xa5, RK3588_RKNN_DEPTHWISE_INT8_OUTPUT_BYTES + 1);
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
                  RK3588_RKNN_MATMUL_DTE_ADDR);
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
                  RK_IOMMU_CMD_ENABLE_PAGING);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
-                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+                 RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
                  rk3588_rknn_register_amount(
-                     RK3588_RKNN_MOBILENET_TASK6_COMMANDS));
+                     RK3588_RKNN_SYNTH_CONV_COMMANDS));
 }
 
 static int8_t rk3588_rknn_depthwise_int8_expected(
@@ -6345,8 +6594,8 @@ static void rk3588_rknn_assert_depthwise_int8_result(
     const uint8_t bs[])
 {
     uint8_t output[RK3588_RKNN_DEPTHWISE_INT8_OUTPUT_BYTES + 1];
-    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
     const size_t active = RK3588_RKNN_DEPTHWISE_INT8_WIDTH *
                           RK3588_RKNN_DEPTHWISE_INT8_HEIGHT * 16;
 
@@ -6997,7 +7246,7 @@ static void test_rk3588_rknpu_conv3x3_asymmetric_hardware_shape(void)
 
 static void test_rk3588_rknpu_depthwise_int8_qd(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
     int8_t weights[RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES];
@@ -7016,7 +7265,7 @@ static void test_rk3588_rknpu_depthwise_int8_qd(void)
 static void rk3588_rknn_run_depthwise_int8_qd_cpend_case(
     uint32_t bs_ow_cfg, bool nonzero_cpend, uint8_t output[])
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
     int8_t weights[RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES];
@@ -7043,8 +7292,8 @@ static void rk3588_rknn_run_depthwise_int8_qd_cpend_case(
         qts, commands, input, weights, bs);
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
-    qtest_memread(qts, rk3588_rknn_mobilenet_task6_addr(
-                      RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+    qtest_memread(qts, rk3588_rknn_synth_conv_addr(
+                      RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                   output, RK3588_RKNN_DEPTHWISE_INT8_OUTPUT_BYTES);
     g_assert_cmphex(qtest_readl(qts, RK3588_RKNN0_PC_BASE +
                                 RKNN_PC_TASK_STATUS), ==,
@@ -7117,14 +7366,14 @@ static void test_rk3588_rknpu_depthwise_int8_deconv(void)
         KERNEL = 4,
         WEIGHT_BYTES = KERNEL * KERNEL * CHANNELS,
     };
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE] = { 0 };
     int8_t weights[WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES] = { 0 };
     uint8_t output[4 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
-    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
 
     rk3588_rknn_make_depthwise_int8_deconv_regcmd(commands);
     for (unsigned int row = 0; row < INPUT_HEIGHT; row++) {
@@ -7153,8 +7402,8 @@ static void test_rk3588_rknpu_depthwise_int8_deconv(void)
     }
     rk3588_rknn_prepare_depthwise_int8(
         qts, commands, input, weights, bs);
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA),
                    weights, sizeof(weights));
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
@@ -7185,7 +7434,7 @@ static void test_rk3588_rknpu_depthwise_int8_deconv(void)
 
 static void test_rk3588_rknpu_depthwise_int8_deconv_controls(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE] = { 0 };
     int8_t weights[4 * 4 * 32] = { 0 };
     uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES] = { 0 };
@@ -7207,8 +7456,8 @@ static void test_rk3588_rknpu_depthwise_int8_deconv_controls(void)
                                 RKNN_PC_TASK_STATUS), ==,
                     RKNN_TASK_STATUS_FETCH_ERROR | 1);
     g_assert_cmphex(qtest_readb(
-                        qts, rk3588_rknn_mobilenet_task6_addr(
-                                 RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA)),
+                        qts, rk3588_rknn_synth_conv_addr(
+                                 RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA)),
                     ==, 0xa5);
     qtest_quit(qts);
 }
@@ -7220,7 +7469,7 @@ static void rk3588_rknn_make_depthwise_int8_brdma(
 
 #define PATCH_DEPTHWISE_BRDMA(_target, _reg, _value) do {             \
     index = rk3588_rknn_find_regcmd(                                  \
-        commands, RK3588_RKNN_MOBILENET_TASK6_COMMANDS,               \
+        commands, RK3588_RKNN_SYNTH_CONV_COMMANDS,               \
         (_target), (_reg));                                           \
     commands[index] = rk3588_rknn_regcmd((_target), (_reg), (_value)); \
 } while (0)
@@ -7275,13 +7524,13 @@ static int8_t rk3588_rknn_depthwise_int8_brdma_expected(
 
 static void test_rk3588_rknpu_depthwise_int8_brdma(void)
 {
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
     int8_t weights[RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES];
     uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES];
     uint8_t output[RK3588_RKNN_DEPTHWISE_INT8_OUTPUT_BYTES + 1];
-    uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-        RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+    uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+        RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
     QTestState *qts = rk3588_qtest_start_rknpu_matmul();
 
     rk3588_rknn_make_depthwise_int8_regcmd(commands);
@@ -7323,12 +7572,12 @@ static void test_rk3588_rknpu_depthwise_int8_brdma_controls(void)
 
     for (unsigned int case_index = 0;
          case_index < ARRAY_SIZE(unsupported); case_index++) {
-        uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+        uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
         int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
         int8_t weights[RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES];
         uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES];
-        uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-            RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+        uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+            RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
         QTestState *qts = rk3588_qtest_start_rknpu_matmul();
         size_t index;
 
@@ -7362,7 +7611,7 @@ static void test_rk3588_rknpu_depthwise_int8_grouped_weights(void)
         WEIGHT_BYTES = CHANNELS * 9,
         BS_BYTES = CHANNELS / 8 * 0x40,
     };
-    uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+    uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
     int8_t input[SURFACES * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE] = {};
     int8_t weights[WEIGHT_BYTES] = {};
     uint8_t bs[BS_BYTES] = {};
@@ -7395,24 +7644,24 @@ static void test_rk3588_rknpu_depthwise_int8_grouped_weights(void)
     qtest_writel(qts, RK3588_RKNN_MATMUL_DTE_ADDR + 64 * 4,
                  RK3588_RKNN_MATMUL_PTE_ADDR | RK_IOMMU_PTE_VALID);
     for (unsigned int page = 0;
-         page < RK3588_RKNN_MOBILENET_TASK6_MAPPED_PAGES; page++) {
+         page < RK3588_RKNN_SYNTH_CONV_MAPPED_PAGES; page++) {
         qtest_writel(qts, RK3588_RKNN_MATMUL_PTE_ADDR + page * 4,
-                     (RK3588_RKNN_MOBILENET_TASK6_ADDR + page * 0x1000) |
+                     (RK3588_RKNN_SYNTH_CONV_ADDR + page * 0x1000) |
                      RK_IOMMU_PTE_RW);
     }
-    qtest_memwrite(qts, RK3588_RKNN_MOBILENET_TASK6_ADDR, commands,
+    qtest_memwrite(qts, RK3588_RKNN_SYNTH_CONV_ADDR, commands,
                    sizeof(commands));
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_INPUT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_INPUT_IOVA),
                    input, sizeof(input));
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_WEIGHT_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_WEIGHT_IOVA),
                    weights, sizeof(weights));
-    qtest_memwrite(qts, rk3588_rknn_mobilenet_task6_addr(
-                       RK3588_RKNN_MOBILENET_TASK6_BS_IOVA),
+    qtest_memwrite(qts, rk3588_rknn_synth_conv_addr(
+                       RK3588_RKNN_SYNTH_CONV_BS_IOVA),
                    bs, sizeof(bs));
-    qtest_memset(qts, rk3588_rknn_mobilenet_task6_addr(
-                     RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA),
+    qtest_memset(qts, rk3588_rknn_synth_conv_addr(
+                     RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA),
                  0xa5,
                  SURFACES * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE);
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_DTE_ADDR,
@@ -7420,15 +7669,15 @@ static void test_rk3588_rknpu_depthwise_int8_grouped_weights(void)
     qtest_writel(qts, RK3588_RKNN0_MMU_BASE + RK_IOMMU_COMMAND,
                  RK_IOMMU_CMD_ENABLE_PAGING);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_BASE_ADDRESS,
-                 RK3588_RKNN_MOBILENET_TASK6_REGCMD_IOVA);
+                 RK3588_RKNN_SYNTH_CONV_REGCMD_IOVA);
     qtest_writel(qts, RK3588_RKNN0_PC_BASE + RKNN_PC_REGISTER_AMOUNTS,
                  rk3588_rknn_register_amount(ARRAY_SIZE(commands)));
     rk3588_rknn_start_matmul(qts);
     qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
 
     g_assert_cmpint((int8_t)qtest_readb(
-                        qts, rk3588_rknn_mobilenet_task6_addr(
-                                 RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA) +
+                        qts, rk3588_rknn_synth_conv_addr(
+                                 RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA) +
                                  4 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE +
                                  (RK3588_RKNN_DEPTHWISE_INT8_WIDTH + 1) * 16),
                     ==, 7);
@@ -7451,12 +7700,12 @@ static void test_rk3588_rknpu_depthwise_int8_control_mutations(void)
     };
 
     for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
-        uint64_t commands[RK3588_RKNN_MOBILENET_TASK6_COMMANDS];
+        uint64_t commands[RK3588_RKNN_SYNTH_CONV_COMMANDS];
         int8_t input[2 * RK3588_RKNN_DEPTHWISE_INT8_SURFACE_STRIDE];
         int8_t weights[RK3588_RKNN_DEPTHWISE_WEIGHT_BYTES];
         uint8_t bs[RK3588_RKNN_DEPTHWISE_INT8_BS_BYTES];
-        uint64_t output_addr = rk3588_rknn_mobilenet_task6_addr(
-            RK3588_RKNN_MOBILENET_TASK6_OUTPUT_IOVA);
+        uint64_t output_addr = rk3588_rknn_synth_conv_addr(
+            RK3588_RKNN_SYNTH_CONV_OUTPUT_IOVA);
         QTestState *qts = rk3588_qtest_start_rknpu_matmul();
         size_t index;
 
