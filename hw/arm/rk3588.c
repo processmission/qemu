@@ -54,6 +54,7 @@
 #include "hw/char/serial-mm.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
+#include "hw/core/or-irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/intc/arm_gicv3_common.h"
@@ -197,6 +198,7 @@ struct RK3588MachineState {
     DeviceState *gmac1;
     DeviceState *rknn[3];
     DeviceState *rknn_mmu[3];
+    DeviceState *rknn_irq_or[3];
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
@@ -2732,6 +2734,7 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn_mmu); i++) {
         g_autofree char *name = g_strdup_printf("rknn-mmu%u", i);
+        g_autofree char *irq_name = g_strdup_printf("rknn-irq-or%u", i);
         SysBusDevice *sbd;
 
         s->rknn_mmu[i] = qdev_new(TYPE_ROCKCHIP_IOMMU);
@@ -2745,6 +2748,16 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         if (iommu_memmap1[i] >= 0) {
             sysbus_mmio_map(sbd, 1, rk3588_memmap[iommu_memmap1[i]].base);
         }
+
+        s->rknn_irq_or[i] = qdev_new(TYPE_OR_IRQ);
+        qdev_prop_set_uint16(s->rknn_irq_or[i], "num-lines", 2);
+        object_property_add_child(OBJECT(s), irq_name,
+                                  OBJECT(s->rknn_irq_or[i]));
+        qdev_realize(s->rknn_irq_or[i], NULL, &error_fatal);
+        qdev_connect_gpio_out(s->rknn_irq_or[i], 0,
+                              qdev_get_gpio_in(s->gic, irq[i]));
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(s->rknn_irq_or[i], 0));
     }
 
     for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn); i++) {
@@ -2775,7 +2788,8 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
         sysbus_mmio_map(sbd, 6,
                         rk3588_memmap[pc_memmap[i]].base +
                         ROCKCHIP_RKNN_PPU_RDMA_OFFSET);
-        sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, irq[i]));
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(s->rknn_irq_or[i], 1));
     }
 }
 

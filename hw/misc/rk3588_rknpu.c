@@ -11,6 +11,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "block/thread-pool.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/registerfields.h"
@@ -19,9 +20,13 @@
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/int128.h"
+#include "qemu/aio-wait.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
+#include "qemu/units.h"
 #include "fpu/softfloat.h"
 #include "system/dma.h"
+#include "system/runstate.h"
 #include "trace/control.h"
 #include "trace.h"
 
@@ -68,6 +73,7 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_REGCMD_SAMPLE_COMMANDS_MAX 256
 #define ROCKCHIP_RKNN_REGCMD_SAMPLE_BYTES_MAX \
     (ROCKCHIP_RKNN_REGCMD_SAMPLE_COMMANDS_MAX * sizeof(uint64_t))
+#define ROCKCHIP_RKNN_DMA_CHUNK_SIZE (64 * KiB)
 #define ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK 0xfffffff0U
 #define ROCKCHIP_RKNN_PC_SLAVE_MODE BIT(0)
 #define ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK 0x0000ffffU
@@ -552,6 +558,7 @@ static bool rockchip_rknn_iommu_range_mapped(RockchipRKNNCoreState *s,
         IOMMUTLBEntry entry;
         hwaddr page_offset;
         size_t chunk;
+        BQL_LOCK_GUARD();
 
         entry = imrc->translate(iommu, iova, access, iommu_idx);
         if (!entry.target_as || (entry.perm & access) != access) {
@@ -575,22 +582,34 @@ static RockchipRKNNDMAResult rockchip_rknn_iommu_dma_result(
     RockchipRKNNCoreState *s, uint32_t iova, void *buffer, size_t length,
     bool write)
 {
-    MemTxResult result;
+    size_t offset = 0;
 
-    if (!rockchip_rknn_iommu_range_mapped(s, iova, length, write)) {
-        return ROCKCHIP_RKNN_DMA_IOMMU_FAULT;
+    while (offset < length) {
+        size_t chunk = MIN(length - offset,
+                           (size_t)ROCKCHIP_RKNN_DMA_CHUNK_SIZE);
+        MemTxResult result;
+        BQL_LOCK_GUARD();
+
+        if (!rockchip_rknn_iommu_range_mapped(s, iova + offset, chunk,
+                                               write)) {
+            return ROCKCHIP_RKNN_DMA_IOMMU_FAULT;
+        }
+        if (write) {
+            result = dma_memory_write(s->dma_as, iova + offset,
+                                      (uint8_t *)buffer + offset, chunk,
+                                      MEMTXATTRS_UNSPECIFIED);
+        } else {
+            result = dma_memory_read(s->dma_as, iova + offset,
+                                     (uint8_t *)buffer + offset, chunk,
+                                     MEMTXATTRS_UNSPECIFIED);
+        }
+        if (result != MEMTX_OK) {
+            return ROCKCHIP_RKNN_DMA_BUS_ERROR;
+        }
+        offset += chunk;
     }
 
-    if (write) {
-        result = dma_memory_write(s->dma_as, iova, buffer, length,
-                                  MEMTXATTRS_UNSPECIFIED);
-    } else {
-        result = dma_memory_read(s->dma_as, iova, buffer, length,
-                                 MEMTXATTRS_UNSPECIFIED);
-    }
-
-    return result == MEMTX_OK ? ROCKCHIP_RKNN_DMA_OK :
-                                ROCKCHIP_RKNN_DMA_BUS_ERROR;
+    return ROCKCHIP_RKNN_DMA_OK;
 }
 
 static bool rockchip_rknn_iommu_dma(RockchipRKNNCoreState *s, uint32_t iova,
@@ -4254,8 +4273,8 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
         } else {
             fraction = index_shift >= 64 ? offset :
                 offset & ((UINT64_C(1) << index_shift) - 1);
-            lower = (int16_t)s->lut[table][index];
-            upper = (int16_t)s->lut[table][index + 1];
+            lower = (int16_t)s->execution_lut[table][index];
+            upper = (int16_t)s->execution_lut[table][index + 1];
             interpolated = lower + rockchip_rknn_floor_div_pow2(
                 (upper - lower) * (int64_t)fraction, index_shift);
             return int128_makes64(interpolated);
@@ -4263,13 +4282,13 @@ static Int128 rockchip_rknn_lut_lookup(RockchipRKNNCoreState *s,
     }
     if (table == 1 && input > end && dpu->lut_lo_slope_scale) {
         int64_t delta = input - end;
-        int64_t endpoint = (int16_t)s->lut[table][index];
+        int64_t endpoint = (int16_t)s->execution_lut[table][index];
         unsigned int scale = extract32(dpu->lut_lo_slope_scale, 16, 16);
         unsigned int shift = extract32(dpu->lut_lo_slope_shift, 5, 5);
 
         return int128_makes64(endpoint + ((delta * scale) >> shift));
     }
-    return int128_makes64((int16_t)s->lut[table][index]);
+    return int128_makes64((int16_t)s->execution_lut[table][index]);
 }
 
 static Int128 rockchip_rknn_dpu_ew_apply(
@@ -4932,13 +4951,14 @@ static uint16_t rockchip_rknn_dpu_fp16_lut_apply(
         fraction = offset & ((1U << index_select) - 1);
     }
     if (lut_index >= ROCKCHIP_RKNN_LUT_ENTRIES - 1) {
-        interpolated = s->lut[table][ROCKCHIP_RKNN_LUT_ENTRIES - 1];
+        interpolated =
+            s->execution_lut[table][ROCKCHIP_RKNN_LUT_ENTRIES - 1];
     } else {
         uint64_t denominator = 1U << index_select;
         uint64_t numerator =
-            (uint64_t)s->lut[table][lut_index] *
+            (uint64_t)s->execution_lut[table][lut_index] *
                 (denominator - fraction) +
-            (uint64_t)s->lut[table][lut_index + 1] * fraction;
+            (uint64_t)s->execution_lut[table][lut_index + 1] * fraction;
 
         interpolated = table == 0 ? numerator / denominator :
                                     numerator / denominator + 1;
@@ -4997,8 +5017,8 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_fp16(
     size_t output_bytes;
     size_t bs_bytes = 0;
     size_t ew_bytes = 0;
-    size_t input_line_bytes = 0;
-    size_t input_surface_bytes = 0;
+    uint64_t input_line_bytes = 0;
+    uint64_t input_surface_bytes = 0;
     const size_t logical_input_width =
         rockchip_rknn_cna_logical_width(&task->cna);
     const size_t logical_input_height =
@@ -6143,14 +6163,15 @@ static RockchipRKNNExecutionResult rockchip_rknn_execute_dpu_rdma_fp16_lut(
                     fraction = offset & ((1U << index_select) - 1);
                 }
                 if (lut_index >= ROCKCHIP_RKNN_LUT_ENTRIES - 1) {
-                    interpolated = s->lut[table]
+                    interpolated = s->execution_lut[table]
                                          [ROCKCHIP_RKNN_LUT_ENTRIES - 1];
                 } else {
                     uint64_t denominator = 1U << index_select;
                     uint64_t numerator =
-                        (uint64_t)s->lut[table][lut_index] *
+                        (uint64_t)s->execution_lut[table][lut_index] *
                             (denominator - fraction) +
-                        (uint64_t)s->lut[table][lut_index + 1] * fraction;
+                        (uint64_t)s->execution_lut[table][lut_index + 1] *
+                        fraction;
 
                     interpolated = table == 0 ?
                         numerator / denominator :
@@ -7454,6 +7475,65 @@ static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
     qemu_set_irq(s->irq, s->irq_level);
 }
 
+static void rockchip_rknn_complete(void *opaque);
+
+static int rockchip_rknn_execution_worker(void *opaque)
+{
+    RockchipRKNNCoreState *s = opaque;
+    int ret;
+
+    ret = rockchip_rknn_execute_pipeline(
+        s, s->pending_pipeline, &s->pending_dpu_stage, s->execution_mode);
+    qemu_mutex_lock(&s->execution_lock);
+    s->execution_worker_done = true;
+    qemu_cond_signal(&s->execution_cond);
+    qemu_mutex_unlock(&s->execution_lock);
+    return ret;
+}
+
+static void rockchip_rknn_execution_done(void *opaque, int ret)
+{
+    RockchipRKNNCoreState *s = opaque;
+
+    s->execution_aiocb = NULL;
+    if (s->execution_discard) {
+        return;
+    }
+    s->execution_result = ret < 0 ? ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR : ret;
+    s->execution_result_ready = true;
+    rockchip_rknn_complete(s);
+}
+
+static void rockchip_rknn_drain_execution(RockchipRKNNCoreState *s,
+                                           bool discard)
+{
+    bool waited;
+
+    if (!s->execution_aiocb) {
+        return;
+    }
+
+    assert(bql_locked());
+    s->execution_discard = discard;
+    qemu_mutex_lock(&s->execution_lock);
+    waited = !s->execution_worker_done;
+    if (waited) {
+        bql_unlock();
+        while (!s->execution_worker_done) {
+            qemu_cond_wait(&s->execution_cond, &s->execution_lock);
+        }
+    }
+    qemu_mutex_unlock(&s->execution_lock);
+    if (waited) {
+        bql_lock();
+    }
+    AIO_WAIT_WHILE(NULL, s->execution_aiocb != NULL);
+    s->execution_discard = false;
+    if (discard) {
+        s->execution_result_ready = false;
+    }
+}
+
 static void rockchip_rknn_complete(void *opaque)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(opaque);
@@ -7509,8 +7589,20 @@ static void rockchip_rknn_complete(void *opaque)
                     pipeline_blocks == (final_blocks &
                                         ~ROCKCHIP_RKNN_BLOCK_DPU_RDMA) ||
                     pipeline_blocks == final_blocks;
-                result = rockchip_rknn_execute_pipeline(
-                    s, s->pending_pipeline, &s->pending_dpu_stage, mode);
+                if (!s->execution_result_ready) {
+                    memcpy(s->execution_lut, s->lut,
+                           sizeof(s->execution_lut));
+                    s->execution_mode = mode;
+                    qemu_mutex_lock(&s->execution_lock);
+                    s->execution_worker_done = false;
+                    qemu_mutex_unlock(&s->execution_lock);
+                    s->execution_aiocb = thread_pool_submit_aio(
+                        rockchip_rknn_execution_worker, s,
+                        rockchip_rknn_execution_done, s);
+                    return;
+                }
+                result = s->execution_result;
+                s->execution_result_ready = false;
                 if (result == ROCKCHIP_RKNN_EXECUTION_DMA_READ_FAULT) {
                     s->pending_dma_error_bits |= ROCKCHIP_RKNN_DMA_READ_ERROR;
                 } else if (result == ROCKCHIP_RKNN_EXECUTION_DMA_WRITE_FAULT) {
@@ -8024,6 +8116,10 @@ static void rockchip_rknn_trace_regcmd_sample(RockchipRKNNCoreState *s)
 
 static void rockchip_rknn_start(RockchipRKNNCoreState *s)
 {
+    if (s->busy) {
+        return;
+    }
+
     s->busy = true;
     s->pc_regs[R_PC_TASK_STATUS] = 0;
     trace_rockchip_rknn_start(s->core_index,
@@ -8450,6 +8546,7 @@ static void rockchip_rknn_reset(DeviceState *dev)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
 
+    rockchip_rknn_drain_execution(s, true);
     timer_del(&s->complete_timer);
     s->pending_task_count = 0;
     s->pending_task_index = 0;
@@ -8469,6 +8566,9 @@ static void rockchip_rknn_reset(DeviceState *dev)
     s->pending_dma_error_bits = 0;
     s->pending_slave = false;
     s->busy = false;
+    s->execution_mode = ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
+    s->execution_result = ROCKCHIP_RKNN_EXECUTION_OK;
+    s->execution_result_ready = false;
     rockchip_rknn_clear_regcmd_shadow(s);
     memset(s->domain_runtime, 0, sizeof(s->domain_runtime));
     memset(s->pending_domain_runtime, 0, sizeof(s->pending_domain_runtime));
@@ -8525,6 +8625,30 @@ static int rockchip_rknn_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool rockchip_rknn_execution_active(Object *obj, Error **errp)
+{
+    RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
+
+    return s->execution_aiocb != NULL;
+}
+
+static int rockchip_rknn_pre_save(void *opaque)
+{
+    RockchipRKNNCoreState *s = opaque;
+
+    return s->execution_aiocb ? -EBUSY : 0;
+}
+
+static void rockchip_rknn_vm_state_change(void *opaque, bool running,
+                                          RunState state)
+{
+    RockchipRKNNCoreState *s = opaque;
+
+    if (!running && state == RUN_STATE_FINISH_MIGRATE) {
+        rockchip_rknn_drain_execution(s, false);
+    }
+}
+
 static void rockchip_rknn_init(Object *obj)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
@@ -8570,6 +8694,10 @@ static void rockchip_rknn_init(Object *obj)
 
     timer_init_ns(&s->complete_timer, QEMU_CLOCK_VIRTUAL,
                   rockchip_rknn_complete, s);
+    qemu_mutex_init(&s->execution_lock);
+    qemu_cond_init(&s->execution_cond);
+    object_property_add_bool(obj, "x-execution-active",
+                             rockchip_rknn_execution_active, NULL);
     s->pending_pipeline = g_new0(RockchipRKNNPipelineTask, 1);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->pc_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->cna_reg_array->mem);
@@ -8585,6 +8713,8 @@ static void rockchip_rknn_finalize(Object *obj)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
 
+    qemu_cond_destroy(&s->execution_cond);
+    qemu_mutex_destroy(&s->execution_lock);
     g_clear_pointer(&s->pending_pipeline, g_free);
 }
 
@@ -8606,12 +8736,17 @@ static void rockchip_rknn_realize(DeviceState *dev, Error **errp)
 
     s->dma_as = g_new0(AddressSpace, 1);
     address_space_init(s->dma_as, s->dma_mr, "rk3588-rknpu-dma");
+    s->vmstate = qdev_add_vm_change_state_handler(
+        dev, rockchip_rknn_vm_state_change, NULL, s);
 }
 
 static void rockchip_rknn_unrealize(DeviceState *dev)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
 
+    qemu_del_vm_change_state_handler(s->vmstate);
+    s->vmstate = NULL;
+    rockchip_rknn_drain_execution(s, true);
     if (s->dma_as) {
         address_space_destroy_free(s->dma_as);
         s->dma_as = NULL;
@@ -8914,6 +9049,7 @@ static const VMStateDescription vmstate_rockchip_rknn = {
     .name = TYPE_ROCKCHIP_RKNN_CORE,
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_save = rockchip_rknn_pre_save,
     .post_load = rockchip_rknn_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(pc_regs, RockchipRKNNCoreState,
