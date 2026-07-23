@@ -54,6 +54,9 @@ static void cadence_sdhci_instance_init(Object *obj)
 
     object_initialize_child(OBJECT(s), "generic-sdhci",
                             &s->sdhci, TYPE_SYSBUS_SDHCI);
+    object_property_set_uint(OBJECT(&s->sdhci), "capareg",
+                             SDHC_CAPAB_REG_DEFAULT |
+                             R_SDHC_CAPAB_BUS64BIT_MASK, &error_abort);
 }
 
 static void cadence_sdhci_reset(DeviceState *dev)
