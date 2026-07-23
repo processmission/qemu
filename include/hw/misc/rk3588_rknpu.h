@@ -11,6 +11,8 @@
 
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
+#include "qemu/aiocb.h"
+#include "qemu/thread.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
 #include "system/memory.h"
@@ -106,6 +108,10 @@ struct RockchipRKNNCoreState {
     uint32_t pending_register_writes[ROCKCHIP_RKNN_PENDING_WRITE_R_MAX];
 
     QEMUTimer complete_timer;
+    VMChangeStateEntry *vmstate;
+    BlockAIOCB *execution_aiocb;
+    QemuMutex execution_lock;
+    QemuCond execution_cond;
     qemu_irq irq;
     MemoryRegion *dma_mr;
     AddressSpace *dma_as;
@@ -140,10 +146,16 @@ struct RockchipRKNNCoreState {
     bool pending_slave;
     bool busy;
     bool irq_level;
+    bool execution_result_ready;
+    bool execution_discard;
+    bool execution_worker_done;
+    int execution_mode;
+    int execution_result;
     uint64_t functional_max_host_bytes;
     uint64_t functional_max_mac_operations;
     uint64_t functional_max_ppu_work_items;
     uint16_t lut[2][513];
+    uint16_t execution_lut[2][513];
     uint32_t lut_access_cfg;
     uint32_t lut_cfg;
     uint32_t lut_info;

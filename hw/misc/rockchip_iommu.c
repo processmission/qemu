@@ -4,7 +4,7 @@
  * This is a minimal RK3588-oriented model for Linux rockchip-iommu driver
  * bring-up. It accepts the control path used for domain attach/map/zap and
  * exposes bounded v2 page-table translation through QEMU's standard IOMMU
- * memory-region interface. It does not generate IOMMU faults/IRQs.
+ * memory-region interface and reports translation faults to the guest.
  *
  * Copyright (c) 2026 Process Mission
  *
@@ -12,6 +12,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/registerfields.h"
 #include "hw/misc/rockchip_iommu.h"
@@ -63,6 +64,15 @@ enum {
 #define ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT1 24
 #define ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT2 32
 #define ROCKCHIP_IOMMU_PAGE_SIZE 0x1000
+#define ROCKCHIP_IOMMU_IRQ_PAGE_FAULT BIT(0)
+#define ROCKCHIP_IOMMU_IRQ_BUS_ERROR BIT(1)
+
+typedef enum RockchipIOMMUTranslateResult {
+    ROCKCHIP_IOMMU_TRANSLATE_OK,
+    ROCKCHIP_IOMMU_TRANSLATE_DISABLED,
+    ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT,
+    ROCKCHIP_IOMMU_TRANSLATE_BUS_ERROR,
+} RockchipIOMMUTranslateResult;
 
 static unsigned int rockchip_iommu_bank(RegisterInfo *reg)
 {
@@ -78,10 +88,17 @@ static unsigned int rockchip_iommu_bank(RegisterInfo *reg)
     g_assert_not_reached();
 }
 
-static void rockchip_iommu_update_irq(RockchipIOMMUState *s, unsigned int i)
+static void rockchip_iommu_update_irq(RockchipIOMMUState *s)
 {
-    s->regs[i][R_INT_STATUS] = s->regs[i][R_INT_RAWSTAT] &
-                               s->regs[i][R_INT_MASK];
+    bool level = false;
+    unsigned int num_mmu = MIN(s->num_mmu, ROCKCHIP_IOMMU_MAX_MMU);
+
+    for (unsigned int i = 0; i < num_mmu; i++) {
+        s->regs[i][R_INT_STATUS] = s->regs[i][R_INT_RAWSTAT] &
+                                   s->regs[i][R_INT_MASK];
+        level |= s->regs[i][R_INT_STATUS] != 0;
+    }
+    qemu_set_irq(s->irq, level);
 }
 
 static bool rockchip_iommu_read_u32(hwaddr addr, uint32_t *val)
@@ -108,10 +125,9 @@ static hwaddr rockchip_iommu_v2_desc_address(uint32_t desc)
            (raw & ROCKCHIP_IOMMU_V2_DESC_ADDRESS_MASK);
 }
 
-static bool rockchip_iommu_bank_translate(RockchipIOMMUState *s,
-                                          unsigned int i, uint32_t iova,
-                                          hwaddr *phys,
-                                          IOMMUAccessFlags *perm)
+static RockchipIOMMUTranslateResult rockchip_iommu_bank_translate(
+    RockchipIOMMUState *s, unsigned int i, uint32_t iova, hwaddr *phys,
+    IOMMUAccessFlags *perm)
 {
     hwaddr dt_addr = rockchip_iommu_v2_desc_address(s->regs[i][R_DTE_ADDR]);
     uint32_t dte_index = extract32(iova, 22, 10);
@@ -121,35 +137,70 @@ static bool rockchip_iommu_bank_translate(RockchipIOMMUState *s,
     uint32_t pte;
 
     if (!(s->regs[i][R_STATUS] & R_STATUS_PAGING_ENABLED_MASK)) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_DISABLED;
     }
 
     if (!dt_addr) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT;
     }
 
     if (!rockchip_iommu_read_u32(dt_addr + dte_index * sizeof(uint32_t),
                                  &dte)) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_BUS_ERROR;
     }
 
     if (!(dte & ROCKCHIP_IOMMU_DTE_VALID)) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT;
     }
 
     if (!rockchip_iommu_read_u32(rockchip_iommu_v2_desc_address(dte) +
                                  pte_index * sizeof(uint32_t), &pte)) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_BUS_ERROR;
     }
 
     if (!(pte & ROCKCHIP_IOMMU_PTE_VALID)) {
-        return false;
+        return ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT;
     }
 
     *phys = rockchip_iommu_v2_desc_address(pte) + page_offset;
     *perm = IOMMU_ACCESS_FLAG(pte & ROCKCHIP_IOMMU_PTE_READABLE,
                               pte & ROCKCHIP_IOMMU_PTE_WRITABLE);
-    return true;
+    return ROCKCHIP_IOMMU_TRANSLATE_OK;
+}
+
+static void rockchip_iommu_latch_fault(RockchipIOMMUState *s,
+                                       unsigned int i, uint32_t iova,
+                                       IOMMUAccessFlags flag,
+                                       RockchipIOMMUTranslateResult result)
+{
+    uint32_t status = s->regs[i][R_STATUS];
+    uint32_t rawstat = s->regs[i][R_INT_RAWSTAT];
+    bool first_fault = !(rawstat & (ROCKCHIP_IOMMU_IRQ_PAGE_FAULT |
+                                    ROCKCHIP_IOMMU_IRQ_BUS_ERROR));
+
+    if (result == ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT) {
+        if (status & R_STATUS_PAGE_FAULT_ACTIVE_MASK) {
+            return;
+        }
+        status |= R_STATUS_PAGE_FAULT_ACTIVE_MASK;
+        if (flag & IOMMU_WO) {
+            status |= R_STATUS_PAGE_FAULT_IS_WRITE_MASK;
+        } else {
+            status &= ~R_STATUS_PAGE_FAULT_IS_WRITE_MASK;
+        }
+        rawstat |= ROCKCHIP_IOMMU_IRQ_PAGE_FAULT;
+    } else if (result == ROCKCHIP_IOMMU_TRANSLATE_BUS_ERROR) {
+        rawstat |= ROCKCHIP_IOMMU_IRQ_BUS_ERROR;
+    } else {
+        return;
+    }
+
+    if (first_fault) {
+        s->regs[i][R_PAGE_FAULT_ADDR] = iova;
+    }
+    s->regs[i][R_INT_RAWSTAT] = rawstat;
+    s->regs[i][R_STATUS] = status;
+    rockchip_iommu_update_irq(s);
 }
 
 static bool rockchip_iommu_paging_enabled(RockchipIOMMUState *s,
@@ -166,7 +217,7 @@ static bool rockchip_iommu_paging_enabled(RockchipIOMMUState *s,
 
 static IOMMUTLBEntry rockchip_iommu_translate_internal(
     RockchipIOMMUState *s, hwaddr addr, IOMMUAccessFlags flag,
-    unsigned int *translated_bank)
+    unsigned int *translated_bank, bool report_fault)
 {
     unsigned int num_mmu = MIN(s->num_mmu, ROCKCHIP_IOMMU_MAX_MMU);
     IOMMUTLBEntry entry = {
@@ -178,6 +229,9 @@ static IOMMUTLBEntry rockchip_iommu_translate_internal(
     };
     IOMMUAccessFlags perm;
     hwaddr phys;
+    RockchipIOMMUTranslateResult fault = ROCKCHIP_IOMMU_TRANSLATE_DISABLED;
+    unsigned int fault_bank = 0;
+    bool permission_fault = false;
 
     if (!num_mmu || addr > UINT32_MAX) {
         return entry;
@@ -193,7 +247,10 @@ static IOMMUTLBEntry rockchip_iommu_translate_internal(
     }
 
     for (unsigned int i = 0; i < num_mmu; i++) {
-        if (rockchip_iommu_bank_translate(s, i, addr, &phys, &perm) &&
+        RockchipIOMMUTranslateResult result =
+            rockchip_iommu_bank_translate(s, i, addr, &phys, &perm);
+
+        if (result == ROCKCHIP_IOMMU_TRANSLATE_OK &&
             (flag == IOMMU_NONE || (perm & flag) == flag)) {
             entry.translated_addr = phys & ~entry.addr_mask;
             entry.perm = perm;
@@ -202,6 +259,27 @@ static IOMMUTLBEntry rockchip_iommu_translate_internal(
             }
             return entry;
         }
+        if (result == ROCKCHIP_IOMMU_TRANSLATE_OK) {
+            if (!permission_fault) {
+                permission_fault = true;
+                fault_bank = i;
+            }
+            continue;
+        }
+        if (!permission_fault &&
+            fault == ROCKCHIP_IOMMU_TRANSLATE_DISABLED &&
+            result != ROCKCHIP_IOMMU_TRANSLATE_DISABLED) {
+            fault = result;
+            fault_bank = i;
+        }
+    }
+
+    if (permission_fault) {
+        fault = ROCKCHIP_IOMMU_TRANSLATE_PAGE_FAULT;
+    }
+
+    if (report_fault && flag != IOMMU_NONE) {
+        rockchip_iommu_latch_fault(s, fault_bank, addr, flag, fault);
     }
 
     return entry;
@@ -214,7 +292,7 @@ static IOMMUTLBEntry rockchip_iommu_memory_region_translate(
     RockchipIOMMUState *s = container_of(iommu, RockchipIOMMUState,
                                          iommu_mr);
 
-    return rockchip_iommu_translate_internal(s, addr, flag, NULL);
+    return rockchip_iommu_translate_internal(s, addr, flag, NULL, true);
 }
 
 static int rockchip_iommu_notify_flag_changed(
@@ -249,7 +327,7 @@ bool rockchip_iommu_find_translation_bank(IOMMUMemoryRegion *iommu,
     }
 
     s = container_of(iommu, RockchipIOMMUState, iommu_mr);
-    entry = rockchip_iommu_translate_internal(s, addr, flag, bank);
+    entry = rockchip_iommu_translate_internal(s, addr, flag, bank, false);
     return entry.target_as && entry.perm != IOMMU_NONE &&
            (flag == IOMMU_NONE || (entry.perm & flag) == flag);
 }
@@ -319,8 +397,7 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
     case RK_MMU_CMD_PAGE_FAULT_DONE:
         status &= ~(R_STATUS_PAGE_FAULT_ACTIVE_MASK |
                     R_STATUS_PAGE_FAULT_IS_WRITE_MASK);
-        s->regs[i][R_INT_RAWSTAT] = 0;
-        rockchip_iommu_update_irq(s, i);
+        s->regs[i][R_INT_RAWSTAT] &= ~ROCKCHIP_IOMMU_IRQ_PAGE_FAULT;
         break;
     case RK_MMU_CMD_FORCE_RESET:
         s->regs[i][R_DTE_ADDR] = 0;
@@ -336,6 +413,7 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
 
     status |= R_STATUS_IDLE_MASK | R_STATUS_REPLAY_BUFFER_EMPTY_MASK;
     s->regs[i][R_STATUS] = status;
+    rockchip_iommu_update_irq(s);
     if (invalidate) {
         rockchip_iommu_notify_unmap_all(s);
     }
@@ -347,7 +425,7 @@ static uint64_t rockchip_iommu_int_clear_prew(RegisterInfo *reg, uint64_t val)
     unsigned int i = rockchip_iommu_bank(reg);
 
     s->regs[i][R_INT_RAWSTAT] &= ~((uint32_t)val);
-    rockchip_iommu_update_irq(s, i);
+    rockchip_iommu_update_irq(s);
     return 0;
 }
 
@@ -356,7 +434,7 @@ static void rockchip_iommu_int_mask_postw(RegisterInfo *reg, uint64_t val)
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(reg->opaque);
     unsigned int i = rockchip_iommu_bank(reg);
 
-    rockchip_iommu_update_irq(s, i);
+    rockchip_iommu_update_irq(s);
     trace_rockchip_iommu_int_mask(s->core_index, i, val,
                                   s->regs[i][R_INT_STATUS]);
 }
@@ -416,9 +494,17 @@ static void rockchip_iommu_reset(DeviceState *dev)
         for (unsigned int r = 0; r < ARRAY_SIZE(s->regs_info[i]); r++) {
             s->regs[i][r] = s->regs_info[i][r].access->reset;
         }
-        rockchip_iommu_update_irq(s, i);
     }
+    rockchip_iommu_update_irq(s);
     rockchip_iommu_notify_unmap_all(s);
+}
+
+static int rockchip_iommu_post_load(void *opaque, int version_id)
+{
+    RockchipIOMMUState *s = opaque;
+
+    rockchip_iommu_update_irq(s);
+    return 0;
 }
 
 static void rockchip_iommu_init(Object *obj)
@@ -435,6 +521,7 @@ static void rockchip_iommu_init(Object *obj)
                                   ROCKCHIP_IOMMU_WINDOW_SIZE);
         sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->reg_array[i]->mem);
     }
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
     memory_region_init_iommu(&s->iommu_mr, sizeof(s->iommu_mr),
                              TYPE_ROCKCHIP_IOMMU_MEMORY_REGION, obj,
                              "rockchip-iommu-dma", UINT64_C(1) << 32);
@@ -444,6 +531,7 @@ static const VMStateDescription vmstate_rockchip_iommu = {
     .name = TYPE_ROCKCHIP_IOMMU,
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = rockchip_iommu_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_2DARRAY(regs, RockchipIOMMUState,
                                ROCKCHIP_IOMMU_MAX_MMU,

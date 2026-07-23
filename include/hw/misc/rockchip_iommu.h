@@ -30,6 +30,7 @@ struct RockchipIOMMUState {
     RegisterInfo regs_info[ROCKCHIP_IOMMU_MAX_MMU][ROCKCHIP_IOMMU_R_MAX];
     uint32_t regs[ROCKCHIP_IOMMU_MAX_MMU][ROCKCHIP_IOMMU_R_MAX];
     IOMMUMemoryRegion iommu_mr;
+    qemu_irq irq;
 
     uint32_t num_mmu;
     uint32_t core_index;
