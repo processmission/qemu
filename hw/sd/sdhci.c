@@ -629,6 +629,41 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
  * Single DMA data transfer
  */
 
+static bool sdhci_version4_enabled(SDHCIState *s)
+{
+    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4);
+}
+
+static bool sdhci_64bit_addressing_enabled(SDHCIState *s)
+{
+    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING_64);
+}
+
+static uint64_t sdhci_sdma_address(SDHCIState *s)
+{
+    if (!sdhci_version4_enabled(s)) {
+        return s->sdmasysad;
+    }
+
+    return sdhci_64bit_addressing_enabled(s) ?
+           s->admasysaddr : (uint32_t)s->admasysaddr;
+}
+
+static void sdhci_advance_sdma_address(SDHCIState *s, uint32_t bytes)
+{
+    if (!sdhci_version4_enabled(s)) {
+        s->sdmasysad += bytes;
+    } else if (sdhci_64bit_addressing_enabled(s)) {
+        s->admasysaddr += bytes;
+    } else {
+        uint32_t address = s->admasysaddr;
+
+        address += bytes;
+        s->admasysaddr = (s->admasysaddr & 0xffffffff00000000ULL) |
+                         address;
+    }
+}
+
 /* Multi block SDMA transfer */
 static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 {
@@ -636,7 +671,8 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     unsigned int begin;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     uint32_t boundary_chk = 1 << (((s->blksize & ~BLOCK_SIZE_MASK) >> 12) + 12);
-    uint32_t boundary_count = boundary_chk - (s->sdmasysad % boundary_chk);
+    uint64_t sdma_address = sdhci_sdma_address(s);
+    uint32_t boundary_count = boundary_chk - (sdma_address % boundary_chk);
 
     if (!(s->trnmod & SDHC_TRNS_BLK_CNT_EN) || !s->blkcnt) {
         qemu_log_mask(LOG_UNIMP, "infinite transfer is not supported\n");
@@ -648,7 +684,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
      * possible stop at page boundary if initial address is not page aligned,
      * allow them to work properly
      */
-    if ((s->sdmasysad % boundary_chk) == 0) {
+    if ((sdma_address % boundary_chk) == 0) {
         page_aligned = true;
     }
 
@@ -670,9 +706,10 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                     s->blkcnt--;
                 }
             }
-            dma_memory_write(s->dma_as, s->sdmasysad, &s->fifo_buffer[begin],
+            dma_memory_write(s->dma_as, sdhci_sdma_address(s),
+                             &s->fifo_buffer[begin],
                              s->data_count - begin, MEMTXATTRS_UNSPECIFIED);
-            s->sdmasysad += s->data_count - begin;
+            sdhci_advance_sdma_address(s, s->data_count - begin);
             if (s->data_count == block_size) {
                 s->data_count = 0;
             }
@@ -691,9 +728,10 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 s->data_count = block_size;
                 boundary_count -= block_size - begin;
             }
-            dma_memory_read(s->dma_as, s->sdmasysad, &s->fifo_buffer[begin],
+            dma_memory_read(s->dma_as, sdhci_sdma_address(s),
+                            &s->fifo_buffer[begin],
                             s->data_count - begin, MEMTXATTRS_UNSPECIFIED);
-            s->sdmasysad += s->data_count - begin;
+            sdhci_advance_sdma_address(s, s->data_count - begin);
             if (s->data_count == block_size) {
                 sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                 s->data_count = 0;
@@ -725,10 +763,12 @@ static void sdhci_sdma_transfer_single_block(SDHCIState *s)
 
     if (s->trnmod & SDHC_TRNS_READ) {
         sdbus_read_data(&s->sdbus, s->fifo_buffer, datacnt);
-        dma_memory_write(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt,
+        dma_memory_write(s->dma_as, sdhci_sdma_address(s),
+                         s->fifo_buffer, datacnt,
                          MEMTXATTRS_UNSPECIFIED);
     } else {
-        dma_memory_read(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt,
+        dma_memory_read(s->dma_as, sdhci_sdma_address(s),
+                        s->fifo_buffer, datacnt,
                         MEMTXATTRS_UNSPECIFIED);
         sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
@@ -1402,10 +1442,11 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
         MASKED_WRITE(s->acmd12errsts, mask, value & UINT16_MAX);
         if (s->uhs_mode < UHS_I) {
             /*
-             * VERSION4 is writable even without UHS-I. Preserve all other
-             * Host Control 2 bits when UHS-I is not supported.
+             * Version 4 fields are writable even without UHS-I. Preserve all
+             * other Host Control 2 bits when UHS-I is not supported.
              */
-            uint16_t independent = R_SDHC_HOSTCTL2_VERSION4_MASK;
+            uint16_t independent = R_SDHC_HOSTCTL2_VERSION4_MASK |
+                                   R_SDHC_HOSTCTL2_ADDRESSING_64_MASK;
 
             hostctl2_mask |= ~independent;
             hostctl2_value &= independent;
