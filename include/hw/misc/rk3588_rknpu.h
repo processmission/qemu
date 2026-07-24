@@ -145,6 +145,7 @@ struct RockchipRKNNCoreState {
     uint32_t pending_dma_error_bits;
     bool pending_slave;
     bool busy;
+    bool reset_asserted;
     bool irq_level;
     bool execution_result_ready;
     bool execution_discard;

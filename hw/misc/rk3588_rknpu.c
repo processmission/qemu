@@ -58,7 +58,15 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_DPU_INTERRUPT_BITS 0x00000300
 #define ROCKCHIP_RKNN_PIPELINE_BANK0_INTERRUPT 0x000002aa
 #define ROCKCHIP_RKNN_PIPELINE_BANK1_INTERRUPT 0x00000155
-#define ROCKCHIP_RKNN_STAGE_INTERRUPT_BITS 0xc0000000
+#define ROCKCHIP_RKNN_INTERRUPT_VALID_BITS 0x0001ffff
+#define ROCKCHIP_RKNN_INTERRUPT_RESERVED_BITS 0xfffe0000
+/*
+ * Orange Pi 5 Plus PPU and depthwise captures show RAW_STATUS[31:30] set
+ * after the production 0x1ffff interrupt acknowledgement.  Preserve this
+ * board-observed sticky stage status, but exclude it from masked interrupt
+ * status and treat its reserved CLEAR fields as reset-only.
+ */
+#define ROCKCHIP_RKNN_STAGE_RAW_STATUS_BITS 0xc0000000
 #define ROCKCHIP_RKNN_PPU_BANK0_INTERRUPT BIT(10)
 #define ROCKCHIP_RKNN_PPU_BANK1_INTERRUPT BIT(11)
 #define ROCKCHIP_RKNN_PPU_STATUS_SUCCESS 0x0000000c
@@ -7464,7 +7472,8 @@ static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 
     s->pc_regs[R_PC_INTERRUPT_STATUS] =
         s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] &
-        s->pc_regs[R_PC_INTERRUPT_MASK];
+        s->pc_regs[R_PC_INTERRUPT_MASK] &
+        ROCKCHIP_RKNN_INTERRUPT_VALID_BITS;
     s->irq_level = s->pc_regs[R_PC_INTERRUPT_STATUS] != 0;
     if (s->irq_level != old_level) {
         trace_rockchip_rknn_irq(s->core_index, s->irq_level,
@@ -7706,7 +7715,7 @@ static void rockchip_rknn_complete(void *opaque)
                 ROCKCHIP_RKNN_PIPELINE_BANK1_INTERRUPT :
                 ROCKCHIP_RKNN_PIPELINE_BANK0_INTERRUPT;
         } else if (final_ppu_attempted) {
-            interrupt_bits = ROCKCHIP_RKNN_STAGE_INTERRUPT_BITS;
+            interrupt_bits = ROCKCHIP_RKNN_STAGE_RAW_STATUS_BITS;
             if (final_ppu_success) {
                 interrupt_bits |= final_ppu_bank ?
                     ROCKCHIP_RKNN_PPU_BANK1_INTERRUPT :
@@ -7714,7 +7723,7 @@ static void rockchip_rknn_complete(void *opaque)
             }
         }
         if (ppu_stage_attempted || depthwise_stage_attempted) {
-            interrupt_bits |= ROCKCHIP_RKNN_STAGE_INTERRUPT_BITS;
+            interrupt_bits |= ROCKCHIP_RKNN_STAGE_RAW_STATUS_BITS;
         }
         s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] |= interrupt_bits;
     }
@@ -8229,7 +8238,8 @@ static uint64_t rockchip_rknn_interrupt_clear_prew(RegisterInfo *reg,
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(reg->opaque);
 
-    s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] &= ~((uint32_t)val);
+    s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] &=
+        ~((uint32_t)val & ROCKCHIP_RKNN_INTERRUPT_VALID_BITS);
     rockchip_rknn_update_irq(s);
     return 0;
 }
@@ -8246,8 +8256,11 @@ static const RegisterAccessInfo rockchip_rknn_pc_regs_info[] = {
     }, { .name = "PC_BASE_ADDRESS", .addr = A_PC_BASE_ADDRESS,
     }, { .name = "PC_REGISTER_AMOUNTS", .addr = A_PC_REGISTER_AMOUNTS,
     }, { .name = "PC_INTERRUPT_MASK", .addr = A_PC_INTERRUPT_MASK,
+        .reset = ROCKCHIP_RKNN_INTERRUPT_VALID_BITS,
+        .rsvd = ROCKCHIP_RKNN_INTERRUPT_RESERVED_BITS,
         .post_write = rockchip_rknn_interrupt_mask_postw,
     }, { .name = "PC_INTERRUPT_CLEAR", .addr = A_PC_INTERRUPT_CLEAR,
+        .rsvd = ROCKCHIP_RKNN_INTERRUPT_RESERVED_BITS,
         .pre_write = rockchip_rknn_interrupt_clear_prew,
     }, { .name = "PC_INTERRUPT_STATUS", .addr = A_PC_INTERRUPT_STATUS,
         .ro = UINT32_MAX,
@@ -8589,6 +8602,8 @@ static void rockchip_rknn_reset(DeviceState *dev)
     s->lut_lo_slope_scale = 0;
     s->lut_lo_slope_shift = 0;
 
+    s->pc_regs[R_PC_INTERRUPT_RAW_STATUS] = 0;
+    rockchip_rknn_update_irq(s);
     for (unsigned int i = 0; i < ARRAY_SIZE(s->pc_regs_info); i++) {
         register_reset(&s->pc_regs_info[i]);
     }
@@ -8649,6 +8664,20 @@ static void rockchip_rknn_vm_state_change(void *opaque, bool running,
     }
 }
 
+static void rockchip_rknn_reset_input(void *opaque, int n, int level)
+{
+    RockchipRKNNCoreState *s = opaque;
+    bool asserted = level;
+
+    (void)n;
+    if (asserted && !s->reset_asserted) {
+        s->reset_asserted = true;
+        device_cold_reset(DEVICE(s));
+    } else {
+        s->reset_asserted = asserted;
+    }
+}
+
 static void rockchip_rknn_init(Object *obj)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
@@ -8698,6 +8727,7 @@ static void rockchip_rknn_init(Object *obj)
     qemu_cond_init(&s->execution_cond);
     object_property_add_bool(obj, "x-execution-active",
                              rockchip_rknn_execution_active, NULL);
+    qdev_init_gpio_in_named(dev, rockchip_rknn_reset_input, "reset", 1);
     s->pending_pipeline = g_new0(RockchipRKNNPipelineTask, 1);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->pc_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->cna_reg_array->mem);
