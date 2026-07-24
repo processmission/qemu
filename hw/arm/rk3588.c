@@ -196,6 +196,7 @@ struct RK3588MachineState {
     DeviceState *pcie3x2;
     DeviceState *gmac0;
     DeviceState *gmac1;
+    DeviceState *cru;
     DeviceState *rknn[3];
     DeviceState *rknn_mmu[3];
     DeviceState *rknn_irq_or[3];
@@ -2790,6 +2791,9 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
                         ROCKCHIP_RKNN_PPU_RDMA_OFFSET);
         sysbus_connect_irq(sbd, 0,
                            qdev_get_gpio_in(s->rknn_irq_or[i], 1));
+        qdev_connect_gpio_out_named(
+            s->cru, "rknpu-reset", i,
+            qdev_get_gpio_in_named(s->rknn[i], "reset", 0));
     }
 }
 
@@ -2827,11 +2831,11 @@ static void rk3588_create_pcie(RK3588MachineState *s)
 
 static void rk3588_create_cru(RK3588MachineState *s)
 {
-    DeviceState *dev = qdev_new(TYPE_RK3588_CRU);
     SysBusDevice *sbd;
 
-    object_property_add_child(OBJECT(s), "cru", OBJECT(dev));
-    sbd = SYS_BUS_DEVICE(dev);
+    s->cru = qdev_new(TYPE_RK3588_CRU);
+    object_property_add_child(OBJECT(s), "cru", OBJECT(s->cru));
+    sbd = SYS_BUS_DEVICE(s->cru);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_CRU_MEM].base);
 }

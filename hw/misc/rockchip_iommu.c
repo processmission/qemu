@@ -58,7 +58,7 @@ enum {
 #define ROCKCHIP_IOMMU_PTE_VALID BIT(0)
 #define ROCKCHIP_IOMMU_PTE_READABLE BIT(1)
 #define ROCKCHIP_IOMMU_PTE_WRITABLE BIT(2)
-#define ROCKCHIP_IOMMU_V2_DESC_ADDRESS_MASK 0xfffffff0U
+#define ROCKCHIP_IOMMU_V2_DESC_LOW_ADDRESS_MASK 0xfffff000U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_MASK1 0x00000f00U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_MASK2 0x000000f0U
 #define ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT1 24
@@ -101,6 +101,13 @@ static void rockchip_iommu_update_irq(RockchipIOMMUState *s)
     qemu_set_irq(s->irq, level);
 }
 
+static void rockchip_iommu_reset_bank(RockchipIOMMUState *s, unsigned int i)
+{
+    for (unsigned int r = 0; r < ARRAY_SIZE(s->regs_info[i]); r++) {
+        s->regs[i][r] = s->regs_info[i][r].access->reset;
+    }
+}
+
 static bool rockchip_iommu_read_u32(hwaddr addr, uint32_t *val)
 {
     uint8_t buf[sizeof(uint32_t)];
@@ -122,7 +129,7 @@ static hwaddr rockchip_iommu_v2_desc_address(uint32_t desc)
             ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT2) |
            ((raw & ROCKCHIP_IOMMU_V2_DESC_HI_MASK1) <<
             ROCKCHIP_IOMMU_V2_DESC_HI_SHIFT1) |
-           (raw & ROCKCHIP_IOMMU_V2_DESC_ADDRESS_MASK);
+           (raw & ROCKCHIP_IOMMU_V2_DESC_LOW_ADDRESS_MASK);
 }
 
 static RockchipIOMMUTranslateResult rockchip_iommu_bank_translate(
@@ -252,6 +259,7 @@ static IOMMUTLBEntry rockchip_iommu_translate_internal(
 
         if (result == ROCKCHIP_IOMMU_TRANSLATE_OK &&
             (flag == IOMMU_NONE || (perm & flag) == flag)) {
+            trace_rockchip_iommu_translate(i, addr, phys, perm);
             entry.translated_addr = phys & ~entry.addr_mask;
             entry.perm = perm;
             if (translated_bank) {
@@ -397,14 +405,10 @@ static void rockchip_iommu_command_postw(RegisterInfo *reg, uint64_t val)
     case RK_MMU_CMD_PAGE_FAULT_DONE:
         status &= ~(R_STATUS_PAGE_FAULT_ACTIVE_MASK |
                     R_STATUS_PAGE_FAULT_IS_WRITE_MASK);
-        s->regs[i][R_INT_RAWSTAT] &= ~ROCKCHIP_IOMMU_IRQ_PAGE_FAULT;
         break;
     case RK_MMU_CMD_FORCE_RESET:
-        s->regs[i][R_DTE_ADDR] = 0;
-        s->regs[i][R_INT_RAWSTAT] = 0;
-        s->regs[i][R_INT_STATUS] = 0;
-        s->regs[i][R_PAGE_FAULT_ADDR] = 0;
-        status = ROCKCHIP_IOMMU_STATUS_RESET;
+        rockchip_iommu_reset_bank(s, i);
+        status = s->regs[i][R_STATUS];
         invalidate = true;
         break;
     default:
@@ -469,6 +473,7 @@ static const RegisterAccessInfo rockchip_iommu_regs_info[] = {
     }, { .name = "INT_STATUS", .addr = A_INT_STATUS,
         .ro = UINT32_MAX,
     }, { .name = "AUTO_GATING", .addr = A_AUTO_GATING,
+        .reset = BIT(0),
     },
 };
 
@@ -491,9 +496,7 @@ static void rockchip_iommu_reset(DeviceState *dev)
     RockchipIOMMUState *s = ROCKCHIP_IOMMU(dev);
 
     for (unsigned int i = 0; i < ROCKCHIP_IOMMU_MAX_MMU; i++) {
-        for (unsigned int r = 0; r < ARRAY_SIZE(s->regs_info[i]); r++) {
-            s->regs[i][r] = s->regs_info[i][r].access->reset;
-        }
+        rockchip_iommu_reset_bank(s, i);
     }
     rockchip_iommu_update_irq(s);
     rockchip_iommu_notify_unmap_all(s);

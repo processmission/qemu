@@ -224,6 +224,7 @@ config RK3588
     select ROCKCHIP_STIMER
     select ROCKCHIP_SYSCON
     select RK3588_SCMI
+    select OR_IRQ
     select ROCKCHIP_GPIO
     select ROCKCHIP_IOMMU
     select RK3588_RKNPU
