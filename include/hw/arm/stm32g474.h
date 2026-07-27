@@ -22,6 +22,7 @@
 #include "hw/misc/stm32g474_rcc.h"
 #include "hw/misc/stm32g474_syscfg.h"
 #include "hw/net/stm32g474_fdcan.h"
+#include "hw/usb/stm32g474_usbfs.h"
 #include "qom/object.h"
 
 #define TYPE_STM32G474 "stm32g474"
@@ -60,6 +61,7 @@ struct STM32G474State {
     Stm32g474UsartState usart2;
     Stm32g474UsartState uart4;
     Stm32g474FdcanState fdcan;
+    Stm32g474UsbFsState usbfs;
     Stm32g474GpioState gpio[STM32G474_GPIO_NUM_PORTS];
 
     Clock *hsi16;

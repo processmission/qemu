@@ -109,6 +109,8 @@ static void stm32g474_init(Object *obj)
                             TYPE_STM32G474_UART);
     object_initialize_child(obj, "fdcan", &s->fdcan,
                             TYPE_STM32G474_FDCAN);
+    object_initialize_child(obj, "usbfs", &s->usbfs,
+                            TYPE_STM32G474_USBFS);
     for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
         object_initialize_child(obj, stm32g474_gpio_names[i], &s->gpio[i],
                                 stm32g474_gpio_types[i]);
@@ -140,6 +142,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     DeviceState *usart2 = DEVICE(&s->usart2);
     DeviceState *uart4 = DEVICE(&s->uart4);
     DeviceState *fdcan = DEVICE(&s->fdcan);
+    DeviceState *usbfs = DEVICE(&s->usbfs);
 
     if (!memory_region_init_ram(&s->sram1, OBJECT(dev), "stm32g474.sram1",
                                 STM32G474_SRAM1_SIZE, errp)) {
@@ -184,6 +187,10 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(rcc, "fdcan"));
     qdev_connect_clock_in(fdcan, "pclk",
                           qdev_get_clock_out(rcc, "pclk1"));
+    qdev_connect_clock_in(usbfs, "pclk",
+                          qdev_get_clock_out(rcc, "pclk1"));
+    qdev_connect_clock_in(usbfs, "usb",
+                          qdev_get_clock_out(rcc, "usb"));
     for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
         DeviceState *gpio = DEVICE(&s->gpio[i]);
 
@@ -222,6 +229,9 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     qdev_connect_gpio_out_named(
         rcc, "peripheral-reset", STM32G474_RCC_RESET_FDCAN,
         qdev_get_gpio_in_named(fdcan, "reset", 0));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_USB,
+        qdev_get_gpio_in_named(usbfs, "reset", 0));
     if (!sysbus_realize(SYS_BUS_DEVICE(rcc), errp)) {
         return;
     }
@@ -306,6 +316,11 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(fdcan),
                     STM32G474_FDCAN_NUM_CHANNELS,
                     STM32G474_FDCAN_MRAM_BASE);
+    if (!sysbus_realize(SYS_BUS_DEVICE(usbfs), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(usbfs), 0, STM32G474_USBFS_BASE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(usbfs), 1, STM32G474_USBFS_PMA_BASE);
 
     memory_region_add_subregion(system_memory, STM32G474_SRAM1_BASE,
                                 &s->sram1);
@@ -361,6 +376,12 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                                  stm32g474_fdcan_irqs[channel][line]));
         }
     }
+    sysbus_connect_irq(SYS_BUS_DEVICE(usbfs), 0,
+                       qdev_get_gpio_in(armv7m,
+                                        STM32G474_USBFS_HP_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(usbfs), 1,
+                       qdev_get_gpio_in(armv7m,
+                                        STM32G474_USBFS_LP_IRQ));
 }
 
 static void stm32g474_class_init(ObjectClass *klass, const void *data)

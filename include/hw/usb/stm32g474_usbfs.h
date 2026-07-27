@@ -23,6 +23,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(Stm32g474UsbFsState, STM32G474_USBFS)
 #define STM32G474_USBFS_PMA_SIZE        0x400
 #define STM32G474_USBFS_NUM_REGS        (0x5c / sizeof(uint32_t))
 #define STM32G474_USBFS_NUM_BDT_REGS    32
+#define STM32G474_USBFS_HP_IRQ          19
+#define STM32G474_USBFS_LP_IRQ          20
 
 struct Stm32g474UsbFsState {
     SysBusDevice parent_obj;
