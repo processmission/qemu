@@ -1159,6 +1159,7 @@ F: include/hw/net/stm32g474_fdcan.h
 F: include/hw/usb/stm32g474_usbfs.h
 F: tests/qtest/ardep-v2-test.c
 F: tests/qtest/stm32g474-exti-test.c
+F: tests/qtest/stm32g474-fdcan-test.c
 F: tests/qtest/stm32g474-flash-test.c
 F: tests/qtest/stm32g474-gpio-test.c
 F: tests/qtest/stm32g474-pwr-test.c

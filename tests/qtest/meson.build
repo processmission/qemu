@@ -257,7 +257,8 @@ qtests_arm = \
    ['stm32g474-test', 'stm32g474-rcc-test',
     'stm32g474-pwr-test', 'stm32g474-flash-test',
     'stm32g474-usart-test', 'stm32g474-gpio-test',
-    'stm32g474-syscfg-test', 'stm32g474-exti-test'] : []) + \
+    'stm32g474-syscfg-test', 'stm32g474-exti-test',
+    'stm32g474-fdcan-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARDEP_V2') ? \
    ['ardep-v2-test'] : []) + \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
@@ -429,6 +430,8 @@ qtests = {
                                  'migration/migration-util.c'),
   'stm32g474-exti-test': files('migration/migration-qmp.c',
                                'migration/migration-util.c'),
+  'stm32g474-fdcan-test': files('migration/migration-qmp.c',
+                                'migration/migration-util.c'),
   'ardep-v2-test': files('migration/migration-qmp.c',
                          'migration/migration-util.c'),
   'erst-test': files('erst-test.c'),
