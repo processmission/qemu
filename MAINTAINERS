@@ -1145,6 +1145,7 @@ F: hw/misc/stm32g474_flash.c
 F: hw/misc/stm32g474_pwr.c
 F: hw/misc/stm32g474_rcc.c
 F: hw/misc/stm32g474_syscfg.c
+F: hw/usb/stm32g474_usbfs.c
 F: include/hw/arm/stm32g474.h
 F: include/hw/char/stm32g474_usart.h
 F: include/hw/gpio/stm32g474_gpio.h
@@ -1153,6 +1154,7 @@ F: include/hw/misc/stm32g474_flash.h
 F: include/hw/misc/stm32g474_pwr.h
 F: include/hw/misc/stm32g474_rcc.h
 F: include/hw/misc/stm32g474_syscfg.h
+F: include/hw/usb/stm32g474_usbfs.h
 F: tests/qtest/ardep-v2-test.c
 F: tests/qtest/stm32g474-exti-test.c
 F: tests/qtest/stm32g474-flash-test.c

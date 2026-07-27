@@ -511,6 +511,7 @@ config STM32G474
     select STM32G474_PWR
     select STM32G474_RCC
     select STM32G474_SYSCFG
+    select STM32G474_USBFS
     select STM32G474_USART
 
 config ARDEP_V2
