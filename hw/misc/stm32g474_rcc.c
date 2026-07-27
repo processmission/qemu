@@ -70,6 +70,13 @@ REG32(CICR, 0x20)
 REG32(AHB1RSTR, 0x28)
     FIELD(AHB1RSTR, FLASHRST, 8, 1)
 REG32(AHB2RSTR, 0x2c)
+    FIELD(AHB2RSTR, GPIOARST, 0, 1)
+    FIELD(AHB2RSTR, GPIOBRST, 1, 1)
+    FIELD(AHB2RSTR, GPIOCRST, 2, 1)
+    FIELD(AHB2RSTR, GPIODRST, 3, 1)
+    FIELD(AHB2RSTR, GPIOERST, 4, 1)
+    FIELD(AHB2RSTR, GPIOFRST, 5, 1)
+    FIELD(AHB2RSTR, GPIOGRST, 6, 1)
 REG32(AHB3RSTR, 0x30)
 REG32(APB1RSTR1, 0x38)
     FIELD(APB1RSTR1, USART2RST, 17, 1)
@@ -181,6 +188,11 @@ enum {
 };
 
 #define RCC_AHB1RSTR_MODELED R_AHB1RSTR_FLASHRST_MASK
+#define RCC_AHB2RSTR_MODELED \
+    (R_AHB2RSTR_GPIOARST_MASK | R_AHB2RSTR_GPIOBRST_MASK | \
+     R_AHB2RSTR_GPIOCRST_MASK | R_AHB2RSTR_GPIODRST_MASK | \
+     R_AHB2RSTR_GPIOERST_MASK | R_AHB2RSTR_GPIOFRST_MASK | \
+     R_AHB2RSTR_GPIOGRST_MASK)
 #define RCC_APB1RSTR1_MODELED \
     (R_APB1RSTR1_USART2RST_MASK | R_APB1RSTR1_UART4RST_MASK | \
      R_APB1RSTR1_PWRRST_MASK)
@@ -608,6 +620,27 @@ static void stm32g474_rcc_update_resets(Stm32g474RccState *s)
     qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_FLASH],
                  (s->regs[R_AHB1RSTR] &
                   R_AHB1RSTR_FLASHRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOA],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOARST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOB],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOBRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOC],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOCRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOD],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIODRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOE],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOERST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOF],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOFRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOG],
+                 (s->regs[R_AHB2RSTR] &
+                  R_AHB2RSTR_GPIOGRST_MASK) != 0);
 }
 
 static void stm32g474_rcc_register_post_write(RegisterInfo *reg, uint64_t val)
@@ -807,7 +840,8 @@ static const RegisterAccessInfo stm32g474_rcc_regs_info[] = {
         .name = "AHB2RSTR",
         .addr = A_AHB2RSTR,
         .rsvd = UINT32_MAX & ~RCC_AHB2RSTR_IMPLEMENTED,
-        .unimp = RCC_AHB2RSTR_IMPLEMENTED,
+        .unimp = RCC_AHB2RSTR_IMPLEMENTED & ~RCC_AHB2RSTR_MODELED,
+        .post_write = stm32g474_rcc_reset_post_write,
     }, {
         .name = "AHB3RSTR",
         .addr = A_AHB3RSTR,
