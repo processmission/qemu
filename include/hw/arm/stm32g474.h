@@ -13,6 +13,7 @@
 #include "system/memory.h"
 #include "hw/arm/armv7m.h"
 #include "hw/core/clock.h"
+#include "hw/misc/stm32g474_flash.h"
 #include "hw/misc/stm32g474_pwr.h"
 #include "hw/misc/stm32g474_rcc.h"
 #include "qom/object.h"
@@ -21,7 +22,6 @@
 OBJECT_DECLARE_SIMPLE_TYPE(STM32G474State, STM32G474)
 
 #define STM32G474_FLASH_BASE        0x08000000
-#define STM32G474_FLASH_SIZE        (512 * KiB)
 #define STM32G474_SRAM1_BASE        0x20000000
 #define STM32G474_SRAM1_SIZE        (80 * KiB)
 #define STM32G474_SRAM2_BASE        0x20014000
@@ -36,12 +36,12 @@ struct STM32G474State {
     ARMv7MState armv7m;
     Stm32g474RccState rcc;
     Stm32g474PwrState pwr;
+    Stm32g474FlashState flash;
 
     Clock *hsi16;
     Clock *hsi48;
     Clock *lsi;
 
-    MemoryRegion flash;
     MemoryRegion flash_alias;
     MemoryRegion sram1;
     MemoryRegion sram2;

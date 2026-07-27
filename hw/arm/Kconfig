@@ -504,6 +504,7 @@ config STM32G474
     default y
     depends on TCG && ARM
     select ARM_V7M
+    select STM32G474_FLASH
     select STM32G474_PWR
     select STM32G474_RCC
 
