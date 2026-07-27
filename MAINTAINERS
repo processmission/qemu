@@ -1154,6 +1154,7 @@ F: tests/qtest/stm32g474-flash-test.c
 F: tests/qtest/stm32g474-gpio-test.c
 F: tests/qtest/stm32g474-pwr-test.c
 F: tests/qtest/stm32g474-rcc-test.c
+F: tests/qtest/stm32g474-syscfg-test.c
 F: tests/qtest/stm32g474-test.c
 F: tests/qtest/stm32g474-usart-test.c
 
