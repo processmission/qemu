@@ -8,6 +8,7 @@
 
 #include "qemu/osdep.h"
 #include "system/address-spaces.h"
+#include "system/system.h"
 #include "hw/arm/stm32g474.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
@@ -26,6 +27,12 @@ static void stm32g474_init(Object *obj)
     object_initialize_child(obj, "rcc", &s->rcc, TYPE_STM32G474_RCC);
     object_initialize_child(obj, "pwr", &s->pwr, TYPE_STM32G474_PWR);
     object_initialize_child(obj, "flash", &s->flash, TYPE_STM32G474_FLASH);
+    object_initialize_child(obj, "usart1", &s->usart1,
+                            TYPE_STM32G474_USART);
+    object_initialize_child(obj, "usart2", &s->usart2,
+                            TYPE_STM32G474_USART);
+    object_initialize_child(obj, "uart4", &s->uart4,
+                            TYPE_STM32G474_UART);
 
     /* Fixed-frequency clocks do not need migration state. */
     s->hsi16 = clock_new(obj, "hsi16");
@@ -45,6 +52,9 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     DeviceState *rcc = DEVICE(&s->rcc);
     DeviceState *pwr = DEVICE(&s->pwr);
     DeviceState *flash = DEVICE(&s->flash);
+    DeviceState *usart1 = DEVICE(&s->usart1);
+    DeviceState *usart2 = DEVICE(&s->usart2);
+    DeviceState *uart4 = DEVICE(&s->uart4);
 
     if (!memory_region_init_ram(&s->sram1, OBJECT(dev), "stm32g474.sram1",
                                 STM32G474_SRAM1_SIZE, errp)) {
@@ -72,6 +82,24 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(rcc, "cortex-refclk"));
     qdev_connect_clock_in(pwr, "clk", qdev_get_clock_out(rcc, "pwr"));
     qdev_connect_clock_in(flash, "clk", qdev_get_clock_out(rcc, "flash"));
+    qdev_prop_set_chr(uart4, "chardev", serial_hd(0));
+    qdev_prop_set_chr(usart2, "chardev", serial_hd(1));
+    qdev_prop_set_chr(usart1, "chardev", serial_hd(2));
+    qdev_connect_clock_in(usart1, "clk",
+                          qdev_get_clock_out(rcc, "usart1"));
+    qdev_connect_clock_in(usart2, "clk",
+                          qdev_get_clock_out(rcc, "usart2"));
+    qdev_connect_clock_in(uart4, "clk",
+                          qdev_get_clock_out(rcc, "uart4"));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_USART1,
+        qdev_get_gpio_in_named(usart1, "reset", 0));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_USART2,
+        qdev_get_gpio_in_named(usart2, "reset", 0));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_UART4,
+        qdev_get_gpio_in_named(uart4, "reset", 0));
     qdev_connect_gpio_out_named(
         rcc, "peripheral-reset", STM32G474_RCC_RESET_PWR,
         qdev_get_gpio_in_named(pwr, "reset", 0));
@@ -82,6 +110,18 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(rcc), 0, STM32G474_RCC_BASE);
+    if (!sysbus_realize(SYS_BUS_DEVICE(usart1), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(usart1), 0, STM32G474_USART1_BASE);
+    if (!sysbus_realize(SYS_BUS_DEVICE(usart2), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(usart2), 0, STM32G474_USART2_BASE);
+    if (!sysbus_realize(SYS_BUS_DEVICE(uart4), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(uart4), 0, STM32G474_UART4_BASE);
     if (!sysbus_realize(SYS_BUS_DEVICE(pwr), errp)) {
         return;
     }
@@ -124,6 +164,12 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in(armv7m, STM32G474_RCC_IRQ));
     sysbus_connect_irq(SYS_BUS_DEVICE(flash), 0,
                        qdev_get_gpio_in(armv7m, STM32G474_FLASH_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(usart1), 0,
+                       qdev_get_gpio_in(armv7m, STM32G474_USART1_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(usart2), 0,
+                       qdev_get_gpio_in(armv7m, STM32G474_USART2_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(uart4), 0,
+                       qdev_get_gpio_in(armv7m, STM32G474_UART4_IRQ));
 }
 
 static void stm32g474_class_init(ObjectClass *klass, const void *data)

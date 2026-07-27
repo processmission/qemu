@@ -61,6 +61,10 @@ config STM32F2XX_USART
 config STM32L4X5_USART
     bool
 
+config STM32G474_USART
+    bool
+    select REGISTER
+
 config CMSDK_APB_UART
     bool
 

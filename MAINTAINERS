@@ -1137,10 +1137,12 @@ M: Chao Liu <chao.liu@processmission.com>
 S: Maintained
 F: docs/system/arm/stm32g474.rst
 F: hw/arm/stm32g474*.c
+F: hw/char/stm32g474_usart.c
 F: hw/misc/stm32g474_flash.c
 F: hw/misc/stm32g474_pwr.c
 F: hw/misc/stm32g474_rcc.c
 F: include/hw/arm/stm32g474.h
+F: include/hw/char/stm32g474_usart.h
 F: include/hw/misc/stm32g474_flash.h
 F: include/hw/misc/stm32g474_pwr.h
 F: include/hw/misc/stm32g474_rcc.h
