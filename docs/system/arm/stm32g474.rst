@@ -37,7 +37,7 @@ Sources
 
 The model is based on:
 
-* STM32G4 reference manual RM0440, revision 8.
+* STM32G4 reference manual RM0440, revision 9.
 * STM32G474xB/xC/xE data sheet, revision 9.
 * ARDEP repository commit
   ``266e0aa36e10b211ed83aa11ab410ac1f5de233e``.
