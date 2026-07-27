@@ -1150,6 +1150,7 @@ F: tests/qtest/stm32g474-flash-test.c
 F: tests/qtest/stm32g474-pwr-test.c
 F: tests/qtest/stm32g474-rcc-test.c
 F: tests/qtest/stm32g474-test.c
+F: tests/qtest/stm32g474-usart-test.c
 
 STM32VLDISCOVERY
 M: Alexandre Iooss <erdnaxe@crans.org>

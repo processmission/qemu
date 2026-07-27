@@ -255,7 +255,8 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
   (config_all_devices.has_key('CONFIG_STM32G474') ? \
    ['stm32g474-test', 'stm32g474-rcc-test',
-    'stm32g474-pwr-test', 'stm32g474-flash-test'] : []) + \
+    'stm32g474-pwr-test', 'stm32g474-flash-test',
+    'stm32g474-usart-test'] : []) + \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
@@ -416,6 +417,8 @@ qtests = {
                              'migration/migration-util.c') + dbus_vmstate1 +
                        [gio],
   'k230-ws2812-amp-test': files('migration/migration-qmp.c',
+                                'migration/migration-util.c'),
+  'stm32g474-usart-test': files('migration/migration-qmp.c',
                                 'migration/migration-util.c'),
   'erst-test': files('erst-test.c'),
   'ivshmem-test': [rt, '../../contrib/ivshmem-server/ivshmem-server.c'],
