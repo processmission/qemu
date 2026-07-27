@@ -91,11 +91,13 @@
 #define APB1ENR1_USBEN    (1U << 23)
 #define APB1ENR1_FDCANEN  (1U << 25)
 #define APB1ENR1_PWREN    (1U << 28)
+#define APB2ENR_SYSCFGEN  (1U << 0)
 #define APB2ENR_USART1EN  (1U << 14)
 
 #define APB1RSTR1_USART2RST (1U << 17)
 #define APB1RSTR1_UART4RST  (1U << 19)
 #define APB1RSTR1_PWRRST    (1U << 28)
+#define APB2RSTR_SYSCFGRST  (1U << 0)
 #define APB2RSTR_USART1RST  (1U << 14)
 #define AHB1RSTR_FLASHRST   (1U << 8)
 #define AHB2RSTR_GPIOARST   (1U << 0)
@@ -144,6 +146,7 @@ enum {
     RCC_RESET_GPIOE,
     RCC_RESET_GPIOF,
     RCC_RESET_GPIOG,
+    RCC_RESET_SYSCFG,
     RCC_RESET_COUNT,
 };
 
@@ -153,7 +156,14 @@ G_STATIC_ASSERT(RCC_RESET_UART4 == 2);
 G_STATIC_ASSERT(RCC_RESET_PWR == 3);
 G_STATIC_ASSERT(RCC_RESET_FLASH == 4);
 G_STATIC_ASSERT(RCC_RESET_GPIOA == 5);
+G_STATIC_ASSERT(RCC_RESET_GPIOB == 6);
+G_STATIC_ASSERT(RCC_RESET_GPIOC == 7);
+G_STATIC_ASSERT(RCC_RESET_GPIOD == 8);
+G_STATIC_ASSERT(RCC_RESET_GPIOE == 9);
+G_STATIC_ASSERT(RCC_RESET_GPIOF == 10);
 G_STATIC_ASSERT(RCC_RESET_GPIOG == 11);
+G_STATIC_ASSERT(RCC_RESET_SYSCFG == 12);
+G_STATIC_ASSERT(RCC_RESET_COUNT == 13);
 
 typedef struct RccRegister {
     const char *name;
@@ -246,7 +256,10 @@ static const RccResetOutput reset_outputs[] = {
     { "GPIOE",  RCC_AHB2RSTR,  AHB2RSTR_GPIOERST,   RCC_RESET_GPIOE },
     { "GPIOF",  RCC_AHB2RSTR,  AHB2RSTR_GPIOFRST,   RCC_RESET_GPIOF },
     { "GPIOG",  RCC_AHB2RSTR,  AHB2RSTR_GPIOGRST,   RCC_RESET_GPIOG },
+    { "SYSCFG", RCC_APB2RSTR,  APB2RSTR_SYSCFGRST,  RCC_RESET_SYSCFG },
 };
+
+G_STATIC_ASSERT(ARRAY_SIZE(reset_outputs) == RCC_RESET_COUNT);
 
 static QTestState *stm32g474_qtest_start(void)
 {
@@ -307,7 +320,7 @@ static void assert_reset_clocks(QTestState *qts)
 {
     static const char *const stopped_clocks[] = {
         "pll-p", "pll-q", "pll-r", "dma1", "pwr", "usart1", "usart2",
-        "uart4", "usb", "fdcan",
+        "uart4", "usb", "fdcan", "syscfg",
     };
 
     assert_core_clocks(qts, 16000000, 16000000, 16000000, 16000000,
@@ -689,6 +702,7 @@ static void test_rcc_gates_muxes_resets(void)
     uint32_t cfgr;
     uint32_t apb1enr1;
 
+    assert_clock_hz(qts, "syscfg", 0);
     assert_clock_hz(qts, "flash", 16000000);
     assert_clock_hz(qts, "dma1", 0);
     assert_clock_hz(qts, "pwr", 0);
@@ -717,6 +731,10 @@ static void test_rcc_gates_muxes_resets(void)
     assert_clock_hz(qts, "gpiob", 16000000);
     rcc_writel(qts, RCC_AHB2ENR, 0);
 
+    rcc_writel(qts, RCC_APB2ENR, APB2ENR_SYSCFGEN);
+    assert_clock_hz(qts, "syscfg", 16000000);
+    assert_clock_hz(qts, "usart1", 0);
+
     enable_hsi16_pll_170mhz(qts);
     cfgr = rcc_readl(qts, RCC_CFGR);
     cfgr &= ~(CFGR_SW_MASK | CFGR_PPRE1_MASK | CFGR_PPRE2_MASK);
@@ -724,6 +742,7 @@ static void test_rcc_gates_muxes_resets(void)
                CFGR_PPRE1_DIV4 | CFGR_PPRE2_DIV8);
     assert_core_clocks(qts, 170000000, 170000000, 42500000, 21250000,
                        21250000);
+    assert_clock_hz(qts, "syscfg", 21250000);
     rcc_writel(qts, RCC_AHB1ENR, AHB1ENR_FLASHEN | AHB1ENR_DMA1EN);
     assert_clock_hz(qts, "flash", 170000000);
     assert_clock_hz(qts, "dma1", 170000000);
@@ -736,7 +755,15 @@ static void test_rcc_gates_muxes_resets(void)
                APB1ENR1_FDCANEN;
     rcc_writel(qts, RCC_APB1ENR1, apb1enr1);
     rcc_writel(qts, RCC_APB2ENR, APB2ENR_USART1EN);
+    assert_clock_hz(qts, "syscfg", 0);
+    assert_clock_hz(qts, "usart1", 21250000);
+    rcc_writel(qts, RCC_APB2ENR, APB2ENR_SYSCFGEN);
+    assert_clock_hz(qts, "syscfg", 21250000);
+    assert_clock_hz(qts, "usart1", 0);
+    rcc_writel(qts, RCC_APB2ENR,
+               APB2ENR_SYSCFGEN | APB2ENR_USART1EN);
     assert_clock_hz(qts, "pwr", 42500000);
+    assert_clock_hz(qts, "syscfg", 21250000);
     assert_clock_hz(qts, "usart1", 21250000);
     assert_clock_hz(qts, "usart2", 42500000);
     assert_clock_hz(qts, "uart4", 42500000);
@@ -803,6 +830,7 @@ static void test_rcc_gates_muxes_resets(void)
     assert_clock_hz(qts, "uart4", 42500000);
     assert_clock_hz(qts, "usb", 48000000);
     assert_clock_hz(qts, "fdcan", 42500000);
+    assert_clock_hz(qts, "syscfg", 21250000);
 
     rcc_writel(qts, RCC_APB1ENR1, apb1enr1 & ~APB1ENR1_FDCANEN);
     assert_clock_hz(qts, "fdcan", 0);
@@ -826,6 +854,7 @@ static void test_rcc_gates_muxes_resets(void)
         assert_clock_hz(qts, "uart4", 42500000);
         assert_clock_hz(qts, "pwr", 42500000);
         assert_clock_hz(qts, "flash", 170000000);
+        assert_clock_hz(qts, "syscfg", 21250000);
         rcc_writel(qts, reset_outputs[selected].offset, 0);
         for (unsigned int i = 0; i < RCC_RESET_COUNT; i++) {
             g_assert_false(qtest_get_irq(qts, i));
@@ -857,7 +886,8 @@ static void test_rcc_gates_muxes_resets(void)
 
     rcc_writel(qts, RCC_AHB1RSTR, AHB1RSTR_FLASHRST);
     rcc_writel(qts, RCC_AHB2RSTR, AHB2RSTR_GPIO_MASK);
-    rcc_writel(qts, RCC_APB2RSTR, APB2RSTR_USART1RST);
+    rcc_writel(qts, RCC_APB2RSTR,
+               APB2RSTR_SYSCFGRST | APB2RSTR_USART1RST);
     rcc_writel(qts, RCC_APB1RSTR1,
                APB1RSTR1_USART2RST | APB1RSTR1_UART4RST |
                APB1RSTR1_PWRRST);
