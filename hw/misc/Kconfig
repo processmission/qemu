@@ -139,6 +139,10 @@ config STM32G474_RCC
     bool
     select REGISTER
 
+config STM32G474_PWR
+    bool
+    select REGISTER
+
 config MIPS_ITU
     bool
     depends on TCG

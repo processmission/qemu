@@ -24,6 +24,7 @@ static void stm32g474_init(Object *obj)
 
     object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
     object_initialize_child(obj, "rcc", &s->rcc, TYPE_STM32G474_RCC);
+    object_initialize_child(obj, "pwr", &s->pwr, TYPE_STM32G474_PWR);
 
     /* Fixed-frequency clocks do not need migration state. */
     s->hsi16 = clock_new(obj, "hsi16");
@@ -41,6 +42,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     MemoryRegion *system_memory = get_system_memory();
     DeviceState *armv7m = DEVICE(&s->armv7m);
     DeviceState *rcc = DEVICE(&s->rcc);
+    DeviceState *pwr = DEVICE(&s->pwr);
 
     if (!memory_region_init_rom(&s->flash, OBJECT(dev), "stm32g474.flash",
                                 STM32G474_FLASH_SIZE, errp)) {
@@ -92,10 +94,18 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(rcc, "hclk"));
     qdev_connect_clock_in(armv7m, "refclk",
                           qdev_get_clock_out(rcc, "cortex-refclk"));
+    qdev_connect_clock_in(pwr, "clk", qdev_get_clock_out(rcc, "pwr"));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_PWR,
+        qdev_get_gpio_in_named(pwr, "reset", 0));
     if (!sysbus_realize(SYS_BUS_DEVICE(rcc), errp)) {
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(rcc), 0, STM32G474_RCC_BASE);
+    if (!sysbus_realize(SYS_BUS_DEVICE(pwr), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(pwr), 0, STM32G474_PWR_BASE);
     if (!object_property_set_link(OBJECT(&s->armv7m), "memory",
                                   OBJECT(system_memory), errp)) {
         return;
