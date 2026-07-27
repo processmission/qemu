@@ -98,6 +98,14 @@
 #define APB1RSTR1_PWRRST    (1U << 28)
 #define APB2RSTR_USART1RST  (1U << 14)
 #define AHB1RSTR_FLASHRST   (1U << 8)
+#define AHB2RSTR_GPIOARST   (1U << 0)
+#define AHB2RSTR_GPIOBRST   (1U << 1)
+#define AHB2RSTR_GPIOCRST   (1U << 2)
+#define AHB2RSTR_GPIODRST   (1U << 3)
+#define AHB2RSTR_GPIOERST   (1U << 4)
+#define AHB2RSTR_GPIOFRST   (1U << 5)
+#define AHB2RSTR_GPIOGRST   (1U << 6)
+#define AHB2RSTR_GPIO_MASK  0x0000007fU
 
 #define CCIPR_USART1_SHIFT 0
 #define CCIPR_USART2_SHIFT 2
@@ -129,8 +137,23 @@ enum {
     RCC_RESET_UART4,
     RCC_RESET_PWR,
     RCC_RESET_FLASH,
+    RCC_RESET_GPIOA,
+    RCC_RESET_GPIOB,
+    RCC_RESET_GPIOC,
+    RCC_RESET_GPIOD,
+    RCC_RESET_GPIOE,
+    RCC_RESET_GPIOF,
+    RCC_RESET_GPIOG,
     RCC_RESET_COUNT,
 };
+
+G_STATIC_ASSERT(RCC_RESET_USART1 == 0);
+G_STATIC_ASSERT(RCC_RESET_USART2 == 1);
+G_STATIC_ASSERT(RCC_RESET_UART4 == 2);
+G_STATIC_ASSERT(RCC_RESET_PWR == 3);
+G_STATIC_ASSERT(RCC_RESET_FLASH == 4);
+G_STATIC_ASSERT(RCC_RESET_GPIOA == 5);
+G_STATIC_ASSERT(RCC_RESET_GPIOG == 11);
 
 typedef struct RccRegister {
     const char *name;
@@ -140,6 +163,7 @@ typedef struct RccRegister {
 } RccRegister;
 
 typedef struct RccResetOutput {
+    const char *name;
     uint32_t offset;
     uint32_t bit;
     unsigned int index;
@@ -210,11 +234,18 @@ static const char *const gpio_clocks[] = {
 };
 
 static const RccResetOutput reset_outputs[] = {
-    { RCC_APB2RSTR,  APB2RSTR_USART1RST,  RCC_RESET_USART1 },
-    { RCC_APB1RSTR1, APB1RSTR1_USART2RST, RCC_RESET_USART2 },
-    { RCC_APB1RSTR1, APB1RSTR1_UART4RST,  RCC_RESET_UART4 },
-    { RCC_APB1RSTR1, APB1RSTR1_PWRRST,    RCC_RESET_PWR },
-    { RCC_AHB1RSTR,  AHB1RSTR_FLASHRST,   RCC_RESET_FLASH },
+    { "USART1", RCC_APB2RSTR,  APB2RSTR_USART1RST,  RCC_RESET_USART1 },
+    { "USART2", RCC_APB1RSTR1, APB1RSTR1_USART2RST, RCC_RESET_USART2 },
+    { "UART4",  RCC_APB1RSTR1, APB1RSTR1_UART4RST,  RCC_RESET_UART4 },
+    { "PWR",    RCC_APB1RSTR1, APB1RSTR1_PWRRST,    RCC_RESET_PWR },
+    { "FLASH",  RCC_AHB1RSTR,  AHB1RSTR_FLASHRST,   RCC_RESET_FLASH },
+    { "GPIOA",  RCC_AHB2RSTR,  AHB2RSTR_GPIOARST,   RCC_RESET_GPIOA },
+    { "GPIOB",  RCC_AHB2RSTR,  AHB2RSTR_GPIOBRST,   RCC_RESET_GPIOB },
+    { "GPIOC",  RCC_AHB2RSTR,  AHB2RSTR_GPIOCRST,   RCC_RESET_GPIOC },
+    { "GPIOD",  RCC_AHB2RSTR,  AHB2RSTR_GPIODRST,   RCC_RESET_GPIOD },
+    { "GPIOE",  RCC_AHB2RSTR,  AHB2RSTR_GPIOERST,   RCC_RESET_GPIOE },
+    { "GPIOF",  RCC_AHB2RSTR,  AHB2RSTR_GPIOFRST,   RCC_RESET_GPIOF },
+    { "GPIOG",  RCC_AHB2RSTR,  AHB2RSTR_GPIOGRST,   RCC_RESET_GPIOG },
 };
 
 static QTestState *stm32g474_qtest_start(void)
@@ -783,6 +814,7 @@ static void test_rcc_gates_muxes_resets(void)
     qtest_irq_intercept_out_named(qts, RCC_QOM_PATH, "peripheral-reset");
     for (unsigned int selected = 0; selected < ARRAY_SIZE(reset_outputs);
          selected++) {
+        g_test_message("%s reset output", reset_outputs[selected].name);
         rcc_writel(qts, reset_outputs[selected].offset,
                    reset_outputs[selected].bit);
         for (unsigned int i = 0; i < RCC_RESET_COUNT; i++) {
@@ -800,7 +832,31 @@ static void test_rcc_gates_muxes_resets(void)
         }
     }
 
+    rcc_writel(qts, RCC_AHB2RSTR, AHB2RSTR_GPIO_MASK);
+    for (unsigned int selected = RCC_RESET_GPIOA;
+         selected <= RCC_RESET_GPIOG; selected++) {
+        uint32_t selected_bit = 1U << (selected - RCC_RESET_GPIOA);
+
+        g_test_message("clear only %s reset output",
+                       reset_outputs[selected].name);
+        rcc_writel(qts, RCC_AHB2RSTR,
+                   AHB2RSTR_GPIO_MASK & ~selected_bit);
+        for (unsigned int i = 0; i < RCC_RESET_COUNT; i++) {
+            bool expected = i >= RCC_RESET_GPIOA &&
+                            i <= RCC_RESET_GPIOG &&
+                            i != selected;
+
+            g_assert_cmpint(qtest_get_irq(qts, i), ==, expected);
+        }
+        rcc_writel(qts, RCC_AHB2RSTR, AHB2RSTR_GPIO_MASK);
+    }
+    rcc_writel(qts, RCC_AHB2RSTR, 0);
+    for (unsigned int i = 0; i < RCC_RESET_COUNT; i++) {
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+
     rcc_writel(qts, RCC_AHB1RSTR, AHB1RSTR_FLASHRST);
+    rcc_writel(qts, RCC_AHB2RSTR, AHB2RSTR_GPIO_MASK);
     rcc_writel(qts, RCC_APB2RSTR, APB2RSTR_USART1RST);
     rcc_writel(qts, RCC_APB1RSTR1,
                APB1RSTR1_USART2RST | APB1RSTR1_UART4RST |
