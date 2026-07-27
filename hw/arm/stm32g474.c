@@ -18,6 +18,8 @@
 #define STM32G474_HSI16_FREQ_HZ 16000000
 #define STM32G474_HSI48_FREQ_HZ 48000000
 #define STM32G474_LSI_FREQ_HZ 32000
+#define STM32G474_EXTI_9_5_NUM_LINES 5
+#define STM32G474_EXTI_15_10_NUM_LINES 6
 
 static const char *const stm32g474_gpio_types[STM32G474_GPIO_NUM_PORTS] = {
     TYPE_STM32G474_GPIO_A,
@@ -73,6 +75,11 @@ static void stm32g474_init(Object *obj)
     object_initialize_child(obj, "flash", &s->flash, TYPE_STM32G474_FLASH);
     object_initialize_child(obj, "syscfg", &s->syscfg,
                             TYPE_STM32G474_SYSCFG);
+    object_initialize_child(obj, "exti", &s->exti, TYPE_STM32G474_EXTI);
+    object_initialize_child(obj, "exti-9-5-or", &s->exti_9_5_or,
+                            TYPE_OR_IRQ);
+    object_initialize_child(obj, "exti-15-10-or", &s->exti_15_10_or,
+                            TYPE_OR_IRQ);
     object_initialize_child(obj, "usart1", &s->usart1,
                             TYPE_STM32G474_USART);
     object_initialize_child(obj, "usart2", &s->usart2,
@@ -103,6 +110,9 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     DeviceState *pwr = DEVICE(&s->pwr);
     DeviceState *flash = DEVICE(&s->flash);
     DeviceState *syscfg = DEVICE(&s->syscfg);
+    DeviceState *exti = DEVICE(&s->exti);
+    DeviceState *exti_9_5_or = DEVICE(&s->exti_9_5_or);
+    DeviceState *exti_15_10_or = DEVICE(&s->exti_15_10_or);
     DeviceState *usart1 = DEVICE(&s->usart1);
     DeviceState *usart2 = DEVICE(&s->usart2);
     DeviceState *uart4 = DEVICE(&s->uart4);
@@ -134,6 +144,8 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     qdev_connect_clock_in(pwr, "clk", qdev_get_clock_out(rcc, "pwr"));
     qdev_connect_clock_in(flash, "clk", qdev_get_clock_out(rcc, "flash"));
     qdev_connect_clock_in(syscfg, "clk",
+                          qdev_get_clock_out(rcc, "syscfg"));
+    qdev_connect_clock_in(exti, "clk",
                           qdev_get_clock_out(rcc, "syscfg"));
     qdev_prop_set_chr(uart4, "chardev", serial_hd(0));
     qdev_prop_set_chr(usart2, "chardev", serial_hd(1));
@@ -196,6 +208,35 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(syscfg), 0, STM32G474_SYSCFG_BASE);
     qdev_pass_gpios(syscfg, dev, "gpio-in");
+    for (unsigned int i = 0; i < STM32G474_SYSCFG_NUM_LINES; i++) {
+        qdev_connect_gpio_out_named(
+            syscfg, "exti-out", i,
+            qdev_get_gpio_in_named(exti, "line-in", i));
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(exti), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(exti), 0, STM32G474_EXTI_BASE);
+    qdev_prop_set_uint16(exti_9_5_or, "num-lines",
+                         STM32G474_EXTI_9_5_NUM_LINES);
+    if (!qdev_realize(exti_9_5_or, NULL, errp)) {
+        return;
+    }
+    qdev_prop_set_uint16(exti_15_10_or, "num-lines",
+                         STM32G474_EXTI_15_10_NUM_LINES);
+    if (!qdev_realize(exti_15_10_or, NULL, errp)) {
+        return;
+    }
+    for (unsigned int i = 0; i < STM32G474_EXTI_9_5_NUM_LINES; i++) {
+        sysbus_connect_irq(
+            SYS_BUS_DEVICE(exti), i + 5,
+            qdev_get_gpio_in(exti_9_5_or, i));
+    }
+    for (unsigned int i = 0; i < STM32G474_EXTI_15_10_NUM_LINES; i++) {
+        sysbus_connect_irq(
+            SYS_BUS_DEVICE(exti), i + 10,
+            qdev_get_gpio_in(exti_15_10_or, i));
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(usart1), errp)) {
         return;
     }
@@ -246,6 +287,17 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), errp)) {
         return;
     }
+    for (unsigned int i = 0; i < STM32G474_EXTI_9_5_NUM_LINES; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(exti), i,
+                           qdev_get_gpio_in(armv7m,
+                                            STM32G474_EXTI0_IRQ + i));
+    }
+    qdev_connect_gpio_out(
+        exti_9_5_or, 0,
+        qdev_get_gpio_in(armv7m, STM32G474_EXTI9_5_IRQ));
+    qdev_connect_gpio_out(
+        exti_15_10_or, 0,
+        qdev_get_gpio_in(armv7m, STM32G474_EXTI15_10_IRQ));
     sysbus_connect_irq(SYS_BUS_DEVICE(rcc), 0,
                        qdev_get_gpio_in(armv7m, STM32G474_RCC_IRQ));
     sysbus_connect_irq(SYS_BUS_DEVICE(flash), 0,

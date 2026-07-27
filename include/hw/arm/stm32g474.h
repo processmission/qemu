@@ -14,7 +14,9 @@
 #include "hw/arm/armv7m.h"
 #include "hw/char/stm32g474_usart.h"
 #include "hw/core/clock.h"
+#include "hw/core/or-irq.h"
 #include "hw/gpio/stm32g474_gpio.h"
+#include "hw/misc/stm32g474_exti.h"
 #include "hw/misc/stm32g474_flash.h"
 #include "hw/misc/stm32g474_pwr.h"
 #include "hw/misc/stm32g474_rcc.h"
@@ -35,6 +37,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(STM32G474State, STM32G474)
 #define STM32G474_USART1_BASE       0x40013800
 #define STM32G474_USART2_BASE       0x40004400
 #define STM32G474_UART4_BASE        0x40004c00
+#define STM32G474_EXTI0_IRQ         6
+#define STM32G474_EXTI9_5_IRQ       23
+#define STM32G474_EXTI15_10_IRQ     40
 #define STM32G474_USART1_IRQ        37
 #define STM32G474_USART2_IRQ        38
 #define STM32G474_UART4_IRQ         52
@@ -47,6 +52,9 @@ struct STM32G474State {
     Stm32g474PwrState pwr;
     Stm32g474FlashState flash;
     Stm32g474SyscfgState syscfg;
+    Stm32g474ExtiState exti;
+    OrIRQState exti_9_5_or;
+    OrIRQState exti_15_10_or;
     Stm32g474UsartState usart1;
     Stm32g474UsartState usart2;
     Stm32g474UsartState uart4;
