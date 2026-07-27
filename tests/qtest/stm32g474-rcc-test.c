@@ -96,6 +96,7 @@
 
 #define APB1RSTR1_USART2RST (1U << 17)
 #define APB1RSTR1_UART4RST  (1U << 19)
+#define APB1RSTR1_USBRST    (1U << 23)
 #define APB1RSTR1_FDCANRST  (1U << 25)
 #define APB1RSTR1_PWRRST    (1U << 28)
 #define APB2RSTR_SYSCFGRST  (1U << 0)
@@ -149,6 +150,7 @@ enum {
     RCC_RESET_GPIOG,
     RCC_RESET_SYSCFG,
     RCC_RESET_FDCAN,
+    RCC_RESET_USB,
     RCC_RESET_COUNT,
 };
 
@@ -166,7 +168,8 @@ G_STATIC_ASSERT(RCC_RESET_GPIOF == 10);
 G_STATIC_ASSERT(RCC_RESET_GPIOG == 11);
 G_STATIC_ASSERT(RCC_RESET_SYSCFG == 12);
 G_STATIC_ASSERT(RCC_RESET_FDCAN == 13);
-G_STATIC_ASSERT(RCC_RESET_COUNT == 14);
+G_STATIC_ASSERT(RCC_RESET_USB == 14);
+G_STATIC_ASSERT(RCC_RESET_COUNT == 15);
 
 typedef struct RccRegister {
     const char *name;
@@ -261,6 +264,7 @@ static const RccResetOutput reset_outputs[] = {
     { "GPIOG",  RCC_AHB2RSTR,  AHB2RSTR_GPIOGRST,   RCC_RESET_GPIOG },
     { "SYSCFG", RCC_APB2RSTR,  APB2RSTR_SYSCFGRST,  RCC_RESET_SYSCFG },
     { "FDCAN",  RCC_APB1RSTR1, APB1RSTR1_FDCANRST,  RCC_RESET_FDCAN },
+    { "USB",    RCC_APB1RSTR1, APB1RSTR1_USBRST,    RCC_RESET_USB },
 };
 
 G_STATIC_ASSERT(ARRAY_SIZE(reset_outputs) == RCC_RESET_COUNT);
@@ -896,7 +900,8 @@ static void test_rcc_gates_muxes_resets(void)
                APB2RSTR_SYSCFGRST | APB2RSTR_USART1RST);
     rcc_writel(qts, RCC_APB1RSTR1,
                APB1RSTR1_USART2RST | APB1RSTR1_UART4RST |
-               APB1RSTR1_FDCANRST | APB1RSTR1_PWRRST);
+               APB1RSTR1_USBRST | APB1RSTR1_FDCANRST |
+               APB1RSTR1_PWRRST);
     for (unsigned int i = 0; i < RCC_RESET_COUNT; i++) {
         g_assert_true(qtest_get_irq(qts, i));
     }
