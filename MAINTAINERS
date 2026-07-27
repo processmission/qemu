@@ -1152,6 +1152,7 @@ F: include/hw/misc/stm32g474_flash.h
 F: include/hw/misc/stm32g474_pwr.h
 F: include/hw/misc/stm32g474_rcc.h
 F: include/hw/misc/stm32g474_syscfg.h
+F: tests/qtest/stm32g474-exti-test.c
 F: tests/qtest/stm32g474-flash-test.c
 F: tests/qtest/stm32g474-gpio-test.c
 F: tests/qtest/stm32g474-pwr-test.c
