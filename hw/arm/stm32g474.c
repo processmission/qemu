@@ -15,19 +15,24 @@
 #define STM32G474_NUM_IRQS 102
 #define STM32G474_NUM_PRIO_BITS 4
 #define STM32G474_HSI16_FREQ_HZ 16000000
+#define STM32G474_HSI48_FREQ_HZ 48000000
+#define STM32G474_LSI_FREQ_HZ 32000
 
 static void stm32g474_init(Object *obj)
 {
     STM32G474State *s = STM32G474(obj);
 
     object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
+    object_initialize_child(obj, "rcc", &s->rcc, TYPE_STM32G474_RCC);
 
     /* Fixed-frequency clocks do not need migration state. */
     s->hsi16 = clock_new(obj, "hsi16");
     clock_set_hz(s->hsi16, STM32G474_HSI16_FREQ_HZ);
-    s->cortex_refclk = clock_new(obj, "cortex-refclk");
-    clock_set_mul_div(s->cortex_refclk, 8, 1);
-    clock_set_source(s->cortex_refclk, s->hsi16);
+    s->hsi48 = clock_new(obj, "hsi48");
+    clock_set_hz(s->hsi48, STM32G474_HSI48_FREQ_HZ);
+    s->lsi = clock_new(obj, "lsi");
+    clock_set_hz(s->lsi, STM32G474_LSI_FREQ_HZ);
+    qdev_alias_clock(DEVICE(&s->rcc), "hse-in", DEVICE(obj), "hse");
 }
 
 static void stm32g474_realize(DeviceState *dev, Error **errp)
@@ -35,6 +40,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     STM32G474State *s = STM32G474(dev);
     MemoryRegion *system_memory = get_system_memory();
     DeviceState *armv7m = DEVICE(&s->armv7m);
+    DeviceState *rcc = DEVICE(&s->rcc);
 
     if (!memory_region_init_rom(&s->flash, OBJECT(dev), "stm32g474.flash",
                                 STM32G474_FLASH_SIZE, errp)) {
@@ -79,8 +85,17 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     qdev_prop_set_string(armv7m, "cpu-type",
                          ARM_CPU_TYPE_NAME("cortex-m4"));
     qdev_prop_set_bit(armv7m, "enable-bitband", true);
-    qdev_connect_clock_in(armv7m, "cpuclk", s->hsi16);
-    qdev_connect_clock_in(armv7m, "refclk", s->cortex_refclk);
+    qdev_connect_clock_in(rcc, "hsi16-in", s->hsi16);
+    qdev_connect_clock_in(rcc, "hsi48-in", s->hsi48);
+    qdev_connect_clock_in(rcc, "lsi-in", s->lsi);
+    qdev_connect_clock_in(armv7m, "cpuclk",
+                          qdev_get_clock_out(rcc, "hclk"));
+    qdev_connect_clock_in(armv7m, "refclk",
+                          qdev_get_clock_out(rcc, "cortex-refclk"));
+    if (!sysbus_realize(SYS_BUS_DEVICE(rcc), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(rcc), 0, STM32G474_RCC_BASE);
     if (!object_property_set_link(OBJECT(&s->armv7m), "memory",
                                   OBJECT(system_memory), errp)) {
         return;
@@ -88,6 +103,8 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), errp)) {
         return;
     }
+    sysbus_connect_irq(SYS_BUS_DEVICE(rcc), 0,
+                       qdev_get_gpio_in(armv7m, STM32G474_RCC_IRQ));
 }
 
 static void stm32g474_class_init(ObjectClass *klass, const void *data)

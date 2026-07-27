@@ -13,6 +13,7 @@
 #include "system/memory.h"
 #include "hw/arm/armv7m.h"
 #include "hw/core/clock.h"
+#include "hw/misc/stm32g474_rcc.h"
 #include "qom/object.h"
 
 #define TYPE_STM32G474 "stm32g474"
@@ -32,9 +33,11 @@ struct STM32G474State {
     SysBusDevice parent_obj;
 
     ARMv7MState armv7m;
+    Stm32g474RccState rcc;
 
     Clock *hsi16;
-    Clock *cortex_refclk;
+    Clock *hsi48;
+    Clock *lsi;
 
     MemoryRegion flash;
     MemoryRegion flash_alias;
