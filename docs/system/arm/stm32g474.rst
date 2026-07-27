@@ -224,21 +224,35 @@ REACK, TXE, TC, and RXNE state transitions used by Zephyr.  UART4 is
 ARDEP V2 composition
 --------------------
 
-The ``ardep-v2`` machine instantiates the common STM32G474 device and adds the
-following board connections:
+The implemented ``ardep-v2`` machine instantiates the common STM32G474 device.
+It can load firmware with:
+
+.. code-block:: shell
+
+   qemu-system-arm -M ardep-v2 -kernel firmware.bin
+
+The board supplies a physical, fixed 16 MHz HSE source.  Reset still selects
+HSI16; firmware must enable HSE bypass, configure the PLL, and select it as
+SYSCLK to reach 170 MHz.
+
+The implemented board connections are:
 
 * Active-low red LED on PC3.
 * Active-low green LED on PA3.
-* UART-A console on UART4, using PC10 and PC11 at 115200 baud.
-* CAN-A on FDCAN2, using PB5 and PB6.
-* CAN-B on FDCAN1, using PD0 and PD1.
-* LIN on USART1, using PE0 and PE1.
-* The 16 MHz external oscillator described above.
 
-The two FDCAN controllers may be connected to one QEMU CAN bus for the ARDEP
-CAN loopback sample or to separate QEMU CAN buses and SocketCAN backends for
-host and multi-instance tests.  The board model must not silently loop frames
-between controllers when the selected bus topology does not connect them.
+The red and green LEDs have stable QOM paths ``/machine/red-led`` and
+``/machine/green-led``.  GPIO splitters preserve the same PA3 and PC3 signal
+paths to SYSCFG and EXTI.
+
+The common MCU provides the inherited serial order used by the board: UART-A
+is UART4 on PC10 and PC11 through ``serial0``; UART-B is USART2 on PD5 and PD6
+through ``serial1``; and LIN is USART1 on PE0 and PE1 through ``serial2``.
+Alternate-function pin multiplexing is not modeled as a separate electrical
+device.
+
+FDCAN and the remaining ARDEP peripherals are not yet modeled.  Future CAN
+composition must not silently loop frames between controllers when the
+selected bus topology does not connect them.
 
 Boot paths
 ----------
@@ -263,6 +277,11 @@ The slot-0 application vector is at ``0x08018200`` after its 0x200-byte MCUboot
 header.  Acceptance of an unchanged ARDEP boot layout therefore uses a real
 MCUboot plus application image.  A direct-linked bring-up image may be used as
 diagnostic evidence, but it does not replace the MCUboot acceptance run.
+
+The ``ardep-v2`` loader follows the same contract: raw images load at
+``0x08000000`` and are limited to 512 KiB, while ELF segments retain their
+linked addresses.  The machine does not relocate a slot-only image or
+synthesize an MCUboot jump.
 
 Sample acceptance
 -----------------
