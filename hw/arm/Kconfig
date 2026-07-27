@@ -505,6 +505,7 @@ config STM32G474
     depends on TCG && ARM
     select ARM_V7M
     select STM32G474_FLASH
+    select STM32G474_GPIO
     select STM32G474_PWR
     select STM32G474_RCC
     select STM32G474_USART

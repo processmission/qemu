@@ -23,6 +23,10 @@ config ROCKCHIP_GPIO
 config STM32L4X5_GPIO
     bool
 
+config STM32G474_GPIO
+    bool
+    select REGISTER
+
 config PCA9552
     bool
     depends on I2C
