@@ -81,6 +81,7 @@ REG32(AHB3RSTR, 0x30)
 REG32(APB1RSTR1, 0x38)
     FIELD(APB1RSTR1, USART2RST, 17, 1)
     FIELD(APB1RSTR1, UART4RST, 19, 1)
+    FIELD(APB1RSTR1, USBRST, 23, 1)
     FIELD(APB1RSTR1, FDCANRST, 25, 1)
     FIELD(APB1RSTR1, PWRRST, 28, 1)
 REG32(APB1RSTR2, 0x3c)
@@ -198,7 +199,8 @@ enum {
      R_AHB2RSTR_GPIOGRST_MASK)
 #define RCC_APB1RSTR1_MODELED \
     (R_APB1RSTR1_USART2RST_MASK | R_APB1RSTR1_UART4RST_MASK | \
-     R_APB1RSTR1_FDCANRST_MASK | R_APB1RSTR1_PWRRST_MASK)
+     R_APB1RSTR1_USBRST_MASK | R_APB1RSTR1_FDCANRST_MASK | \
+     R_APB1RSTR1_PWRRST_MASK)
 #define RCC_APB2RSTR_MODELED \
     (R_APB2RSTR_SYSCFGRST_MASK | R_APB2RSTR_USART1RST_MASK)
 #define RCC_AHB1ENR_MODELED \
@@ -655,6 +657,9 @@ static void stm32g474_rcc_update_resets(Stm32g474RccState *s)
     qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_FDCAN],
                  (s->regs[R_APB1RSTR1] &
                   R_APB1RSTR1_FDCANRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_USB],
+                 (s->regs[R_APB1RSTR1] &
+                  R_APB1RSTR1_USBRST_MASK) != 0);
 }
 
 static void stm32g474_rcc_register_post_write(RegisterInfo *reg, uint64_t val)
