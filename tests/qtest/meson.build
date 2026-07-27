@@ -255,7 +255,7 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
   (config_all_devices.has_key('CONFIG_STM32G474') ? \
    ['stm32g474-test', 'stm32g474-rcc-test',
-    'stm32g474-pwr-test'] : []) + \
+    'stm32g474-pwr-test', 'stm32g474-flash-test'] : []) + \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
