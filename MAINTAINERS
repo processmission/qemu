@@ -1136,6 +1136,8 @@ STM32G474
 M: Chao Liu <chao.liu@processmission.com>
 S: Maintained
 F: docs/system/arm/stm32g474.rst
+F: hw/arm/stm32g474*.c
+F: include/hw/arm/stm32g474.h
 
 STM32VLDISCOVERY
 M: Alexandre Iooss <erdnaxe@crans.org>

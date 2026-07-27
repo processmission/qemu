@@ -499,6 +499,12 @@ config STM32L4X5_SOC
     select STM32L4X5_GPIO
     select STM32L4X5_USART
 
+config STM32G474
+    bool
+    default y
+    depends on TCG && ARM
+    select ARM_V7M
+
 config XLNX_ZYNQMP_ARM
     bool
     default y if PIXMAN
