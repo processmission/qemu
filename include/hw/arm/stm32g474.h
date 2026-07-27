@@ -14,6 +14,7 @@
 #include "hw/arm/armv7m.h"
 #include "hw/char/stm32g474_usart.h"
 #include "hw/core/clock.h"
+#include "hw/gpio/stm32g474_gpio.h"
 #include "hw/misc/stm32g474_flash.h"
 #include "hw/misc/stm32g474_pwr.h"
 #include "hw/misc/stm32g474_rcc.h"
@@ -47,6 +48,7 @@ struct STM32G474State {
     Stm32g474UsartState usart1;
     Stm32g474UsartState usart2;
     Stm32g474UsartState uart4;
+    Stm32g474GpioState gpio[STM32G474_GPIO_NUM_PORTS];
 
     Clock *hsi16;
     Clock *hsi48;

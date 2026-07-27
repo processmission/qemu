@@ -19,6 +19,50 @@
 #define STM32G474_HSI48_FREQ_HZ 48000000
 #define STM32G474_LSI_FREQ_HZ 32000
 
+static const char *const stm32g474_gpio_types[STM32G474_GPIO_NUM_PORTS] = {
+    TYPE_STM32G474_GPIO_A,
+    TYPE_STM32G474_GPIO_B,
+    TYPE_STM32G474_GPIO_CG,
+    TYPE_STM32G474_GPIO_CG,
+    TYPE_STM32G474_GPIO_CG,
+    TYPE_STM32G474_GPIO_CG,
+    TYPE_STM32G474_GPIO_CG,
+};
+
+static const char *const stm32g474_gpio_names[STM32G474_GPIO_NUM_PORTS] = {
+    "gpioa", "gpiob", "gpioc", "gpiod", "gpioe", "gpiof", "gpiog",
+};
+
+static const hwaddr stm32g474_gpio_bases[STM32G474_GPIO_NUM_PORTS] = {
+    STM32G474_GPIOA_BASE,
+    STM32G474_GPIOB_BASE,
+    STM32G474_GPIOC_BASE,
+    STM32G474_GPIOD_BASE,
+    STM32G474_GPIOE_BASE,
+    STM32G474_GPIOF_BASE,
+    STM32G474_GPIOG_BASE,
+};
+
+static const unsigned int
+stm32g474_gpio_resets[STM32G474_GPIO_NUM_PORTS] = {
+    STM32G474_RCC_RESET_GPIOA,
+    STM32G474_RCC_RESET_GPIOB,
+    STM32G474_RCC_RESET_GPIOC,
+    STM32G474_RCC_RESET_GPIOD,
+    STM32G474_RCC_RESET_GPIOE,
+    STM32G474_RCC_RESET_GPIOF,
+    STM32G474_RCC_RESET_GPIOG,
+};
+
+G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_gpio_types) ==
+                STM32G474_GPIO_NUM_PORTS);
+G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_gpio_names) ==
+                STM32G474_GPIO_NUM_PORTS);
+G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_gpio_bases) ==
+                STM32G474_GPIO_NUM_PORTS);
+G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_gpio_resets) ==
+                STM32G474_GPIO_NUM_PORTS);
+
 static void stm32g474_init(Object *obj)
 {
     STM32G474State *s = STM32G474(obj);
@@ -33,6 +77,10 @@ static void stm32g474_init(Object *obj)
                             TYPE_STM32G474_USART);
     object_initialize_child(obj, "uart4", &s->uart4,
                             TYPE_STM32G474_UART);
+    for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
+        object_initialize_child(obj, stm32g474_gpio_names[i], &s->gpio[i],
+                                stm32g474_gpio_types[i]);
+    }
 
     /* Fixed-frequency clocks do not need migration state. */
     s->hsi16 = clock_new(obj, "hsi16");
@@ -91,6 +139,16 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(rcc, "usart2"));
     qdev_connect_clock_in(uart4, "clk",
                           qdev_get_clock_out(rcc, "uart4"));
+    for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
+        DeviceState *gpio = DEVICE(&s->gpio[i]);
+
+        qdev_connect_clock_in(
+            gpio, "clk",
+            qdev_get_clock_out(rcc, stm32g474_gpio_names[i]));
+        qdev_connect_gpio_out_named(
+            rcc, "peripheral-reset", stm32g474_gpio_resets[i],
+            qdev_get_gpio_in_named(gpio, "reset", 0));
+    }
     qdev_connect_gpio_out_named(
         rcc, "peripheral-reset", STM32G474_RCC_RESET_USART1,
         qdev_get_gpio_in_named(usart1, "reset", 0));
@@ -110,6 +168,14 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(rcc), 0, STM32G474_RCC_BASE);
+    for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
+        SysBusDevice *gpio = SYS_BUS_DEVICE(&s->gpio[i]);
+
+        if (!sysbus_realize(gpio, errp)) {
+            return;
+        }
+        sysbus_mmio_map(gpio, 0, stm32g474_gpio_bases[i]);
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(usart1), errp)) {
         return;
     }

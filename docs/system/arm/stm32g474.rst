@@ -85,6 +85,29 @@ the STM32G474 contract.  In particular, the STM32L4 GPIO and modern USART
 engines are reuse candidates.  The STM32L4 RCC, EXTI, and SYSCFG devices are
 not compatible replacements for their STM32G4 counterparts.
 
+GPIO ports
+----------
+
+The common model provides GPIOA through GPIOG at ``0x48000000`` through
+``0x48001800``.  Their registers from ``MODER`` through ``BRR`` use
+``RegisterInfo`` and accept naturally aligned byte, halfword, and word
+accesses.  GPIOA, GPIOB, and GPIOC-G use their respective hardware reset
+images, and the complete ``LCKR`` sequence freezes selected configuration
+fields until a port or system reset.
+
+Each port exposes named ``pin-in`` and ``pin-out`` arrays.  ``pin-out`` is the
+resolved pad level derived from the output latch, mode, output type, pull
+configuration, and any external input.  A pin without an external driver or
+an enabled pull resolves deterministically low.  Alternate-function selection
+and output-speed registers retain their programmed values, but this model
+does not yet route alternate-function signals or model slew timing.
+
+SYSCFG and EXTI routing, package pin bonding, and board LED connections are
+separate later features and are not implemented by the common GPIO ports.
+Register storage remains accessible while an RCC GPIO clock gate is disabled
+because the hardware manual does not specify a deterministic disabled-clock
+access result.
+
 Register modeling rule
 ----------------------
 
