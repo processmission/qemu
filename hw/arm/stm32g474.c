@@ -305,6 +305,15 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
         STM32G474_FLASH_SIZE);
     memory_region_add_subregion(system_memory, 0, &s->flash_alias);
     sysbus_mmio_map(SYS_BUS_DEVICE(flash), 2, STM32G474_FLASH_SIZE_BASE);
+    for (unsigned int i = 0;
+         i < STM32G474_FDCAN_NUM_CHANNELS; i++) {
+        g_autofree char *bus_name = g_strdup_printf("canbus%u", i);
+
+        if (!object_property_set_link(OBJECT(fdcan), bus_name,
+                                      OBJECT(s->canbus[i]), errp)) {
+            return;
+        }
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(fdcan), errp)) {
         return;
     }
@@ -384,10 +393,20 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                                         STM32G474_USBFS_LP_IRQ));
 }
 
+static const Property stm32g474_properties[] = {
+    DEFINE_PROP_LINK("canbus0", STM32G474State, canbus[0],
+                     TYPE_CAN_BUS, CanBusState *),
+    DEFINE_PROP_LINK("canbus1", STM32G474State, canbus[1],
+                     TYPE_CAN_BUS, CanBusState *),
+    DEFINE_PROP_LINK("canbus2", STM32G474State, canbus[2],
+                     TYPE_CAN_BUS, CanBusState *),
+};
+
 static void stm32g474_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    device_class_set_props(dc, stm32g474_properties);
     dc->realize = stm32g474_realize;
     dc->user_creatable = false;
 }
