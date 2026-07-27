@@ -1,5 +1,8 @@
 hw_usb_modules = {}
 
+system_ss.add(when: 'CONFIG_STM32G474_USBFS',
+              if_true: files('stm32g474_usbfs.c'))
+
 # usb subsystem core
 system_ss.add(when: 'CONFIG_USB', if_true: files(
   'bus.c',

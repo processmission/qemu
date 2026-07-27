@@ -1,6 +1,10 @@
 config USB
     bool
 
+config STM32G474_USBFS
+    bool
+    select REGISTER
+
 config USB_UHCI
     bool
     default y if PCI_DEVICES
