@@ -139,6 +139,10 @@ config STM32G474_RCC
     bool
     select REGISTER
 
+config STM32G474_SYSCFG
+    bool
+    select REGISTER
+
 config STM32G474_FLASH
     bool
     select REGISTER
