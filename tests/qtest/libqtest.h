@@ -444,6 +444,15 @@ void qtest_qom_tests(QTestState *s);
 bool qtest_get_irq(QTestState *s, int num);
 
 /**
+ * qtest_get_irq_raise_count:
+ * @s: #QTestState instance to operate on.
+ * @num: Interrupt to observe.
+ *
+ * Returns: The number of raise notifications seen for the @num interrupt.
+ */
+uint64_t qtest_get_irq_raise_count(QTestState *s, int num);
+
+/**
  * qtest_irq_intercept_in:
  * @s: #QTestState instance to operate on.
  * @string: QOM path of a device.

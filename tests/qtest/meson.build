@@ -257,7 +257,7 @@ qtests_arm = \
    ['stm32g474-test', 'stm32g474-rcc-test',
     'stm32g474-pwr-test', 'stm32g474-flash-test',
     'stm32g474-usart-test', 'stm32g474-gpio-test',
-    'stm32g474-syscfg-test'] : []) + \
+    'stm32g474-syscfg-test', 'stm32g474-exti-test'] : []) + \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
@@ -425,6 +425,8 @@ qtests = {
                                'migration/migration-util.c'),
   'stm32g474-syscfg-test': files('migration/migration-qmp.c',
                                  'migration/migration-util.c'),
+  'stm32g474-exti-test': files('migration/migration-qmp.c',
+                               'migration/migration-util.c'),
   'erst-test': files('erst-test.c'),
   'ivshmem-test': [rt, '../../contrib/ivshmem-server/ivshmem-server.c'],
   'migration-test': test_migration_files + migration_tls_files + migration_colo_files,
