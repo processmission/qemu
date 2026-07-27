@@ -1138,6 +1138,7 @@ S: Maintained
 F: docs/system/arm/stm32g474.rst
 F: hw/arm/stm32g474*.c
 F: include/hw/arm/stm32g474.h
+F: tests/qtest/stm32g474-test.c
 
 STM32VLDISCOVERY
 M: Alexandre Iooss <erdnaxe@crans.org>
