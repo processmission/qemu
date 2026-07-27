@@ -18,6 +18,7 @@
 #include "hw/misc/stm32g474_flash.h"
 #include "hw/misc/stm32g474_pwr.h"
 #include "hw/misc/stm32g474_rcc.h"
+#include "hw/misc/stm32g474_syscfg.h"
 #include "qom/object.h"
 
 #define TYPE_STM32G474 "stm32g474"
@@ -45,6 +46,7 @@ struct STM32G474State {
     Stm32g474RccState rcc;
     Stm32g474PwrState pwr;
     Stm32g474FlashState flash;
+    Stm32g474SyscfgState syscfg;
     Stm32g474UsartState usart1;
     Stm32g474UsartState usart2;
     Stm32g474UsartState uart4;

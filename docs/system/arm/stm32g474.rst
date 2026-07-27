@@ -72,7 +72,7 @@ independently testable peripheral features:
 * PWR and internal flash interface registers needed during system setup.
 * USART1, USART2, and UART4.
 * GPIO ports A through G.
-* SYSCFG and the 64-line EXTI controller.
+* SYSCFG and the EXTI controller, with 42 valid lines numbered 0 through 43.
 * STM32 FDCAN wrapper and shared message RAM around a reusable Bosch M_CAN
   register engine.
 * Internal flash programming and erase support.
@@ -102,11 +102,30 @@ an enabled pull resolves deterministically low.  Alternate-function selection
 and output-speed registers retain their programmed values, but this model
 does not yet route alternate-function signals or model slew timing.
 
-SYSCFG and EXTI routing, package pin bonding, and board LED connections are
-separate later features and are not implemented by the common GPIO ports.
+Package pin bonding and board LED connections are separate later features.
 Register storage remains accessible while an RCC GPIO clock gate is disabled
 because the hardware manual does not specify a deterministic disabled-clock
 access result.
+
+System configuration controller
+-------------------------------
+
+The SYSCFG register block is at ``0x40010000``.  Its ten registers through
+``SKR`` use ``RegisterInfo`` and accept aligned 32-bit accesses.  The four
+``EXTICR`` registers route GPIOA through GPIOF on every external interrupt
+line and GPIOG on lines 0 through 10.  Invalid selectors preserve the prior
+field value.
+
+The common device exposes all 112 GPIO routing inputs through its ``gpio-in``
+array.  SYSCFG forwards the selected levels on 16 ``exti-out`` lines; these
+remain unconnected until the EXTI controller feature is present.  Rerouting
+changes only the forwarded level and does not synthesize an interrupt edge.
+
+The RCC ``SYSCFGEN`` gate supplies the SYSCFG PCLK2 clock, and
+``SYSCFGRST`` resets its ordinary configuration.  The CFGR2 lock bits and
+SWPR page locks survive this peripheral reset but clear on system reset.
+CCM erase, memory remapping, and the external effects of CFGR1 and the lock
+registers remain explicitly unimplemented.
 
 Register modeling rule
 ----------------------

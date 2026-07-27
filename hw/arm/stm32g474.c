@@ -71,6 +71,8 @@ static void stm32g474_init(Object *obj)
     object_initialize_child(obj, "rcc", &s->rcc, TYPE_STM32G474_RCC);
     object_initialize_child(obj, "pwr", &s->pwr, TYPE_STM32G474_PWR);
     object_initialize_child(obj, "flash", &s->flash, TYPE_STM32G474_FLASH);
+    object_initialize_child(obj, "syscfg", &s->syscfg,
+                            TYPE_STM32G474_SYSCFG);
     object_initialize_child(obj, "usart1", &s->usart1,
                             TYPE_STM32G474_USART);
     object_initialize_child(obj, "usart2", &s->usart2,
@@ -100,6 +102,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     DeviceState *rcc = DEVICE(&s->rcc);
     DeviceState *pwr = DEVICE(&s->pwr);
     DeviceState *flash = DEVICE(&s->flash);
+    DeviceState *syscfg = DEVICE(&s->syscfg);
     DeviceState *usart1 = DEVICE(&s->usart1);
     DeviceState *usart2 = DEVICE(&s->usart2);
     DeviceState *uart4 = DEVICE(&s->uart4);
@@ -130,6 +133,8 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(rcc, "cortex-refclk"));
     qdev_connect_clock_in(pwr, "clk", qdev_get_clock_out(rcc, "pwr"));
     qdev_connect_clock_in(flash, "clk", qdev_get_clock_out(rcc, "flash"));
+    qdev_connect_clock_in(syscfg, "clk",
+                          qdev_get_clock_out(rcc, "syscfg"));
     qdev_prop_set_chr(uart4, "chardev", serial_hd(0));
     qdev_prop_set_chr(usart2, "chardev", serial_hd(1));
     qdev_prop_set_chr(usart1, "chardev", serial_hd(2));
@@ -148,6 +153,13 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
         qdev_connect_gpio_out_named(
             rcc, "peripheral-reset", stm32g474_gpio_resets[i],
             qdev_get_gpio_in_named(gpio, "reset", 0));
+        for (unsigned int pin = 0; pin < STM32G474_GPIO_NUM_PINS; pin++) {
+            qdev_connect_gpio_out_named(
+                gpio, "pin-out", pin,
+                qdev_get_gpio_in_named(
+                    syscfg, "gpio-in",
+                    i * STM32G474_GPIO_NUM_PINS + pin));
+        }
     }
     qdev_connect_gpio_out_named(
         rcc, "peripheral-reset", STM32G474_RCC_RESET_USART1,
@@ -164,6 +176,9 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     qdev_connect_gpio_out_named(
         rcc, "peripheral-reset", STM32G474_RCC_RESET_FLASH,
         qdev_get_gpio_in_named(flash, "reset", 0));
+    qdev_connect_gpio_out_named(
+        rcc, "peripheral-reset", STM32G474_RCC_RESET_SYSCFG,
+        qdev_get_gpio_in_named(syscfg, "reset", 0));
     if (!sysbus_realize(SYS_BUS_DEVICE(rcc), errp)) {
         return;
     }
@@ -176,6 +191,11 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(gpio, 0, stm32g474_gpio_bases[i]);
     }
+    if (!sysbus_realize(SYS_BUS_DEVICE(syscfg), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(syscfg), 0, STM32G474_SYSCFG_BASE);
+    qdev_pass_gpios(syscfg, dev, "gpio-in");
     if (!sysbus_realize(SYS_BUS_DEVICE(usart1), errp)) {
         return;
     }
