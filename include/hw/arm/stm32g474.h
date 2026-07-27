@@ -13,6 +13,7 @@
 #include "system/memory.h"
 #include "hw/arm/armv7m.h"
 #include "hw/core/clock.h"
+#include "hw/misc/stm32g474_pwr.h"
 #include "hw/misc/stm32g474_rcc.h"
 #include "qom/object.h"
 
@@ -34,6 +35,7 @@ struct STM32G474State {
 
     ARMv7MState armv7m;
     Stm32g474RccState rcc;
+    Stm32g474PwrState pwr;
 
     Clock *hsi16;
     Clock *hsi48;
