@@ -117,15 +117,44 @@ line and GPIOG on lines 0 through 10.  Invalid selectors preserve the prior
 field value.
 
 The common device exposes all 112 GPIO routing inputs through its ``gpio-in``
-array.  SYSCFG forwards the selected levels on 16 ``exti-out`` lines; these
-remain unconnected until the EXTI controller feature is present.  Rerouting
-changes only the forwarded level and does not synthesize an interrupt edge.
+array.  SYSCFG forwards the selected levels on 16 ``exti-out`` lines to EXTI.
+Changing a selector immediately updates the forwarded level; EXTI treats any
+resulting level transition as an ordinary edge.  Zephyr avoids a spurious
+pending bit by routing the GPIO before it enables the edge trigger and mask.
 
 The RCC ``SYSCFGEN`` gate supplies the SYSCFG PCLK2 clock, and
 ``SYSCFGRST`` resets its ordinary configuration.  The CFGR2 lock bits and
 SWPR page locks survive this peripheral reset but clear on system reset.
 CCM erase, memory remapping, and the external effects of CFGR1 and the lock
 registers remain explicitly unimplemented.
+
+Extended interrupts and events
+------------------------------
+
+The EXTI register block is at ``0x40010400``.  Its 12 registers use
+``RegisterInfo`` and accept aligned 32-bit accesses.  The register backing
+includes the reserved gap at offsets ``0x18`` through ``0x1f``.  Bank 1 has
+configurable-line mask ``0xe07bffff``; bank 2 has mask ``0x00000303``.
+The all-valid-line masks are ``0xffffffff`` and ``0x00000f3f``.
+
+``IMR1`` and ``IMR2`` reset to ``0x1f840000`` and ``0x00000c3c`` so the
+direct wakeup lines start unmasked while configurable lines start masked.
+These values follow the per-register descriptions and the target line map;
+the conflicting aggregate reset table is not used.  Direct lines remain
+inert until their source peripheral and Stop-mode behavior are modeled.
+
+A selected external edge sets ``PR`` only while its ``IMR`` bit is enabled.
+An ``EMR``-enabled edge produces an event pulse without setting ``PR``.
+``SWIER`` acts only on a zero-to-one transition: ``IMR`` can create a pending
+interrupt and ``EMR`` can independently create an event.  Enabling a mask
+later does not replay a previously masked edge or software trigger.  ``PR``
+is write-one-to-clear and also clears the corresponding ``SWIER`` bit.
+Each interrupt output remains asserted while ``PR & IMR`` is nonzero.
+
+EXTI lines 0 through 4 connect to NVIC inputs 6 through 10.  Lines 5 through
+9 share NVIC input 23, and lines 10 through 15 share NVIC input 40 through
+two OR gates.  EXTI shares the RCC ``SYSCFGEN`` clock with SYSCFG.
+``SYSCFGRST`` does not reset EXTI state; system reset does.
 
 Register modeling rule
 ----------------------
