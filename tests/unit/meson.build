@@ -146,6 +146,12 @@ if have_system
       meson.project_source_root() / 'system/ram-discard-manager.c',
       genh, qemuutil, qom
     ],
+    'test-m-can': [
+      meson.project_source_root() / 'hw/net/can/m_can.c',
+      meson.project_source_root() / 'net/can/can_core.c',
+      migration,
+      qom,
+    ],
   }
   if config_host_data.get('CONFIG_INOTIFY1')
     tests += {'test-util-filemonitor': []}
