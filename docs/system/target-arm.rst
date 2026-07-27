@@ -105,6 +105,7 @@ Board-specific documentation
    arm/sx1
    arm/stellaris
    arm/stm32
+   arm/stm32g474
    arm/virt
    arm/vmapple
    arm/xenpvh

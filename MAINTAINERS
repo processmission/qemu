@@ -1132,6 +1132,11 @@ F: hw/gpio/stm32l4x5_gpio.c
 F: include/hw/*/stm32l4x5_*.h
 F: tests/qtest/stm32l4x5*
 
+STM32G474
+M: Chao Liu <chao.liu@processmission.com>
+S: Maintained
+F: docs/system/arm/stm32g474.rst
+
 STM32VLDISCOVERY
 M: Alexandre Iooss <erdnaxe@crans.org>
 L: qemu-arm@nongnu.org
