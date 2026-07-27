@@ -84,6 +84,7 @@ REG32(APB1RSTR1, 0x38)
     FIELD(APB1RSTR1, PWRRST, 28, 1)
 REG32(APB1RSTR2, 0x3c)
 REG32(APB2RSTR, 0x40)
+    FIELD(APB2RSTR, SYSCFGRST, 0, 1)
     FIELD(APB2RSTR, USART1RST, 14, 1)
 REG32(AHB1ENR, 0x48)
     FIELD(AHB1ENR, DMA1EN, 0, 1)
@@ -105,6 +106,7 @@ REG32(APB1ENR1, 0x58)
     FIELD(APB1ENR1, PWREN, 28, 1)
 REG32(APB1ENR2, 0x5c)
 REG32(APB2ENR, 0x60)
+    FIELD(APB2ENR, SYSCFGEN, 0, 1)
     FIELD(APB2ENR, USART1EN, 14, 1)
 REG32(AHB1SMENR, 0x68)
 REG32(AHB2SMENR, 0x6c)
@@ -196,7 +198,8 @@ enum {
 #define RCC_APB1RSTR1_MODELED \
     (R_APB1RSTR1_USART2RST_MASK | R_APB1RSTR1_UART4RST_MASK | \
      R_APB1RSTR1_PWRRST_MASK)
-#define RCC_APB2RSTR_MODELED R_APB2RSTR_USART1RST_MASK
+#define RCC_APB2RSTR_MODELED \
+    (R_APB2RSTR_SYSCFGRST_MASK | R_APB2RSTR_USART1RST_MASK)
 #define RCC_AHB1ENR_MODELED \
     (R_AHB1ENR_DMA1EN_MASK | R_AHB1ENR_FLASHEN_MASK)
 #define RCC_AHB2ENR_MODELED \
@@ -208,7 +211,8 @@ enum {
     (R_APB1ENR1_USART2EN_MASK | R_APB1ENR1_UART4EN_MASK | \
      R_APB1ENR1_USBEN_MASK | R_APB1ENR1_FDCANEN_MASK | \
      R_APB1ENR1_PWREN_MASK)
-#define RCC_APB2ENR_MODELED R_APB2ENR_USART1EN_MASK
+#define RCC_APB2ENR_MODELED \
+    (R_APB2ENR_SYSCFGEN_MASK | R_APB2ENR_USART1EN_MASK)
 #define RCC_CCIPR_MODELED \
     (R_CCIPR_USART1SEL_MASK | R_CCIPR_USART2SEL_MASK | \
      R_CCIPR_UART4SEL_MASK | R_CCIPR_FDCANSEL_MASK | \
@@ -474,6 +478,9 @@ static void stm32g474_rcc_update_clocks(Stm32g474RccState *s,
         gates[STM32G474_RCC_GATE_USART1] = stm32g474_rcc_uart_hz(
             s, FIELD_EX32(ccipr, CCIPR, USART1SEL), pclk2, sysclk);
     }
+    if (s->regs[R_APB2ENR] & R_APB2ENR_SYSCFGEN_MASK) {
+        gates[STM32G474_RCC_GATE_SYSCFG] = pclk2;
+    }
     if (s->regs[R_APB1ENR1] & R_APB1ENR1_USART2EN_MASK) {
         gates[STM32G474_RCC_GATE_USART2] = stm32g474_rcc_uart_hz(
             s, FIELD_EX32(ccipr, CCIPR, USART2SEL), pclk1, sysclk);
@@ -641,6 +648,9 @@ static void stm32g474_rcc_update_resets(Stm32g474RccState *s)
     qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_GPIOG],
                  (s->regs[R_AHB2RSTR] &
                   R_AHB2RSTR_GPIOGRST_MASK) != 0);
+    qemu_set_irq(s->peripheral_reset[STM32G474_RCC_RESET_SYSCFG],
+                 (s->regs[R_APB2RSTR] &
+                  R_APB2RSTR_SYSCFGRST_MASK) != 0);
 }
 
 static void stm32g474_rcc_register_post_write(RegisterInfo *reg, uint64_t val)
@@ -1162,6 +1172,7 @@ static void stm32g474_rcc_init(Object *obj)
         [STM32G474_RCC_GATE_USART1] = "usart1",
         [STM32G474_RCC_GATE_USART2] = "usart2",
         [STM32G474_RCC_GATE_UART4] = "uart4",
+        [STM32G474_RCC_GATE_SYSCFG] = "syscfg",
     };
     Stm32g474RccState *s = STM32G474_RCC(obj);
     DeviceState *dev = DEVICE(obj);
