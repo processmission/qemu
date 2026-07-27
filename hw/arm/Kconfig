@@ -513,6 +513,14 @@ config STM32G474
     select STM32G474_SYSCFG
     select STM32G474_USART
 
+config ARDEP_V2
+    bool
+    default y
+    depends on TCG && ARM
+    select LED
+    select SPLIT_IRQ
+    select STM32G474
+
 config XLNX_ZYNQMP_ARM
     bool
     default y if PIXMAN

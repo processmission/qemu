@@ -1136,6 +1136,7 @@ STM32G474
 M: Chao Liu <chao.liu@processmission.com>
 S: Maintained
 F: docs/system/arm/stm32g474.rst
+F: hw/arm/ardep-v2.c
 F: hw/arm/stm32g474*.c
 F: hw/char/stm32g474_usart.c
 F: hw/gpio/stm32g474_gpio.c
