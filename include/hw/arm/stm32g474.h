@@ -23,6 +23,7 @@
 #include "hw/misc/stm32g474_syscfg.h"
 #include "hw/net/stm32g474_fdcan.h"
 #include "hw/usb/stm32g474_usbfs.h"
+#include "net/can_emu.h"
 #include "qom/object.h"
 
 #define TYPE_STM32G474 "stm32g474"
@@ -67,6 +68,7 @@ struct STM32G474State {
     Clock *hsi16;
     Clock *hsi48;
     Clock *lsi;
+    CanBusState *canbus[STM32G474_FDCAN_NUM_CHANNELS];
 
     MemoryRegion flash_alias;
     MemoryRegion sram1;
