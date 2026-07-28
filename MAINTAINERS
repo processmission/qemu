@@ -1167,6 +1167,7 @@ F: tests/qtest/stm32g474-rcc-test.c
 F: tests/qtest/stm32g474-syscfg-test.c
 F: tests/qtest/stm32g474-test.c
 F: tests/qtest/stm32g474-usart-test.c
+F: tests/qtest/stm32g474-usbfs-test.c
 
 STM32VLDISCOVERY
 M: Alexandre Iooss <erdnaxe@crans.org>
