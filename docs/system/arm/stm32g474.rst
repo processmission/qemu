@@ -1,23 +1,21 @@
 .. SPDX-License-Identifier: GPL-2.0-or-later
 
-STM32G474 and ARDEP V2 model design
-===================================
+STM32G474 and ARDEP V2 machines
+===============================
 
-This document defines the implementation and validation contract for two
-lower-case QEMU machines:
+QEMU provides two lower-case machines based on the STM32G474VE:
 
 ``stm32g474``
-    A generic STM32G474VE microcontroller machine used to develop and test the
-    common microcontroller model.
+    A generic STM32G474VE microcontroller machine.
 
 ``ardep-v2``
     The Mercedes-Benz ARDEP V2 board, built by composing the common
     STM32G474VE model with the board clocks, LEDs, serial ports, and CAN
     connections.
 
-The generic machine is implemented and validated first.  The ARDEP machine
-must use the same microcontroller device and must not copy its memory map or
-peripheral implementations.
+The ARDEP machine composes the same common microcontroller device as the
+generic machine.  The memory map and peripheral implementations are not
+duplicated in the board model.
 
 Naming
 ------
@@ -64,26 +62,21 @@ The common model contains the following architectural state:
 The CCM windows refer to the same memory backing.  They must not be represented
 by two independent RAM regions.
 
-The first generic-machine milestone contains the CPU, exact memory map, reset
-path, interrupt topology, and explicit MMIO reservations.  It then grows in
-independently testable peripheral features:
+The following peripheral blocks are implemented:
 
 * STM32G4 RCC clock and reset controller.
-* PWR and internal flash interface registers needed during system setup.
+* PWR and internal flash interface registers used during system setup.
 * USART1, USART2, and UART4.
 * GPIO ports A through G.
 * SYSCFG and the EXTI controller, with 42 valid lines numbered 0 through 43.
-* STM32 FDCAN wrapper and shared message RAM around a reusable Bosch M_CAN
-  register engine.
-* Internal flash programming and erase support.
-* ADC, DAC, I2C, timers, RNG, USB, and other devices required by the accepted
-  ARDEP sample matrix.
+* Three STM32 FDCAN channels and their shared message RAM, backed by a reusable
+  Bosch M_CAN message engine.
+* The STM32 USB FS device register block and packet memory area.
 
-An existing STM32 peripheral implementation may be reused only when its
-register layout, reset values, clock behavior, and interrupt behavior match
-the STM32G474 contract.  In particular, the STM32L4 GPIO and modern USART
-engines are reuse candidates.  The STM32L4 RCC, EXTI, and SYSCFG devices are
-not compatible replacements for their STM32G4 counterparts.
+The flash array is read-only after the image is loaded.  Flash program and
+erase operations are not implemented.  ADC, DAC, I2C, SPI, general-purpose
+timers, RNG, and LIN framing are also not implemented.  Their address ranges
+remain unmapped and follow QEMU's unassigned-access behavior.
 
 GPIO ports
 ----------
@@ -102,10 +95,10 @@ an enabled pull resolves deterministically low.  Alternate-function selection
 and output-speed registers retain their programmed values, but this model
 does not yet route alternate-function signals or model slew timing.
 
-Package pin bonding and board LED connections are separate later features.
-Register storage remains accessible while an RCC GPIO clock gate is disabled
-because the hardware manual does not specify a deterministic disabled-clock
-access result.
+Package pin bonding is not modeled.  Board LED wiring belongs to the ARDEP
+composition rather than the common GPIO device.  Register storage remains
+accessible while an RCC GPIO clock gate is disabled because the hardware
+manual does not specify a deterministic disabled-clock access result.
 
 System configuration controller
 -------------------------------
@@ -180,9 +173,9 @@ and callback side effects in addition to its functional behavior.
 Clock and reset contract
 ------------------------
 
-The STM32G474 reset clock is the 16 MHz HSI.  The common RCC model must expose
-the reset clock to the Cortex-M4 and implement clock source selection,
-prescalers, peripheral gates, and reset controls.
+The STM32G474 reset clock is the 16 MHz HSI.  The common RCC model exposes the
+reset clock to the Cortex-M4 and implements clock source selection, prescalers,
+peripheral gates, and reset controls.
 
 The ARDEP V2 clock tree adds:
 
@@ -193,13 +186,12 @@ The ARDEP V2 clock tree adds:
 
 Firmware-visible ready and status bits follow their control bits.  This
 includes HSE ready, PLL ready, HSI48 ready, LSI ready, and the system clock
-switch status.  Clock outputs must be recalculated and propagated when the
-guest changes a source or prescaler; fixed read values are not sufficient.
+switch status.  Clock outputs are recalculated and propagated when the guest
+changes a source or prescaler.
 
 The PWR and flash interface models preserve writable configuration and expose
 the voltage boost and flash latency state used by Zephyr at 170 MHz.  Reset
-must restore all modeled registers, IRQ levels, GPIO levels, and derived
-clocks.
+restores all modeled registers, IRQ levels, GPIO levels, and derived clocks.
 
 Interrupt and serial contract
 -----------------------------
@@ -216,10 +208,45 @@ Important assignments include:
 * FDCAN2 interrupt lines on 86 and 87.
 * FDCAN3 interrupt lines on 88 and 89.
 
-The USART model must implement polling transmit and receive, interrupt-driven
-operation used by accepted samples, baud-rate configuration, and the TEACK,
-REACK, TXE, TC, and RXNE state transitions used by Zephyr.  UART4 is
-``serial0`` on both machines because it is the ARDEP application console.
+The USART model implements polling transmit and receive, interrupt-driven
+operation, baud-rate configuration, and the TEACK, REACK, TXE, TC, and RXNE
+state transitions used by Zephyr.  UART4 is ``serial0`` on both machines
+because it is the ARDEP application console.
+
+FDCAN
+-----
+
+The common device contains FDCAN1, FDCAN2, and FDCAN3 at ``0x40006400``,
+``0x40006800``, and ``0x40006c00``.  Their three slices share the 2544-byte
+message RAM at ``0x4000a400``.  The model implements:
+
+* Standard and extended filtering.
+* Receive FIFO 0 and FIFO 1.
+* Dedicated and FIFO/queue transmit buffers.
+* Classic CAN and CAN FD frames, including bit-rate switching.
+* Transmit events, cancellation, interrupt routing, monitor mode, and
+  internal and external loopback.
+* QEMU ``can-bus`` links and migration of active controller state.
+
+The controller does not simulate bit-level arbitration timing, physical ACK,
+error counters caused by bus faults, or transceiver electrical behavior.
+Frames accepted by a QEMU CAN bus complete without a physical acknowledgement.
+
+FDCAN1, FDCAN2, and FDCAN3 are exposed as the ``canbus0``, ``canbus1``, and
+``canbus2`` machine properties on ``stm32g474``.  ``ardep-v2`` exposes the
+first two properties.  The ARDEP devicetree calls FDCAN1 ``can_b`` and FDCAN2
+``can_a``; the QEMU property numbers continue to follow the hardware instance
+numbers.
+
+USB FS
+------
+
+The USB FS model implements the device controller registers, endpoint
+registers, packet memory, interrupt state, clock/reset inputs, and migration.
+It is hostless: it does not expose a USB device port and cannot exchange USB
+packets with a QEMU USB host.  Firmware can exercise controller setup, packet
+memory, and interrupt behavior, but USB bridge samples do not have an
+end-to-end backend.
 
 ARDEP V2 composition
 --------------------
@@ -250,9 +277,31 @@ through ``serial1``; and LIN is USART1 on PE0 and PE1 through ``serial2``.
 Alternate-function pin multiplexing is not modeled as a separate electrical
 device.
 
-FDCAN and the remaining ARDEP peripherals are not yet modeled.  Future CAN
-composition must not silently loop frames between controllers when the
-selected bus topology does not connect them.
+The board does not connect its two FDCAN controllers unless machine
+properties select the same QEMU CAN bus.  This makes disconnected, shared, and
+independent bus topologies explicit.
+
+For example, the following command connects both ARDEP CAN interfaces to one
+in-process bus:
+
+.. code-block:: shell
+
+   qemu-system-arm \
+       -object can-bus,id=can0 \
+       -M ardep-v2,canbus0=can0,canbus1=can0 \
+       -kernel zephyr.elf -nographic
+
+Add a SocketCAN host connector when host traffic is required:
+
+.. code-block:: shell
+
+   qemu-system-arm \
+       -object can-bus,id=can0 \
+       -object can-host-socketcan,id=host0,if=vcan0,canbus=can0 \
+       -M ardep-v2,canbus0=can0 \
+       -kernel zephyr.elf -nographic
+
+See :doc:`../devices/can` for host CAN setup.
 
 Boot paths
 ----------
@@ -264,6 +313,18 @@ a nonzero address.
 The generic direct boot flow uses an ELF or raw image linked at the internal
 flash base.  It validates the CPU, memory, clock, and console path without a
 bootloader.
+
+For example, run a directly linked Zephyr ELF on the generic machine with:
+
+.. code-block:: shell
+
+   qemu-system-arm -M stm32g474 -kernel zephyr.elf -nographic
+
+The same type of image can run with the ARDEP clocks and board connections:
+
+.. code-block:: shell
+
+   qemu-system-arm -M ardep-v2 -kernel zephyr.elf -nographic
 
 The default ARDEP application configuration enables MCUboot.  Its flash layout
 is:
@@ -283,27 +344,60 @@ The ``ardep-v2`` loader follows the same contract: raw images load at
 linked addresses.  The machine does not relocate a slot-only image or
 synthesize an MCUboot jump.
 
+Builds that merge MCUboot and the application into one 512 KiB raw flash image
+can therefore use the same loader:
+
+.. code-block:: shell
+
+   qemu-system-arm -M ardep-v2 \
+       -kernel ardep-v2-mcuboot-application.bin -nographic
+
 Sample acceptance
 -----------------
 
-Sample claims are divided by the environment required to observe meaningful
-behavior:
+The following pinned inputs have been run on this model:
 
-* Self-contained or console-driven samples must boot and show explicit
-  success markers: Zephyr hello world, ``led``, ``uart``, and ``gearshift``.
-* CAN and multi-instance samples use QEMU CAN buses, SocketCAN, character
-  devices, or multiple QEMU processes: CAN/CAN-FD, GPIO expander, ISO14229,
-  UDS, and LIN families.
-* Samples coupled to analog sources, shields, USB hosts, or a second physical
-  tester must initialize all modeled devices and use a documented deterministic
-  backend where one exists.  QEMU must not claim to reproduce unmodeled
-  electrical behavior.
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
 
-The ARDEP baseline currently contains sample build failures unrelated to QEMU,
-including minimal-libc header failures.  Each acceptance record identifies the
-exact ARDEP commit, Zephyr commit, configuration fragment, toolchain, firmware
-hash, QEMU command, timeout, and success marker.  A successful build is not
-reported as a successful run.
+   * - Input
+     - Verified behavior
+   * - Zephyr ``hello_world``
+     - Direct boot, clock setup, UART4 console, and the Zephyr banner on
+       ``stm32g474``.
+   * - ARDEP ``led``
+     - Direct boot and MCUboot slot-0 boot, with alternating red and green
+       board LED levels.
+   * - ARDEP ``uart``
+     - Interactive UART4 receive/transmit; inputs 3 and 4 produce 9 and 16.
+   * - ARDEP ``gearshift``
+     - External PC13, PC1, and PF1 levels produce positions 0, 1, 3, and 7.
+   * - ARDEP ``digital_input_interrupt``
+     - Both PD10 edges reach EXTI and the callback mirrors the level on PD11.
+   * - ARDEP ``can``
+     - Repeated classic CAN and 64-byte CAN FD traffic between the two board
+       controllers on a shared QEMU CAN bus.
+   * - ARDEP ``gpio_expander``
+     - CAN configuration and write requests update PA1 and appear in the CAN
+       state response.
+   * - ARDEP ``iso14229``
+     - A diagnostic-session request is received and a positive CAN response is
+       transmitted.
+
+The ARDEP sample builds use pinned source without source changes.  Direct-boot
+acceptance disables MCUboot and the devicetree code partition; isolated CAN
+tests also disable the board's unrelated default UDS, CAN logger, and USB
+features so only the sample owns its CAN controller.  The MCUboot acceptance
+run instead uses the default three-domain build and unchanged flash layout.
+
+The ADC and DAC samples require unmodeled analog converters.  LIN and
+LIN-to-CAN samples require LIN break and framing behavior beyond the modeled
+UART path.
+Power-I/O shield, HV shield, hardware-test, and hardware-tester samples require
+unmodeled I2C, SPI, analog, or external-board behavior.  UDS update samples
+require flash program and erase support.  These are not reported as successful
+runs merely because they can be built.
 
 Device behavior and errors
 --------------------------
@@ -335,38 +429,14 @@ verification set includes:
   IRQ tests.
 * FDCAN register, message RAM, filtering, classic CAN, CAN FD, loopback, bus,
   and IRQ tests.
-* Focused tests for every later peripheral needed by an accepted sample.
+* USB FS registers, packet memory, IRQ, clock, reset, and migration tests.
 * Register reset values, access masks, and behavior callbacks for every new
   peripheral register block.
+* Self-contained functional tests for raw flash boot, UART4 output, and QMP
+  system reset on both machines.
 * Timed Zephyr and ARDEP boot runs with positive success markers and negative
   failure markers.
 
 All QEMU binaries used for acceptance are built from the feature branch in a
 named ``builds/`` directory.  Logs and external firmware artifacts remain
 under ``.oh-my-qemu/`` and are not committed as source.
-
-Patch structure
----------------
-
-The series remains buildable and reviewable after every commit.  Model code,
-qtests, machine composition, integration evidence, and documentation are kept
-in feature-sized patches.  The intended order is:
-
-#. Document the model and validation contract.
-#. Add the generic ``stm32g474`` CPU and memory machine.
-#. Add generic-machine memory and reset qtests.
-#. Add the STM32G4 RCC model and qtests.
-#. Add PWR and flash interface startup behavior and qtests.
-#. Add or adapt the STM32G4-compatible USART model and qtests.
-#. Add GPIO, SYSCFG, and EXTI behavior and qtests.
-#. Validate direct-linked Zephyr on ``stm32g474``.
-#. Extract or finalize the shared ``stm32g474`` composition boundary.
-#. Add the ``ardep-v2`` board composition and board qtests.
-#. Add M_CAN/FDCAN in core, wrapper, wiring, and test patches.
-#. Add remaining sample peripherals in independent vertical features.
-#. Validate the MCUboot and accepted ARDEP sample matrix.
-#. Update user documentation with final support and limitation tables.
-
-Every commit contains exactly one
-``Signed-off-by: Chao Liu chao.liu.zevorn@gmail.com`` trailer and no generated
-tool signature.
