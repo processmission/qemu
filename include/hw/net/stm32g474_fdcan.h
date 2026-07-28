@@ -21,6 +21,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(Stm32g474FdcanState, STM32G474_FDCAN)
 
 #define STM32G474_FDCAN_NUM_CHANNELS 3
 #define STM32G474_FDCAN_NUM_IRQS 2
+#define STM32G474_FDCAN_NUM_TX_BUFFERS 3
 #define STM32G474_FDCAN_MMIO_SIZE 0x400
 #define STM32G474_FDCAN_MRAM_SIZE 0x9f0
 #define STM32G474_FDCAN_CHANNEL_MRAM_SIZE 0x350
@@ -45,7 +46,13 @@ typedef struct Stm32g474FdcanChannel {
     uint32_t regs[STM32G474_FDCAN_NUM_REGS];
 
     MCanEngine engine;
+    CanBusClientState bus_client;
     qemu_irq irq[STM32G474_FDCAN_NUM_IRQS];
+
+    uint8_t tx_fifo_order[STM32G474_FDCAN_NUM_TX_BUFFERS];
+    uint8_t tx_fifo_count;
+    uint8_t tx_fifo_put;
+    bool tx_draining;
 
     uint32_t cccr_old;
     bool cccr_write_pending;
@@ -63,6 +70,7 @@ struct Stm32g474FdcanState {
     CanBusState *canbus[STM32G474_FDCAN_NUM_CHANNELS];
 
     bool resetting;
+    bool migration_loading;
     bool peripheral_reset_asserted;
     bool engines_initialized;
 };
