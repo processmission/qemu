@@ -8,13 +8,49 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/core/clock.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/gpio/stm32g474_gpio.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+
+#define STM32G474_GPIO_NUM_REGS 11
+
+typedef struct Stm32g474GpioVariant Stm32g474GpioVariant;
+
+struct Stm32g474GpioState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_GPIO_NUM_REGS];
+    uint32_t regs[STM32G474_GPIO_NUM_REGS];
+
+    Clock *clk;
+    qemu_irq pin_out[STM32G474_GPIO_NUM_PINS];
+
+    uint16_t external_driven;
+    uint16_t external_level;
+    uint16_t lock_candidate;
+    uint16_t locked_mask;
+    uint16_t resolved_cache;
+    uint8_t lock_phase;
+    uint8_t current_access_size;
+    uint8_t current_access_lane;
+    bool peripheral_reset_asserted;
+    bool resetting;
+    bool resolved_cache_valid;
+};
+
+struct Stm32g474GpioClass {
+    SysBusDeviceClass parent_class;
+
+    const Stm32g474GpioVariant *variant;
+};
 
 REG32(MODER, 0x00)
 REG32(OTYPER, 0x04)

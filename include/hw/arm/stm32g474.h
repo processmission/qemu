@@ -51,19 +51,19 @@ struct STM32G474State {
     SysBusDevice parent_obj;
 
     ARMv7MState armv7m;
-    Stm32g474RccState rcc;
-    Stm32g474PwrState pwr;
-    Stm32g474FlashState flash;
-    Stm32g474SyscfgState syscfg;
-    Stm32g474ExtiState exti;
+    DeviceState *rcc;
+    DeviceState *pwr;
+    DeviceState *flash;
+    DeviceState *syscfg;
+    DeviceState *exti;
     OrIRQState exti_9_5_or;
     OrIRQState exti_15_10_or;
-    Stm32g474UsartState usart1;
-    Stm32g474UsartState usart2;
-    Stm32g474UsartState uart4;
-    Stm32g474FdcanState fdcan;
-    Stm32g474UsbFsState usbfs;
-    Stm32g474GpioState gpio[STM32G474_GPIO_NUM_PORTS];
+    DeviceState *usart1;
+    DeviceState *usart2;
+    DeviceState *uart4;
+    DeviceState *fdcan;
+    DeviceState *usbfs;
+    DeviceState *gpio[STM32G474_GPIO_NUM_PORTS];
 
     Clock *hsi16;
     Clock *hsi48;

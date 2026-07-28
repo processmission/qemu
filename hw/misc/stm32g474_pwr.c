@@ -8,11 +8,28 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/core/clock.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/misc/stm32g474_pwr.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
+
+#define STM32G474_PWR_R_MAX (0x84 / sizeof(uint32_t))
+
+struct Stm32g474PwrState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    uint32_t regs[STM32G474_PWR_R_MAX];
+    RegisterInfo regs_info[STM32G474_PWR_R_MAX];
+
+    Clock *clk;
+    bool peripheral_reset_asserted;
+    bool resetting;
+};
 
 REG32(PWR_CR1, 0x00)
     FIELD(PWR_CR1, LPMS, 0, 3)

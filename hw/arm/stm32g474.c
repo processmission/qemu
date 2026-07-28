@@ -86,34 +86,44 @@ G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_fdcan_irqs) ==
 G_STATIC_ASSERT(ARRAY_SIZE(stm32g474_fdcan_irqs[0]) ==
                 STM32G474_FDCAN_NUM_IRQS);
 
+static DeviceState *stm32g474_new_child(Object *parent, const char *name,
+                                        const char *type)
+{
+    DeviceState *child = qdev_new(type);
+
+    object_property_add_child(parent, name, OBJECT(child));
+    object_unref(OBJECT(child));
+    return child;
+}
+
 static void stm32g474_init(Object *obj)
 {
     STM32G474State *s = STM32G474(obj);
 
     object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
-    object_initialize_child(obj, "rcc", &s->rcc, TYPE_STM32G474_RCC);
-    object_initialize_child(obj, "pwr", &s->pwr, TYPE_STM32G474_PWR);
-    object_initialize_child(obj, "flash", &s->flash, TYPE_STM32G474_FLASH);
-    object_initialize_child(obj, "syscfg", &s->syscfg,
-                            TYPE_STM32G474_SYSCFG);
-    object_initialize_child(obj, "exti", &s->exti, TYPE_STM32G474_EXTI);
+    s->rcc = stm32g474_new_child(obj, "rcc", TYPE_STM32G474_RCC);
+    s->pwr = stm32g474_new_child(obj, "pwr", TYPE_STM32G474_PWR);
+    s->flash = stm32g474_new_child(obj, "flash", TYPE_STM32G474_FLASH);
+    s->syscfg = stm32g474_new_child(obj, "syscfg",
+                                    TYPE_STM32G474_SYSCFG);
+    s->exti = stm32g474_new_child(obj, "exti", TYPE_STM32G474_EXTI);
     object_initialize_child(obj, "exti-9-5-or", &s->exti_9_5_or,
                             TYPE_OR_IRQ);
     object_initialize_child(obj, "exti-15-10-or", &s->exti_15_10_or,
                             TYPE_OR_IRQ);
-    object_initialize_child(obj, "usart1", &s->usart1,
-                            TYPE_STM32G474_USART);
-    object_initialize_child(obj, "usart2", &s->usart2,
-                            TYPE_STM32G474_USART);
-    object_initialize_child(obj, "uart4", &s->uart4,
-                            TYPE_STM32G474_UART);
-    object_initialize_child(obj, "fdcan", &s->fdcan,
-                            TYPE_STM32G474_FDCAN);
-    object_initialize_child(obj, "usbfs", &s->usbfs,
-                            TYPE_STM32G474_USBFS);
+    s->usart1 = stm32g474_new_child(obj, "usart1",
+                                    TYPE_STM32G474_USART);
+    s->usart2 = stm32g474_new_child(obj, "usart2",
+                                    TYPE_STM32G474_USART);
+    s->uart4 = stm32g474_new_child(obj, "uart4",
+                                   TYPE_STM32G474_UART);
+    s->fdcan = stm32g474_new_child(obj, "fdcan",
+                                   TYPE_STM32G474_FDCAN);
+    s->usbfs = stm32g474_new_child(obj, "usbfs",
+                                   TYPE_STM32G474_USBFS);
     for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
-        object_initialize_child(obj, stm32g474_gpio_names[i], &s->gpio[i],
-                                stm32g474_gpio_types[i]);
+        s->gpio[i] = stm32g474_new_child(
+            obj, stm32g474_gpio_names[i], stm32g474_gpio_types[i]);
     }
 
     /* Fixed-frequency clocks do not need migration state. */
@@ -123,7 +133,7 @@ static void stm32g474_init(Object *obj)
     clock_set_hz(s->hsi48, STM32G474_HSI48_FREQ_HZ);
     s->lsi = clock_new(obj, "lsi");
     clock_set_hz(s->lsi, STM32G474_LSI_FREQ_HZ);
-    qdev_alias_clock(DEVICE(&s->rcc), "hse-in", DEVICE(obj), "hse");
+    qdev_alias_clock(s->rcc, "hse-in", DEVICE(obj), "hse");
 }
 
 static void stm32g474_realize(DeviceState *dev, Error **errp)
@@ -131,18 +141,18 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     STM32G474State *s = STM32G474(dev);
     MemoryRegion *system_memory = get_system_memory();
     DeviceState *armv7m = DEVICE(&s->armv7m);
-    DeviceState *rcc = DEVICE(&s->rcc);
-    DeviceState *pwr = DEVICE(&s->pwr);
-    DeviceState *flash = DEVICE(&s->flash);
-    DeviceState *syscfg = DEVICE(&s->syscfg);
-    DeviceState *exti = DEVICE(&s->exti);
+    DeviceState *rcc = s->rcc;
+    DeviceState *pwr = s->pwr;
+    DeviceState *flash = s->flash;
+    DeviceState *syscfg = s->syscfg;
+    DeviceState *exti = s->exti;
     DeviceState *exti_9_5_or = DEVICE(&s->exti_9_5_or);
     DeviceState *exti_15_10_or = DEVICE(&s->exti_15_10_or);
-    DeviceState *usart1 = DEVICE(&s->usart1);
-    DeviceState *usart2 = DEVICE(&s->usart2);
-    DeviceState *uart4 = DEVICE(&s->uart4);
-    DeviceState *fdcan = DEVICE(&s->fdcan);
-    DeviceState *usbfs = DEVICE(&s->usbfs);
+    DeviceState *usart1 = s->usart1;
+    DeviceState *usart2 = s->usart2;
+    DeviceState *uart4 = s->uart4;
+    DeviceState *fdcan = s->fdcan;
+    DeviceState *usbfs = s->usbfs;
 
     if (!memory_region_init_ram(&s->sram1, OBJECT(dev), "stm32g474.sram1",
                                 STM32G474_SRAM1_SIZE, errp)) {
@@ -192,7 +202,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     qdev_connect_clock_in(usbfs, "usb",
                           qdev_get_clock_out(rcc, "usb"));
     for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
-        DeviceState *gpio = DEVICE(&s->gpio[i]);
+        DeviceState *gpio = s->gpio[i];
 
         qdev_connect_clock_in(
             gpio, "clk",
@@ -237,7 +247,7 @@ static void stm32g474_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(rcc), 0, STM32G474_RCC_BASE);
     for (unsigned int i = 0; i < STM32G474_GPIO_NUM_PORTS; i++) {
-        SysBusDevice *gpio = SYS_BUS_DEVICE(&s->gpio[i]);
+        SysBusDevice *gpio = SYS_BUS_DEVICE(s->gpio[i]);
 
         if (!sysbus_realize(gpio, errp)) {
             return;

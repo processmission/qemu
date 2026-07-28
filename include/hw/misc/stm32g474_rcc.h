@@ -9,9 +9,6 @@
 #ifndef HW_MISC_STM32G474_RCC_H
 #define HW_MISC_STM32G474_RCC_H
 
-#include "hw/core/clock.h"
-#include "hw/core/register.h"
-#include "hw/core/sysbus.h"
 #include "qom/object.h"
 
 #define TYPE_STM32G474_RCC "stm32g474-rcc"
@@ -20,7 +17,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(Stm32g474RccState, STM32G474_RCC)
 #define STM32G474_RCC_BASE 0x40021000
 #define STM32G474_RCC_SIZE 0x400
 #define STM32G474_RCC_IRQ  5
-#define STM32G474_RCC_R_MAX (0xa0 / 4)
 
 typedef enum Stm32g474RccGate {
     STM32G474_RCC_GATE_DMA1,
@@ -60,32 +56,5 @@ typedef enum Stm32g474RccPeripheralReset {
     STM32G474_RCC_RESET_USB,
     STM32G474_RCC_RESET_COUNT,
 } Stm32g474RccPeripheralReset;
-
-struct Stm32g474RccState {
-    SysBusDevice parent_obj;
-
-    RegisterInfoArray *reg_array;
-    uint32_t regs[STM32G474_RCC_R_MAX];
-    RegisterInfo regs_info[STM32G474_RCC_R_MAX];
-
-    Clock *hsi16_in;
-    Clock *hse_in;
-    Clock *hsi48_in;
-    Clock *lsi_in;
-
-    Clock *sysclk;
-    Clock *hclk;
-    Clock *pclk1;
-    Clock *pclk2;
-    Clock *cortex_refclk;
-    Clock *pll_p;
-    Clock *pll_q;
-    Clock *pll_r;
-    Clock *gate[STM32G474_RCC_GATE_COUNT];
-
-    qemu_irq irq;
-    qemu_irq peripheral_reset[STM32G474_RCC_RESET_COUNT];
-    bool resetting;
-};
 
 #endif
