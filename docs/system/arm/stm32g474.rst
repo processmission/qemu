@@ -36,7 +36,7 @@ Sources
 The model is based on:
 
 * STM32G4 reference manual RM0440, revision 9.
-* STM32G474xB/xC/xE data sheet, revision 9.
+* STM32G474xB/xC/xE data sheet DS12288, revision 6.
 * ARDEP repository commit
   ``266e0aa36e10b211ed83aa11ab410ac1f5de233e``.
 * Zephyr v4.4.0 commit
@@ -136,13 +136,14 @@ These values follow the per-register descriptions and the target line map;
 the conflicting aggregate reset table is not used.  Direct lines remain
 inert until their source peripheral and Stop-mode behavior are modeled.
 
-A selected external edge sets ``PR`` only while its ``IMR`` bit is enabled.
-An ``EMR``-enabled edge produces an event pulse without setting ``PR``.
-``SWIER`` acts only on a zero-to-one transition: ``IMR`` can create a pending
-interrupt and ``EMR`` can independently create an event.  Enabling a mask
-later does not replay a previously masked edge or software trigger.  ``PR``
-is write-one-to-clear and also clears the corresponding ``SWIER`` bit.
-Each interrupt output remains asserted while ``PR & IMR`` is nonzero.
+A selected external edge sets ``PR`` independently of ``IMR`` and ``EMR``.
+``IMR`` only controls delivery of the latched pending state to the NVIC, while
+``EMR`` independently enables an event pulse.  ``SWIER`` acts on a zero-to-one
+transition and likewise sets ``PR`` even when ``IMR`` is clear.  Enabling
+``IMR`` later therefore delivers an already pending interrupt; enabling
+``EMR`` does not retroactively pulse an event.  ``PR`` is write-one-to-clear
+and also clears the corresponding ``SWIER`` bit.  Each interrupt output
+remains asserted while ``PR & IMR`` is nonzero.
 
 EXTI lines 0 through 4 connect to NVIC inputs 6 through 10.  Lines 5 through
 9 share NVIC input 23, and lines 10 through 15 share NVIC input 40 through
@@ -159,6 +160,11 @@ block with QEMU's ``RegisterInfo``, ``RegisterAccessInfo``, and
 ``REG32`` and ``FIELD`` macros.  Reset values, read-only bits,
 write-one-to-clear bits, and reserved masks belong in ``RegisterAccessInfo``
 rather than hand-written MMIO dispatch.
+
+Register offsets, fields, access tables, backing arrays, and register-local
+callbacks remain private to the corresponding device ``.c`` file.  Public
+headers expose only QOM types and constants needed to wire the common
+microcontroller and board models.
 
 Register callbacks implement only device behavior and side effects, such as
 clock propagation, IRQ updates, FIFO movement, DMA requests, and output
@@ -399,6 +405,27 @@ unmodeled I2C, SPI, analog, or external-board behavior.  UDS update samples
 require flash program and erase support.  These are not reported as successful
 runs merely because they can be built.
 
+Functional test assets
+----------------------
+
+The release-backed Zephyr tests use SHA-256-pinned binaries from
+`stm32g474-ardep-v2-zephyr-qemu1
+<https://github.com/processmission/qemu/releases/tag/stm32g474-ardep-v2-zephyr-qemu1>`_.
+The release contains:
+
+* a direct Zephyr ``hello_world`` image used by both machines;
+* the interactive ARDEP UART sample;
+* a complete 512 KiB MCUboot, firmware-loader, and LED-application flash
+  image;
+* a ``SHA256SUMS`` manifest and the exact source revisions.
+
+The source tree does not contain those compiled binaries.  Run the thorough
+test with:
+
+.. code-block:: shell
+
+   make check-functional-arm
+
 Device behavior and errors
 --------------------------
 
@@ -434,9 +461,12 @@ verification set includes:
   peripheral register block.
 * Self-contained functional tests for raw flash boot, UART4 output, and QMP
   system reset on both machines.
+* Release-backed functional tests for direct Zephyr boot on both machines,
+  ARDEP UART input/output, and MCUboot chainload into the ARDEP LED sample.
 * Timed Zephyr and ARDEP boot runs with positive success markers and negative
   failure markers.
 
 All QEMU binaries used for acceptance are built from the feature branch in a
-named ``builds/`` directory.  Logs and external firmware artifacts remain
-under ``.oh-my-qemu/`` and are not committed as source.
+named ``builds/`` directory.  Local logs and firmware builds remain under
+``.oh-my-qemu/``.  Compiled functional assets are published as release
+attachments and pinned by SHA-256 rather than committed as source.
