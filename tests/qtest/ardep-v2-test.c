@@ -22,6 +22,7 @@
 
 #define MCU_QOM_PATH "/machine/mcu"
 #define RCC_QOM_PATH MCU_QOM_PATH "/rcc"
+#define FDCAN_QOM_PATH MCU_QOM_PATH "/fdcan"
 
 #define FLASH_BASE 0x08000000ULL
 #define FLASH_SIZE (512 * KiB)
@@ -197,6 +198,50 @@ static char *qom_get_string(QTestState *qts, const char *path,
     qobject_unref(response);
 
     return value;
+}
+
+static void assert_qom_property_missing(QTestState *qts, const char *path,
+                                        const char *property)
+{
+    QDict *response;
+    QDict *error;
+    const char *description;
+
+    response = qtest_qmp(qts,
+                         "{ 'execute': 'qom-get', 'arguments': {"
+                         "  'path': %s, 'property': %s } }",
+                         path, property);
+    g_assert_false(qdict_haskey(response, "return"));
+    g_assert_true(qdict_haskey(response, "error"));
+    error = qdict_get_qdict(response, "error");
+    g_assert_cmpstr(qdict_get_str(error, "class"), ==, "GenericError");
+    description = qdict_get_str(error, "desc");
+    g_assert_nonnull(strstr(description, property));
+    g_assert_nonnull(strstr(description, "not found"));
+    qobject_unref(response);
+}
+
+static void assert_qom_link(QTestState *qts, const char *path,
+                            const char *property, const char *expected)
+{
+    g_autofree char *value = qom_get_string(qts, path, property);
+
+    g_assert_cmpstr(value, ==, expected);
+}
+
+static void assert_board_can_links(QTestState *qts, const char *canbus0,
+                                   const char *canbus1)
+{
+    static const char *const paths[] = {
+        "/machine",
+        MCU_QOM_PATH,
+        FDCAN_QOM_PATH,
+    };
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(paths); i++) {
+        assert_qom_link(qts, paths[i], "canbus0", canbus0);
+        assert_qom_link(qts, paths[i], "canbus1", canbus1);
+    }
 }
 
 static uint64_t qom_get_uint(QTestState *qts, const char *path,
@@ -405,6 +450,49 @@ static void test_machine_topology(void)
     for (unsigned int i = 0; i < ARRAY_SIZE(led_cases); i++) {
         assert_led_properties(qts, &led_cases[i]);
     }
+
+    qtest_quit(qts);
+}
+
+static void test_can_links_no_backend(void)
+{
+    QTestState *qts = ardep_v2_start();
+
+    assert_board_can_links(qts, "", "");
+    assert_qom_property_missing(qts, "/machine", "canbus2");
+    assert_qom_link(qts, MCU_QOM_PATH, "canbus2", "");
+    assert_qom_link(qts, FDCAN_QOM_PATH, "canbus2", "");
+
+    qtest_quit(qts);
+}
+
+static void test_can_links_shared(void)
+{
+    QTestState *qts =
+        qtest_init("-M " ARDEP_V2_MACHINE
+                   " -object can-bus,id=qcan"
+                   " -machine canbus0=qcan,canbus1=qcan"
+                   " -serial null -serial null -serial null");
+
+    assert_board_can_links(qts, "/objects/qcan", "/objects/qcan");
+    assert_qom_link(qts, MCU_QOM_PATH, "canbus2", "");
+    assert_qom_link(qts, FDCAN_QOM_PATH, "canbus2", "");
+
+    qtest_quit(qts);
+}
+
+static void test_can_links_independent(void)
+{
+    QTestState *qts =
+        qtest_init("-M " ARDEP_V2_MACHINE
+                   " -object can-bus,id=qcan0"
+                   " -object can-bus,id=qcan1"
+                   " -machine canbus0=qcan0,canbus1=qcan1"
+                   " -serial null -serial null -serial null");
+
+    assert_board_can_links(qts, "/objects/qcan0", "/objects/qcan1");
+    assert_qom_link(qts, MCU_QOM_PATH, "canbus2", "");
+    assert_qom_link(qts, FDCAN_QOM_PATH, "canbus2", "");
 
     qtest_quit(qts);
 }
@@ -736,6 +824,12 @@ int main(int argc, char **argv)
                    test_raw_oversize_rejected);
     qtest_add_func("/ardep-v2/6-active-migration",
                    test_active_migration);
+    qtest_add_func("/ardep-v2/7-can-links/no-backend",
+                   test_can_links_no_backend);
+    qtest_add_func("/ardep-v2/7-can-links/shared",
+                   test_can_links_shared);
+    qtest_add_func("/ardep-v2/7-can-links/independent",
+                   test_can_links_independent);
 
     return g_test_run();
 }
