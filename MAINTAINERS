@@ -1157,7 +1157,7 @@ F: include/hw/misc/stm32g474_rcc.h
 F: include/hw/misc/stm32g474_syscfg.h
 F: include/hw/net/stm32g474_fdcan.h
 F: include/hw/usb/stm32g474_usbfs.h
-F: tests/functional/arm/test_stm32g474.py
+F: tests/functional/arm/test_stm32g474*.py
 F: tests/qtest/ardep-v2-test.c
 F: tests/qtest/stm32g474-exti-test.c
 F: tests/qtest/stm32g474-fdcan-test.c

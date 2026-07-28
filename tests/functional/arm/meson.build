@@ -24,6 +24,7 @@ test_arm_timeouts = {
   'quanta_gsj' : 240,
   'raspi2' : 120,
   'replay' : 240,
+  'stm32g474_zephyr' : 120,
   'tuxrun' : 240,
   'sx1' : 360,
 }
@@ -68,6 +69,7 @@ tests_arm_system_thorough = [
   'replay',
   'smdkc210',
   'stellaris',
+  'stm32g474_zephyr',
   'sx1',
   'vexpress',
   'virt',
