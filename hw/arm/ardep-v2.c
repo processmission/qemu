@@ -29,6 +29,7 @@ struct ArdepV2MachineState {
     MachineState parent_obj;
 
     STM32G474State mcu;
+    CanBusState *canbus[2];
     SplitIRQ red_led_splitter;
     SplitIRQ green_led_splitter;
     Clock *hse;
@@ -65,6 +66,10 @@ static void ardep_v2_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "mcu", &s->mcu,
                             TYPE_STM32G474);
     mcu = DEVICE(&s->mcu);
+    object_property_set_link(OBJECT(mcu), "canbus0",
+                             OBJECT(s->canbus[0]), &error_fatal);
+    object_property_set_link(OBJECT(mcu), "canbus1",
+                             OBJECT(s->canbus[1]), &error_fatal);
     s->hse = clock_new(OBJECT(machine), "hse");
     clock_set_hz(s->hse, ARDEP_V2_HSE_FREQ_HZ);
     qdev_connect_clock_in(mcu, "hse", s->hse);
@@ -96,6 +101,18 @@ static void ardep_v2_machine_init(MachineState *machine)
                        STM32G474_FLASH_BASE, STM32G474_FLASH_SIZE);
 }
 
+static void ardep_v2_machine_instance_init(Object *obj)
+{
+    ArdepV2MachineState *s = ARDEP_V2_MACHINE(obj);
+
+    object_property_add_link(obj, "canbus0", TYPE_CAN_BUS,
+                             (Object **)&s->canbus[0],
+                             object_property_allow_set_link, 0);
+    object_property_add_link(obj, "canbus1", TYPE_CAN_BUS,
+                             (Object **)&s->canbus[1],
+                             object_property_allow_set_link, 0);
+}
+
 static void ardep_v2_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -115,6 +132,7 @@ static const TypeInfo ardep_v2_machine_types[] = {
         .name = TYPE_ARDEP_V2_MACHINE,
         .parent = TYPE_MACHINE,
         .instance_size = sizeof(ArdepV2MachineState),
+        .instance_init = ardep_v2_machine_instance_init,
         .class_init = ardep_v2_machine_class_init,
         .interfaces = arm_machine_interfaces,
     },
