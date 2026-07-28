@@ -8,13 +8,38 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/core/clock.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/misc/stm32g474_exti.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/module.h"
+
+#define STM32G474_EXTI_NUM_BANKS 2
+#define STM32G474_EXTI_NUM_REGS 14
+
+struct Stm32g474ExtiState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_EXTI_NUM_REGS];
+    uint32_t regs[STM32G474_EXTI_NUM_REGS];
+
+    Clock *clk;
+    qemu_irq irq[STM32G474_EXTI_NUM_LINES];
+    qemu_irq event[STM32G474_EXTI_NUM_LINES];
+
+    uint32_t input_levels[STM32G474_EXTI_NUM_BANKS];
+    uint32_t swier_rising[STM32G474_EXTI_NUM_BANKS];
+    uint32_t raw_pr_write;
+    hwaddr raw_pr_addr;
+    bool raw_pr_valid;
+    bool resetting;
+};
 
 REG32(IMR1, 0x00)
     FIELD(IMR1, IM, 0, 32)

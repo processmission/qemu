@@ -8,14 +8,46 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/core/clock.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/misc/stm32g474_rcc.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+
+#define STM32G474_RCC_R_MAX (0xa0 / sizeof(uint32_t))
+
+struct Stm32g474RccState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    uint32_t regs[STM32G474_RCC_R_MAX];
+    RegisterInfo regs_info[STM32G474_RCC_R_MAX];
+
+    Clock *hsi16_in;
+    Clock *hse_in;
+    Clock *hsi48_in;
+    Clock *lsi_in;
+
+    Clock *sysclk;
+    Clock *hclk;
+    Clock *pclk1;
+    Clock *pclk2;
+    Clock *cortex_refclk;
+    Clock *pll_p;
+    Clock *pll_q;
+    Clock *pll_r;
+    Clock *gate[STM32G474_RCC_GATE_COUNT];
+
+    qemu_irq irq;
+    qemu_irq peripheral_reset[STM32G474_RCC_RESET_COUNT];
+    bool resetting;
+};
 
 REG32(CR, 0x00)
     FIELD(CR, HSION, 8, 1)

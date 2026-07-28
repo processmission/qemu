@@ -8,8 +8,12 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "system/memory.h"
+#include "hw/core/clock.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/irq.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/usb/stm32g474_usbfs.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
@@ -18,6 +22,32 @@
 #include "qemu/module.h"
 #include "qapi/visitor.h"
 #include "system/qtest.h"
+
+#define STM32G474_USBFS_NUM_REGS \
+    (0x5c / sizeof(uint32_t))
+#define STM32G474_USBFS_NUM_BDT_REGS 32
+
+struct Stm32g474UsbFsState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_USBFS_NUM_REGS];
+    uint32_t regs[STM32G474_USBFS_NUM_REGS];
+
+    MemoryRegion pma_mr;
+    uint16_t pma[STM32G474_USBFS_PMA_SIZE / sizeof(uint16_t)];
+    RegisterInfo bdt_regs[STM32G474_USBFS_NUM_BDT_REGS];
+
+    Clock *pclk;
+    Clock *usb;
+    qemu_irq hp_irq;
+    qemu_irq lp_irq;
+
+    bool resetting;
+    bool peripheral_reset_asserted;
+    bool fres_active;
+    bool fres_reset_pending;
+};
 
 REG32(EP0R, 0x00)
     FIELD(EP0R, EA, 0, 4)

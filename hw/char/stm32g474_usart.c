@@ -8,17 +8,52 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "chardev/char-fe.h"
 #include "chardev/char-serial.h"
 #include "hw/char/stm32g474_usart.h"
+#include "hw/core/clock.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "system/runstate.h"
+
+#define STM32G474_USART_NUM_REGS 12
+
+typedef struct Stm32g474UsartVariant Stm32g474UsartVariant;
+
+struct Stm32g474UsartState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_USART_NUM_REGS];
+    uint32_t regs[STM32G474_USART_NUM_REGS];
+
+    Clock *clk;
+    CharFrontend chr;
+    qemu_irq irq;
+    guint watch_tag;
+    VMChangeStateEntry *resume_entry;
+
+    bool tx_pending;
+    bool tdr_write_accepted;
+    bool resetting;
+    bool peripheral_reset_asserted;
+    bool handlers_installed;
+    bool host_io_blocked;
+};
+
+struct Stm32g474UsartClass {
+    SysBusDeviceClass parent_class;
+
+    const Stm32g474UsartVariant *variant;
+};
 
 REG32(CR1, 0x00)
     FIELD(CR1, RXFFIE, 31, 1)

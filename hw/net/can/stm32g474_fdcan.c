@@ -8,14 +8,61 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "system/memory.h"
+#include "hw/core/clock.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/irq.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
+#include "hw/net/m_can.h"
 #include "hw/net/stm32g474_fdcan.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/module.h"
+#include "net/can_emu.h"
+
+#define STM32G474_FDCAN_NUM_REGS \
+    (0x100 / sizeof(uint32_t) + 1)
+
+typedef struct Stm32g474FdcanChannel {
+    Stm32g474FdcanState *parent;
+    unsigned int index;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_FDCAN_NUM_REGS];
+    uint32_t regs[STM32G474_FDCAN_NUM_REGS];
+
+    MCanEngine engine;
+    CanBusClientState bus_client;
+    qemu_irq irq[STM32G474_FDCAN_NUM_IRQS];
+
+    uint8_t tx_fifo_order[STM32G474_FDCAN_NUM_TX_BUFFERS];
+    uint8_t tx_fifo_count;
+    uint8_t tx_fifo_put;
+    bool tx_draining;
+
+    uint32_t cccr_old;
+    bool cccr_write_pending;
+} Stm32g474FdcanChannel;
+
+struct Stm32g474FdcanState {
+    SysBusDevice parent_obj;
+
+    Stm32g474FdcanChannel channel[STM32G474_FDCAN_NUM_CHANNELS];
+    MemoryRegion message_ram;
+    uint8_t *message_ram_ptr;
+
+    Clock *kernel_clk;
+    Clock *pclk;
+    CanBusState *canbus[STM32G474_FDCAN_NUM_CHANNELS];
+
+    bool resetting;
+    bool migration_loading;
+    bool peripheral_reset_asserted;
+    bool engines_initialized;
+};
 
 REG32(CREL, 0x000)
     FIELD(CREL, DAY, 0, 8)

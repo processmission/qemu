@@ -39,7 +39,7 @@ static void ardep_v2_connect_led(ArdepV2MachineState *s,
                                  SplitIRQ *splitter, LEDState *led,
                                  unsigned int port)
 {
-    DeviceState *gpio = DEVICE(&s->mcu.gpio[port]);
+    DeviceState *gpio = s->mcu.gpio[port];
     DeviceState *splitter_dev = DEVICE(splitter);
     unsigned int gpio_input = port * STM32G474_GPIO_NUM_PINS
                               + ARDEP_V2_LED_PIN;

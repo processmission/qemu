@@ -8,14 +8,45 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/core/clock.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/register.h"
+#include "hw/core/sysbus.h"
 #include "hw/misc/stm32g474_syscfg.h"
 #include "hw/core/registerfields.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+
+#define STM32G474_SYSCFG_NUM_REGS 10
+
+typedef enum Stm32g474SyscfgKeyPhase {
+    STM32G474_SYSCFG_KEY_LOCKED,
+    STM32G474_SYSCFG_KEY_HAVE_CA,
+    STM32G474_SYSCFG_KEY_UNLOCKED,
+} Stm32g474SyscfgKeyPhase;
+
+struct Stm32g474SyscfgState {
+    SysBusDevice parent_obj;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[STM32G474_SYSCFG_NUM_REGS];
+    uint32_t regs[STM32G474_SYSCFG_NUM_REGS];
+
+    Clock *clk;
+    qemu_irq exti_out[STM32G474_SYSCFG_NUM_LINES];
+
+    uint16_t gpio_levels[STM32G474_SYSCFG_NUM_PORTS];
+    uint16_t output_cache;
+    uint32_t raw_exticr;
+    uint8_t key_phase;
+    bool peripheral_reset_asserted;
+    bool resetting;
+    bool output_cache_valid;
+    bool raw_exticr_valid;
+};
 
 REG32(MEMRMP, 0x00)
     FIELD(MEMRMP, MEM_MODE, 0, 3)
