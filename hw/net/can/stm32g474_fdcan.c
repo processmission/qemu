@@ -193,7 +193,8 @@ REG32(CKDIV, 0x100)
 
 #define STM32G474_FDCAN_COMMON_NUM_DESCRIPTORS 36
 #define STM32G474_FDCAN_NUM_IRQ_GROUPS 7
-#define STM32G474_FDCAN_TX_BUFFER_MASK 0x00000007U
+#define STM32G474_FDCAN_TX_BUFFER_MASK \
+    ((1U << STM32G474_FDCAN_NUM_TX_BUFFERS) - 1)
 #define STM32G474_FDCAN_IR_MASK 0x00ffffffU
 #define STM32G474_FDCAN_ILS_MASK 0x0000007fU
 
@@ -215,7 +216,7 @@ static const MCanMsgRamLayout stm32g474_fdcan_mram_layout = {
     .ext_filters = 8,
     .rx_elements = { 3, 3 },
     .tx_events = 3,
-    .tx_buffers = 3,
+    .tx_buffers = STM32G474_FDCAN_NUM_TX_BUFFERS,
 };
 
 static const uint32_t stm32g474_fdcan_irq_group_masks[] = {
@@ -245,6 +246,12 @@ static bool stm32g474_fdcan_in_reset(const Stm32g474FdcanState *s)
 {
     return s->resetting || s->peripheral_reset_asserted;
 }
+
+static void
+stm32g474_fdcan_try_transmit(Stm32g474FdcanChannel *channel);
+static bool
+stm32g474_fdcan_loopback_enabled(
+    const Stm32g474FdcanChannel *channel);
 
 static void
 stm32g474_fdcan_update_irq(Stm32g474FdcanChannel *channel)
@@ -332,13 +339,30 @@ stm32g474_fdcan_sync_tx_queue(Stm32g474FdcanChannel *channel)
     uint32_t pending =
         channel->regs[R_TXBRP] & STM32G474_FDCAN_TX_BUFFER_MASK;
     uint32_t free_mask = ~pending & STM32G474_FDCAN_TX_BUFFER_MASK;
-    unsigned int fill = ctpop32(pending);
-    unsigned int get_index = pending ? ctz32(pending) : 0;
-    unsigned int put_index = free_mask ? ctz32(free_mask) : 0;
+    bool queue_mode =
+        (channel->regs[R_TXBC] & R_TXBC_TFQM_MASK) != 0;
+    unsigned int fill =
+        queue_mode ? ctpop32(pending) : channel->tx_fifo_count;
+    unsigned int get_index =
+        !queue_mode && fill ? channel->tx_fifo_order[0] : 0;
+    unsigned int put_index;
     uint32_t value = 0;
 
-    value = FIELD_DP32(value, TXFQS, TFFL,
-                       stm32g474_fdcan_mram_layout.tx_buffers - fill);
+    if (queue_mode) {
+        put_index = free_mask ? ctz32(free_mask) : 0;
+    } else {
+        put_index = channel->tx_fifo_put;
+        while (free_mask && (pending & BIT(put_index))) {
+            put_index =
+                (put_index + 1) %
+                stm32g474_fdcan_mram_layout.tx_buffers;
+        }
+        channel->tx_fifo_put = put_index;
+    }
+    if (!queue_mode) {
+        value = FIELD_DP32(value, TXFQS, TFFL,
+                           stm32g474_fdcan_mram_layout.tx_buffers - fill);
+    }
     value = FIELD_DP32(value, TXFQS, TFGI, get_index);
     value = FIELD_DP32(value, TXFQS, TFQPI, put_index);
     value = FIELD_DP32(value, TXFQS, TFQF,
@@ -470,6 +494,32 @@ stm32g474_fdcan_test_pre_write(RegisterInfo *reg, uint64_t val)
     return stm32g474_fdcan_register_value(reg);
 }
 
+static void
+stm32g474_fdcan_update_tx_mode(Stm32g474FdcanChannel *channel)
+{
+    if ((channel->regs[R_CCCR] & R_CCCR_MON_MASK) &&
+        !stm32g474_fdcan_loopback_enabled(channel)) {
+        channel->regs[R_TXBRP] = 0;
+        channel->regs[R_TXBAR] = 0;
+        channel->regs[R_TXBCR] = 0;
+        memset(channel->tx_fifo_order, 0,
+               sizeof(channel->tx_fifo_order));
+        channel->tx_fifo_count = 0;
+        channel->tx_fifo_put = 0;
+        stm32g474_fdcan_sync_tx_queue(channel);
+        return;
+    }
+    stm32g474_fdcan_try_transmit(channel);
+}
+
+static void
+stm32g474_fdcan_test_post_write(RegisterInfo *reg, uint64_t val)
+{
+    Stm32g474FdcanChannel *channel = reg->opaque;
+
+    stm32g474_fdcan_update_tx_mode(channel);
+}
+
 static uint64_t
 stm32g474_fdcan_cccr_pre_write(RegisterInfo *reg, uint64_t val)
 {
@@ -528,6 +578,7 @@ stm32g474_fdcan_cccr_post_write(RegisterInfo *reg, uint64_t val)
         !(channel->regs[R_CCCR] & R_CCCR_TEST_MASK)) {
         register_reset(&channel->regs_info[R_TEST]);
     }
+    stm32g474_fdcan_update_tx_mode(channel);
 }
 
 static uint64_t
@@ -638,6 +689,251 @@ stm32g474_fdcan_txefa_post_write(RegisterInfo *reg, uint64_t val)
     }
 }
 
+static bool
+stm32g474_fdcan_loopback_enabled(
+    const Stm32g474FdcanChannel *channel)
+{
+    return (channel->regs[R_CCCR] & R_CCCR_TEST_MASK) &&
+           (channel->regs[R_TEST] & R_TEST_LBCK_MASK);
+}
+
+static bool
+stm32g474_fdcan_tx_runnable(
+    const Stm32g474FdcanChannel *channel)
+{
+    const Stm32g474FdcanState *s = channel->parent;
+    uint32_t cccr = channel->regs[R_CCCR];
+    uint64_t effective_hz;
+
+    if (s->peripheral_reset_asserted || !s->engines_initialized ||
+        (cccr & (R_CCCR_INIT_MASK | R_CCCR_CCE_MASK |
+                 R_CCCR_CSR_MASK | R_CCCR_ASM_MASK))) {
+        return false;
+    }
+
+    if ((cccr & R_CCCR_MON_MASK) &&
+        !stm32g474_fdcan_loopback_enabled(channel)) {
+        return false;
+    }
+
+    effective_hz = stm32g474_fdcan_effective_clock_hz(s);
+    return effective_hz != 0 &&
+           effective_hz <= clock_get_hz(s->pclk);
+}
+
+static bool
+stm32g474_fdcan_can_transmit(
+    const Stm32g474FdcanChannel *channel)
+{
+    const Stm32g474FdcanState *s = channel->parent;
+
+    return !s->resetting && !s->migration_loading &&
+           stm32g474_fdcan_tx_runnable(channel);
+}
+
+static void
+stm32g474_fdcan_tx_fifo_remove(Stm32g474FdcanChannel *channel,
+                               unsigned int buffer)
+{
+    for (unsigned int i = 0; i < channel->tx_fifo_count; i++) {
+        if (channel->tx_fifo_order[i] != buffer) {
+            continue;
+        }
+
+        memmove(&channel->tx_fifo_order[i],
+                &channel->tx_fifo_order[i + 1],
+                channel->tx_fifo_count - i - 1);
+        channel->tx_fifo_count--;
+        channel->tx_fifo_order[channel->tx_fifo_count] = 0;
+        return;
+    }
+}
+
+static void
+stm32g474_fdcan_tx_fifo_enqueue(Stm32g474FdcanChannel *channel,
+                                unsigned int buffer)
+{
+    uint32_t pending = channel->regs[R_TXBRP];
+    unsigned int put = (buffer + 1) %
+                       stm32g474_fdcan_mram_layout.tx_buffers;
+
+    g_assert(channel->tx_fifo_count <
+             stm32g474_fdcan_mram_layout.tx_buffers);
+    channel->tx_fifo_order[channel->tx_fifo_count++] = buffer;
+
+    for (unsigned int i = 0;
+         i < stm32g474_fdcan_mram_layout.tx_buffers; i++) {
+        if (!(pending & BIT(put))) {
+            break;
+        }
+        put = (put + 1) % stm32g474_fdcan_mram_layout.tx_buffers;
+    }
+    channel->tx_fifo_put = put;
+}
+
+static unsigned int
+stm32g474_fdcan_tx_arbitration_base(const MCanTxTransfer *transfer)
+{
+    if (transfer->frame.can_id & QEMU_CAN_EFF_FLAG) {
+        return (transfer->frame.can_id & QEMU_CAN_EFF_MASK) >> 18;
+    }
+    return transfer->frame.can_id & QEMU_CAN_SFF_MASK;
+}
+
+static bool
+stm32g474_fdcan_tx_precedes(const MCanTxTransfer *candidate,
+                             unsigned int candidate_buffer,
+                             const MCanTxTransfer *selected,
+                             unsigned int selected_buffer)
+{
+    unsigned int candidate_base =
+        stm32g474_fdcan_tx_arbitration_base(candidate);
+    unsigned int selected_base =
+        stm32g474_fdcan_tx_arbitration_base(selected);
+    bool candidate_extended =
+        (candidate->frame.can_id & QEMU_CAN_EFF_FLAG) != 0;
+    bool selected_extended =
+        (selected->frame.can_id & QEMU_CAN_EFF_FLAG) != 0;
+    uint32_t candidate_id =
+        candidate->frame.can_id & QEMU_CAN_EFF_MASK;
+    uint32_t selected_id =
+        selected->frame.can_id & QEMU_CAN_EFF_MASK;
+
+    if (candidate_base != selected_base) {
+        return candidate_base < selected_base;
+    }
+    if (candidate_extended != selected_extended) {
+        return !candidate_extended;
+    }
+    if (candidate_id != selected_id) {
+        return candidate_id < selected_id;
+    }
+    /*
+     * RM0440 44.3.6 defines the lowest buffer number as the tie-breaker
+     * for equal message IDs. RTR is not part of the message ID.
+     */
+    return candidate_buffer < selected_buffer;
+}
+
+static bool
+stm32g474_fdcan_select_tx(Stm32g474FdcanChannel *channel,
+                           unsigned int *selected_buffer,
+                           MCanTxTransfer *selected_transfer)
+{
+    uint32_t pending =
+        channel->regs[R_TXBRP] & STM32G474_FDCAN_TX_BUFFER_MASK;
+
+    if (!pending) {
+        return false;
+    }
+
+    if (!(channel->regs[R_TXBC] & R_TXBC_TFQM_MASK)) {
+        if (!channel->tx_fifo_count) {
+            return false;
+        }
+        *selected_buffer = channel->tx_fifo_order[0];
+        return m_can_tx_element_decode(&channel->engine,
+                                       *selected_buffer,
+                                       selected_transfer);
+    }
+
+    bool found = false;
+
+    for (unsigned int buffer = 0;
+         buffer < stm32g474_fdcan_mram_layout.tx_buffers; buffer++) {
+        MCanTxTransfer transfer;
+
+        if (!(pending & BIT(buffer)) ||
+            !m_can_tx_element_decode(&channel->engine, buffer,
+                                     &transfer)) {
+            continue;
+        }
+        if (!found ||
+            stm32g474_fdcan_tx_precedes(
+                &transfer, buffer, selected_transfer,
+                *selected_buffer)) {
+            *selected_buffer = buffer;
+            *selected_transfer = transfer;
+            found = true;
+        }
+    }
+
+    return found;
+}
+
+static void
+stm32g474_fdcan_complete_tx(Stm32g474FdcanChannel *channel,
+                            unsigned int buffer,
+                            const MCanTxTransfer *transfer)
+{
+    uint32_t bit = BIT(buffer);
+
+    channel->regs[R_TXBRP] &= ~bit;
+    channel->regs[R_TXBCR] &= ~bit;
+    channel->regs[R_TXBTO] |= bit;
+    stm32g474_fdcan_tx_fifo_remove(channel, buffer);
+    stm32g474_fdcan_sync_tx_queue(channel);
+
+    m_can_tx_event_append(&channel->engine, transfer, 1);
+    if (channel->regs[R_TXBTIE] & bit) {
+        channel->regs[R_IR] |= R_IR_TC_MASK;
+    }
+    stm32g474_fdcan_update_irq(channel);
+}
+
+static void
+stm32g474_fdcan_try_transmit(Stm32g474FdcanChannel *channel)
+{
+    if (channel->tx_draining ||
+        !stm32g474_fdcan_can_transmit(channel)) {
+        return;
+    }
+
+    channel->tx_draining = true;
+    while (stm32g474_fdcan_can_transmit(channel)) {
+        MCanTxTransfer transfer;
+        unsigned int buffer;
+        bool loopback;
+        bool internal_loopback;
+
+        if (!stm32g474_fdcan_select_tx(channel, &buffer, &transfer)) {
+            break;
+        }
+
+        loopback = stm32g474_fdcan_loopback_enabled(channel);
+        internal_loopback =
+            loopback &&
+            (channel->regs[R_CCCR] & R_CCCR_MON_MASK);
+
+        if (loopback) {
+            m_can_receive(&channel->engine, &transfer.frame, 1);
+        }
+        if (!internal_loopback && channel->bus_client.bus) {
+            can_bus_client_send(&channel->bus_client,
+                                &transfer.frame, 1);
+        }
+        stm32g474_fdcan_complete_tx(channel, buffer, &transfer);
+    }
+    channel->tx_draining = false;
+}
+
+static void
+stm32g474_fdcan_try_transmit_all(Stm32g474FdcanState *s)
+{
+    for (unsigned int i = 0;
+         i < STM32G474_FDCAN_NUM_CHANNELS; i++) {
+        stm32g474_fdcan_try_transmit(&s->channel[i]);
+    }
+}
+
+static void
+stm32g474_fdcan_txbc_post_write(RegisterInfo *reg, uint64_t val)
+{
+    Stm32g474FdcanChannel *channel = reg->opaque;
+
+    stm32g474_fdcan_sync_tx_queue(channel);
+}
+
 static uint64_t
 stm32g474_fdcan_txbar_pre_write(RegisterInfo *reg, uint64_t val)
 {
@@ -653,17 +949,37 @@ static void
 stm32g474_fdcan_txbar_post_write(RegisterInfo *reg, uint64_t val)
 {
     Stm32g474FdcanChannel *channel = reg->opaque;
-    uint32_t request = val & STM32G474_FDCAN_TX_BUFFER_MASK;
+    uint32_t cccr = channel->regs[R_CCCR];
+    uint32_t request =
+        val & ~channel->regs[R_TXBRP] &
+        STM32G474_FDCAN_TX_BUFFER_MASK;
+    bool loopback = stm32g474_fdcan_loopback_enabled(channel);
+    unsigned int fifo_start = channel->tx_fifo_put;
 
     channel->regs[R_TXBAR] = 0;
-    if (stm32g474_fdcan_in_reset(channel->parent)) {
+    if (stm32g474_fdcan_in_reset(channel->parent) ||
+        (cccr & R_CCCR_CCE_MASK) ||
+        ((cccr & R_CCCR_MON_MASK) && !loopback)) {
         return;
     }
 
     channel->regs[R_TXBRP] |= request;
     channel->regs[R_TXBTO] &= ~request;
     channel->regs[R_TXBCF] &= ~request;
+    if (!(channel->regs[R_TXBC] & R_TXBC_TFQM_MASK)) {
+        for (unsigned int i = 0;
+             i < stm32g474_fdcan_mram_layout.tx_buffers; i++) {
+            unsigned int buffer =
+                (fifo_start + i) %
+                stm32g474_fdcan_mram_layout.tx_buffers;
+
+            if (request & BIT(buffer)) {
+                stm32g474_fdcan_tx_fifo_enqueue(channel, buffer);
+            }
+        }
+    }
     stm32g474_fdcan_sync_tx_queue(channel);
+    stm32g474_fdcan_try_transmit(channel);
 }
 
 static uint64_t
@@ -694,6 +1010,12 @@ stm32g474_fdcan_txbcr_post_write(RegisterInfo *reg, uint64_t val)
     channel->regs[R_TXBRP] &= ~cancelled;
     channel->regs[R_TXBCF] |= cancelled;
     channel->regs[R_TXBCR] &= channel->regs[R_TXBRP];
+    for (unsigned int buffer = 0;
+         buffer < stm32g474_fdcan_mram_layout.tx_buffers; buffer++) {
+        if (cancelled & BIT(buffer)) {
+            stm32g474_fdcan_tx_fifo_remove(channel, buffer);
+        }
+    }
     if (cancelled & channel->regs[R_TXBCIE]) {
         channel->regs[R_IR] |= R_IR_TCF_MASK;
     }
@@ -710,6 +1032,14 @@ stm32g474_fdcan_ckdiv_pre_write(RegisterInfo *reg, uint64_t val)
         return val;
     }
     return stm32g474_fdcan_register_value(reg);
+}
+
+static void
+stm32g474_fdcan_ckdiv_post_write(RegisterInfo *reg, uint64_t val)
+{
+    Stm32g474FdcanChannel *channel = reg->opaque;
+
+    stm32g474_fdcan_try_transmit_all(channel->parent);
 }
 
 static const RegisterAccessInfo stm32g474_fdcan_regs_info[] = {
@@ -735,6 +1065,7 @@ static const RegisterAccessInfo stm32g474_fdcan_regs_info[] = {
         .ro = R_TEST_RX_MASK,
         .rsvd = STM32G474_FDCAN_RSVD(0x000000f0),
         .pre_write = stm32g474_fdcan_test_pre_write,
+        .post_write = stm32g474_fdcan_test_post_write,
     }, {
         .name = "RWD",
         .addr = A_RWD,
@@ -857,6 +1188,7 @@ static const RegisterAccessInfo stm32g474_fdcan_regs_info[] = {
         .addr = A_TXBC,
         .rsvd = STM32G474_FDCAN_RSVD(0x01000000),
         .pre_write = stm32g474_fdcan_protected_pre_write,
+        .post_write = stm32g474_fdcan_txbc_post_write,
     }, {
         .name = "TXFQS",
         .addr = A_TXFQS,
@@ -920,6 +1252,7 @@ static const RegisterAccessInfo stm32g474_fdcan_regs_info[] = {
         .addr = A_CKDIV,
         .rsvd = STM32G474_FDCAN_RSVD(0x0000000f),
         .pre_write = stm32g474_fdcan_ckdiv_pre_write,
+        .post_write = stm32g474_fdcan_ckdiv_post_write,
     },
 };
 
@@ -973,6 +1306,11 @@ stm32g474_fdcan_reset_registers(Stm32g474FdcanState *s)
         if (s->engines_initialized) {
             m_can_engine_reset(&channel->engine);
         }
+        memset(channel->tx_fifo_order, 0,
+               sizeof(channel->tx_fifo_order));
+        channel->tx_fifo_count = 0;
+        channel->tx_fifo_put = 0;
+        channel->tx_draining = false;
         channel->cccr_old = 0;
         channel->cccr_write_pending = false;
         qemu_set_irq(channel->irq[0], 0);
@@ -1045,6 +1383,10 @@ stm32g474_fdcan_fifo_state_valid(const MCanFifoState *state,
 static bool
 stm32g474_fdcan_channel_state_valid(Stm32g474FdcanChannel *channel)
 {
+    uint32_t pending =
+        channel->regs[R_TXBRP] & STM32G474_FDCAN_TX_BUFFER_MASK;
+    uint32_t queued = 0;
+
     for (unsigned int i = 0; i < ARRAY_SIZE(channel->regs); i++) {
         RegisterInfo *reg = &channel->regs_info[i];
 
@@ -1059,6 +1401,47 @@ stm32g474_fdcan_channel_state_valid(Stm32g474FdcanChannel *channel)
     if (!(channel->regs[R_CCCR] & R_CCCR_INIT_MASK) &&
         (channel->regs[R_CCCR] & R_CCCR_CCE_MASK)) {
         return false;
+    }
+    if (channel->regs[R_TXBAR] || channel->regs[R_TXBCR] ||
+        (pending && (channel->regs[R_CCCR] & R_CCCR_MON_MASK) &&
+         !stm32g474_fdcan_loopback_enabled(channel)) ||
+        (pending && stm32g474_fdcan_tx_runnable(channel))) {
+        return false;
+    }
+    if (channel->tx_fifo_count >
+        stm32g474_fdcan_mram_layout.tx_buffers ||
+        channel->tx_fifo_put >=
+        stm32g474_fdcan_mram_layout.tx_buffers) {
+        return false;
+    }
+    for (unsigned int i = 0;
+         i < STM32G474_FDCAN_NUM_TX_BUFFERS; i++) {
+        unsigned int buffer = channel->tx_fifo_order[i];
+        uint32_t bit;
+
+        if (i >= channel->tx_fifo_count) {
+            if (buffer) {
+                return false;
+            }
+            continue;
+        }
+        if (buffer >= stm32g474_fdcan_mram_layout.tx_buffers) {
+            return false;
+        }
+        bit = BIT(buffer);
+        if ((queued & bit) || !(pending & bit)) {
+            return false;
+        }
+        queued |= bit;
+    }
+    if (channel->regs[R_TXBC] & R_TXBC_TFQM_MASK) {
+        if (channel->tx_fifo_count || channel->tx_fifo_put) {
+            return false;
+        }
+    } else {
+        if (queued != pending) {
+            return false;
+        }
     }
     if (!stm32g474_fdcan_fifo_state_valid(
             &channel->engine.rx_fifo[0],
@@ -1102,6 +1485,14 @@ stm32g474_fdcan_channel_state_valid(Stm32g474FdcanChannel *channel)
     return true;
 }
 
+static int stm32g474_fdcan_pre_load(void *opaque)
+{
+    Stm32g474FdcanState *s = STM32G474_FDCAN(opaque);
+
+    s->migration_loading = true;
+    return 0;
+}
+
 static int stm32g474_fdcan_post_load(void *opaque, int version_id)
 {
     Stm32g474FdcanState *s = STM32G474_FDCAN(opaque);
@@ -1113,8 +1504,10 @@ static int stm32g474_fdcan_post_load(void *opaque, int version_id)
 
         channel->cccr_old = 0;
         channel->cccr_write_pending = false;
+        channel->tx_draining = false;
         if (!stm32g474_fdcan_channel_state_valid(channel)) {
             s->resetting = false;
+            s->migration_loading = false;
             return -EINVAL;
         }
     }
@@ -1122,6 +1515,7 @@ static int stm32g474_fdcan_post_load(void *opaque, int version_id)
     if (s->peripheral_reset_asserted) {
         stm32g474_fdcan_reset_registers(s);
         s->resetting = false;
+        s->migration_loading = false;
         return 0;
     }
 
@@ -1132,6 +1526,7 @@ static int stm32g474_fdcan_post_load(void *opaque, int version_id)
         stm32g474_fdcan_sync_dynamic_status(&s->channel[i]);
         stm32g474_fdcan_update_irq(&s->channel[i]);
     }
+    s->migration_loading = false;
     return 0;
 }
 
@@ -1144,6 +1539,10 @@ static const VMStateDescription vmstate_stm32g474_fdcan_channel = {
                              STM32G474_FDCAN_NUM_REGS),
         VMSTATE_STRUCT(engine, Stm32g474FdcanChannel, 0,
                        vmstate_m_can_engine, MCanEngine),
+        VMSTATE_UINT8_ARRAY(tx_fifo_order, Stm32g474FdcanChannel,
+                            STM32G474_FDCAN_NUM_TX_BUFFERS),
+        VMSTATE_UINT8(tx_fifo_count, Stm32g474FdcanChannel),
+        VMSTATE_UINT8(tx_fifo_put, Stm32g474FdcanChannel),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -1152,6 +1551,7 @@ static const VMStateDescription vmstate_stm32g474_fdcan = {
     .name = TYPE_STM32G474_FDCAN,
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_load = stm32g474_fdcan_pre_load,
     .post_load = stm32g474_fdcan_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(channel, Stm32g474FdcanState,
@@ -1164,6 +1564,36 @@ static const VMStateDescription vmstate_stm32g474_fdcan = {
         VMSTATE_CLOCK(pclk, Stm32g474FdcanState),
         VMSTATE_END_OF_LIST()
     },
+};
+
+static bool
+stm32g474_fdcan_can_receive(CanBusClientState *client)
+{
+    Stm32g474FdcanChannel *channel =
+        container_of(client, Stm32g474FdcanChannel, bus_client);
+
+    if (stm32g474_fdcan_loopback_enabled(channel)) {
+        return false;
+    }
+    return m_can_can_receive(&channel->engine);
+}
+
+static ssize_t
+stm32g474_fdcan_receive(CanBusClientState *client,
+                        const qemu_can_frame *frames, size_t count)
+{
+    Stm32g474FdcanChannel *channel =
+        container_of(client, Stm32g474FdcanChannel, bus_client);
+
+    if (stm32g474_fdcan_loopback_enabled(channel)) {
+        return 0;
+    }
+    return m_can_receive(&channel->engine, frames, count);
+}
+
+static CanBusClientInfo stm32g474_fdcan_bus_client_info = {
+    .can_receive = stm32g474_fdcan_can_receive,
+    .receive = stm32g474_fdcan_receive,
 };
 
 static void
@@ -1206,7 +1636,41 @@ stm32g474_fdcan_realize(DeviceState *dev, Error **errp)
         }
     }
     s->engines_initialized = true;
+
+    for (unsigned int i = 0;
+         i < STM32G474_FDCAN_NUM_CHANNELS; i++) {
+        Stm32g474FdcanChannel *channel = &s->channel[i];
+
+        if (!s->canbus[i]) {
+            continue;
+        }
+        channel->bus_client.info =
+            &stm32g474_fdcan_bus_client_info;
+        channel->bus_client.fd_mode = true;
+        if (can_bus_insert_client(s->canbus[i],
+                                  &channel->bus_client) < 0) {
+            for (unsigned int registered = 0;
+                 registered < i; registered++) {
+                can_bus_remove_client(
+                    &s->channel[registered].bus_client);
+            }
+            error_setg(errp, TYPE_STM32G474_FDCAN
+                       ": failed to attach channel %u to CAN bus",
+                       i + 1);
+            return;
+        }
+    }
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->message_ram);
+}
+
+static void stm32g474_fdcan_unrealize(DeviceState *dev)
+{
+    Stm32g474FdcanState *s = STM32G474_FDCAN(dev);
+
+    for (unsigned int i = 0;
+         i < STM32G474_FDCAN_NUM_CHANNELS; i++) {
+        can_bus_remove_client(&s->channel[i].bus_client);
+    }
 }
 
 static const Property stm32g474_fdcan_properties[] = {
@@ -1217,6 +1681,14 @@ static const Property stm32g474_fdcan_properties[] = {
     DEFINE_PROP_LINK("canbus2", Stm32g474FdcanState, canbus[2],
                      TYPE_CAN_BUS, CanBusState *),
 };
+
+static void
+stm32g474_fdcan_clock_update(void *opaque, ClockEvent event)
+{
+    Stm32g474FdcanState *s = STM32G474_FDCAN(opaque);
+
+    stm32g474_fdcan_try_transmit_all(s);
+}
 
 static void stm32g474_fdcan_init(Object *obj)
 {
@@ -1248,9 +1720,12 @@ static void stm32g474_fdcan_init(Object *obj)
         }
     }
 
-    s->kernel_clk = qdev_init_clock_in(dev, "kernel-clk",
-                                       NULL, NULL, 0);
-    s->pclk = qdev_init_clock_in(dev, "pclk", NULL, NULL, 0);
+    s->kernel_clk = qdev_init_clock_in(
+        dev, "kernel-clk", stm32g474_fdcan_clock_update,
+        s, ClockUpdate);
+    s->pclk = qdev_init_clock_in(
+        dev, "pclk", stm32g474_fdcan_clock_update,
+        s, ClockUpdate);
     qdev_init_gpio_in_named(dev, stm32g474_fdcan_reset_input,
                             "reset", 1);
 }
@@ -1262,6 +1737,7 @@ stm32g474_fdcan_class_init(ObjectClass *klass, const void *data)
     ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->realize = stm32g474_fdcan_realize;
+    dc->unrealize = stm32g474_fdcan_unrealize;
     dc->vmsd = &vmstate_stm32g474_fdcan;
     dc->user_creatable = false;
     device_class_set_props(dc, stm32g474_fdcan_properties);
