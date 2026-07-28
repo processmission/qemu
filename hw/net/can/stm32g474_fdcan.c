@@ -167,19 +167,19 @@ REG32(TXFQS, 0x0c4)
     FIELD(TXFQS, TFQPI, 16, 2)
     FIELD(TXFQS, TFQF, 21, 1)
 REG32(TXBRP, 0x0c8)
-    FIELD(TXBRP, TRP, 0, 3)
+    FIELD(TXBRP, TRP, 0, 32)
 REG32(TXBAR, 0x0cc)
-    FIELD(TXBAR, AR, 0, 3)
+    FIELD(TXBAR, AR, 0, 32)
 REG32(TXBCR, 0x0d0)
-    FIELD(TXBCR, CR, 0, 3)
+    FIELD(TXBCR, CR, 0, 32)
 REG32(TXBTO, 0x0d4)
-    FIELD(TXBTO, TO, 0, 3)
+    FIELD(TXBTO, TO, 0, 32)
 REG32(TXBCF, 0x0d8)
-    FIELD(TXBCF, CF, 0, 3)
+    FIELD(TXBCF, CF, 0, 32)
 REG32(TXBTIE, 0x0dc)
-    FIELD(TXBTIE, TIE, 0, 3)
+    FIELD(TXBTIE, TIE, 0, 32)
 REG32(TXBCIE, 0x0e0)
-    FIELD(TXBCIE, CFIE, 0, 3)
+    FIELD(TXBCIE, CFIE, 0, 32)
 REG32(TXEFS, 0x0e4)
     FIELD(TXEFS, EFFL, 0, 3)
     FIELD(TXEFS, EFGI, 8, 2)
@@ -1198,45 +1198,31 @@ static const RegisterAccessInfo stm32g474_fdcan_regs_info[] = {
     }, {
         .name = "TXBRP",
         .addr = A_TXBRP,
-        .ro = STM32G474_FDCAN_TX_BUFFER_MASK,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
+        .ro = R_TXBRP_TRP_MASK,
     }, {
         .name = "TXBAR",
         .addr = A_TXBAR,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
         .pre_write = stm32g474_fdcan_txbar_pre_write,
         .post_write = stm32g474_fdcan_txbar_post_write,
     }, {
         .name = "TXBCR",
         .addr = A_TXBCR,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
         .pre_write = stm32g474_fdcan_txbcr_pre_write,
         .post_write = stm32g474_fdcan_txbcr_post_write,
     }, {
         .name = "TXBTO",
         .addr = A_TXBTO,
-        .ro = STM32G474_FDCAN_TX_BUFFER_MASK,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
+        .ro = R_TXBTO_TO_MASK,
     }, {
         .name = "TXBCF",
         .addr = A_TXBCF,
-        .ro = STM32G474_FDCAN_TX_BUFFER_MASK,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
+        .ro = R_TXBCF_CF_MASK,
     }, {
         .name = "TXBTIE",
         .addr = A_TXBTIE,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
     }, {
         .name = "TXBCIE",
         .addr = A_TXBCIE,
-        .rsvd = STM32G474_FDCAN_RSVD(
-            STM32G474_FDCAN_TX_BUFFER_MASK),
     }, {
         .name = "TXEFS",
         .addr = A_TXEFS,
