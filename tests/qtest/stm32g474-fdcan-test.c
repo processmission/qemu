@@ -430,6 +430,7 @@ static void test_protection_and_triggers(void)
     const FdcanController *controller = &controllers[0];
     QTestState *qts = stm32g474_qtest_start();
     const uint32_t request = BIT(0) | BIT(2);
+    const uint32_t unavailable_request = BIT(31);
 
     fdcan_writel(qts, controller, FDCAN_DBTP, UINT32_MAX);
     g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_DBTP), ==,
@@ -452,6 +453,20 @@ static void test_protection_and_triggers(void)
     g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TEST), ==, 0);
 
     fdcan_writel(qts, controller, FDCAN_CCCR, 0);
+    fdcan_writel(qts, controller, FDCAN_TXBTIE, UINT32_MAX);
+    fdcan_writel(qts, controller, FDCAN_TXBCIE, UINT32_MAX);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBTIE), ==,
+                    UINT32_MAX);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBCIE), ==,
+                    UINT32_MAX);
+    fdcan_writel(qts, controller, FDCAN_TXBAR, unavailable_request);
+    fdcan_writel(qts, controller, FDCAN_TXBCR, unavailable_request);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBAR), ==, 0);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBCR), ==, 0);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBRP), ==, 0);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBTO), ==, 0);
+    g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBCF), ==, 0);
+
     fdcan_writel(qts, controller, FDCAN_TXBCIE, BIT(2));
     fdcan_writel(qts, controller, FDCAN_TXBAR, request);
     g_assert_cmphex(fdcan_readl(qts, controller, FDCAN_TXBAR), ==, 0);
