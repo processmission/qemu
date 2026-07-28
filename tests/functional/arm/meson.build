@@ -30,6 +30,7 @@ test_arm_timeouts = {
 
 tests_arm_system_quick = [
   'migration',
+  'stm32g474',
 ]
 
 tests_arm_system_thorough = [
