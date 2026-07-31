@@ -279,6 +279,7 @@ F: include/hw/gpio/stc8g_gpio.h
 F: include/hw/i2c/stc8g_i2c.h
 F: include/hw/intc/stc8g_intc.h
 F: include/hw/mcs51/
+F: include/hw/mcs51/clock.h
 F: include/hw/misc/stc8g_mdu.h
 F: include/hw/misc/stc8g_lvd.h
 F: include/hw/misc/stc8g_sysctrl.h

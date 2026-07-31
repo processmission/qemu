@@ -15,6 +15,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "target/mcs51/cpu.h"
@@ -63,7 +64,7 @@ struct Stc8gADCState {
     uint32_t clock_frequency;
     uint16_t vdd_millivolts;
     uint64_t conversion_cycles;
-    uint32_t clock_remainder;
+    uint64_t clock_remainder;
     int64_t power_on_ns;
     int64_t last_ns;
     bool powered;
@@ -112,7 +113,7 @@ static void stc8g_adc_clock_update(void *opaque, ClockEvent event)
     }
     s->clock_frequency = clock_get_hz(s->sysclk);
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    if (s->clock_frequency && s->powered &&
+    if (clock_is_enabled(s->sysclk) && s->powered &&
         FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, START) &&
         !s->converting) {
         stc8g_adc_start(s);
@@ -146,15 +147,9 @@ static void stc8g_adc_sync(Stc8gADCState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (s->converting && s->clock_frequency) {
-        uint64_t elapsed = now - s->last_ns;
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder;
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
-
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+    if (s->converting && clock_is_enabled(s->sysclk)) {
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns, &s->clock_remainder);
         if (cycles >= s->conversion_cycles) {
             s->conversion_cycles = 0;
         } else {
@@ -162,7 +157,8 @@ static void stc8g_adc_sync(Stc8gADCState *s)
         }
     }
     s->last_ns = now;
-    if (s->converting && !s->conversion_cycles && s->clock_frequency &&
+    if (s->converting && !s->conversion_cycles &&
+        clock_is_enabled(s->sysclk) &&
         now >= s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS) {
         timer_del(s->timer);
         stc8g_adc_complete(s);
@@ -174,14 +170,14 @@ static void stc8g_adc_schedule(Stc8gADCState *s)
     int64_t deadline;
 
     timer_del(s->timer);
-    if (!s->converting || !s->clock_frequency) {
+    if (!s->converting || !clock_is_enabled(s->sysclk)) {
         return;
     }
     deadline = s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS;
     if (s->conversion_cycles) {
-        uint64_t numerator = s->conversion_cycles *
-                             NANOSECONDS_PER_SECOND - s->clock_remainder;
-        uint64_t delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+        uint64_t delta = mcs51_clock_cycles_to_ns(s->sysclk,
+                                                   s->conversion_cycles,
+                                                   s->clock_remainder);
 
         deadline = MAX(deadline, s->last_ns + MAX(1ull, delta));
     }
@@ -201,7 +197,7 @@ static void stc8g_adc_start(Stc8gADCState *s)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     unsigned channel = FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, CHS);
 
-    if (!s->clock_frequency ||
+    if (!clock_is_enabled(s->sysclk) ||
         !FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, POWER) ||
         s->converting) {
         return;
@@ -214,9 +210,8 @@ static void stc8g_adc_start(Stc8gADCState *s)
     stc8g_adc_schedule(s);
     trace_stc8g_adc_start(channel, s->sample,
                           MAX(s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS,
-                              now + DIV_ROUND_UP(s->conversion_cycles *
-                                                 NANOSECONDS_PER_SECOND,
-                                                 s->clock_frequency)) - now);
+                              now + mcs51_clock_cycles_to_ns(
+                                  s->sysclk, s->conversion_cycles, 0)) - now);
 }
 
 static uint64_t stc8g_adc_contr_pre_write(RegisterInfo *reg, uint64_t value)
@@ -314,7 +309,7 @@ static const VMStateDescription stc8g_adc_vmstate = {
                              STC8G_ADC_CHANNELS),
         VMSTATE_UINT16(sample, Stc8gADCState),
         VMSTATE_UINT64(conversion_cycles, Stc8gADCState),
-        VMSTATE_UINT32(clock_remainder, Stc8gADCState),
+        VMSTATE_UINT64(clock_remainder, Stc8gADCState),
         VMSTATE_INT64(power_on_ns, Stc8gADCState),
         VMSTATE_INT64(last_ns, Stc8gADCState),
         VMSTATE_BOOL(powered, Stc8gADCState),

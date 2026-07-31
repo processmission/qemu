@@ -867,6 +867,19 @@ static void test_sysctrl(void)
     qtest_writeb(qts, XFR(0xfe04), 0x80);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfe04)), ==, 0x81);
     assert_clock_hz(qts, SYSCTRL "/sysclk", 4096);
+    qtest_writeb(qts, XFR(0xfe01), 0xff);
+    g_assert_cmpuint(qom_get_uint(qts, SYSCTRL "/sysclk",
+                                  "qtest-clock-period"),
+                     >, CLOCK_PERIOD_1SEC / 129);
+    g_assert_cmpuint(qom_get_uint(qts, SYSCTRL "/sysclk",
+                                  "qtest-clock-period"),
+                     <, CLOCK_PERIOD_1SEC / 128);
+    for (index = 0; index < ARRAY_SIZE(sysclk_consumers); index++) {
+        g_assert_cmphex(qom_get_uint(qts, sysclk_consumers[index],
+                                     "qtest-clock-period"),
+                        ==, qom_get_uint(qts, SYSCTRL "/sysclk",
+                                          "qtest-clock-period"));
+    }
 
     qtest_system_reset(qts);
     assert_clock_hz(qts, SYSCTRL "/sysclk", 24000000);
@@ -1023,6 +1036,18 @@ static void test_mdu(void)
     qtest_clock_step(qts, 816);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x01);
     qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x00);
+
+    /* A non-integral oscillator/divider ratio retains its exact period. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, XFR(0xfe04), 0x80);
+    qtest_writeb(qts, XFR(0xfe00), 0x03);
+    qtest_writeb(qts, XFR(0xfe01), 0xff);
+    mdu_write32(qts, 0x12345678);
+    mdu_write16(qts, 0x0010);
+    qtest_writeb(qts, XFR(0xfcf6), 6 << 5);
+    qtest_writeb(qts, XFR(0xfcf7), 0x01);
+    qtest_clock_step(qts, 132500000);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x00);
 
     qtest_system_reset(qts);
@@ -1466,6 +1491,21 @@ static void test_wdt(void)
 
     qtest_writeb(qts, SFR(0xc1), 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE " -watchdog-action none");
+    qtest_writeb(qts, SFR(0xc1), 0x20);
+    for (unsigned i = 0; i < 10; i++) {
+        qtest_clock_step(qts, 1);
+        qtest_writeb(qts, SFR(0xc1), 0x20);
+    }
+    qtest_clock_step(qts, 32767989);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_clock_step(qts, 1);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    g_assert_cmpstr(qdict_get_str(qdict_get_qdict(event, "data"), "action"),
+                    ==, "none");
+    qobject_unref(event);
     qtest_quit(qts);
 
     qts = qtest_init(MACHINE " -watchdog-action none");

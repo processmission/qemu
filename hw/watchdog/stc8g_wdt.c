@@ -11,6 +11,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "hw/watchdog/stc8g_wdt.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
@@ -38,6 +39,7 @@ struct Stc8gWdtState {
     QEMUTimer *timer;
     uint64_t cycles_left;
     uint32_t clock_frequency;
+    uint64_t clock_remainder;
     int64_t last_ns;
     bool clear_requested;
 };
@@ -60,13 +62,14 @@ static void stc8g_wdt_schedule(Stc8gWdtState *s)
     uint64_t timeout;
 
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    if (!stc8g_wdt_enabled(s) || !s->clock_frequency || !s->cycles_left) {
+    if (!stc8g_wdt_enabled(s) || !clock_is_enabled(s->sysclk) ||
+        !s->cycles_left) {
         timer_del(s->timer);
         return;
     }
 
-    timeout = DIV_ROUND_UP(s->cycles_left * NANOSECONDS_PER_SECOND,
-                           s->clock_frequency);
+    timeout = mcs51_clock_cycles_to_ns(s->sysclk, s->cycles_left,
+                                       s->clock_remainder);
     timer_mod_ns(s->timer, s->last_ns + timeout);
     trace_stc8g_wdt_reload(
         FIELD_EX8(s->regs[STC8G_WDT_MMIO_CONTR], WDT_CONTR, WDT_PS),
@@ -76,6 +79,7 @@ static void stc8g_wdt_schedule(Stc8gWdtState *s)
 static void stc8g_wdt_reload(Stc8gWdtState *s)
 {
     s->cycles_left = stc8g_wdt_cycles(s);
+    s->clock_remainder = 0;
     stc8g_wdt_schedule(s);
 }
 
@@ -94,13 +98,14 @@ static void stc8g_wdt_sync(Stc8gWdtState *s)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t elapsed;
 
-    if (!stc8g_wdt_enabled(s) || !s->clock_frequency || !s->cycles_left) {
+    if (!stc8g_wdt_enabled(s) || !clock_is_enabled(s->sysclk) ||
+        !s->cycles_left) {
         s->last_ns = now;
         return;
     }
 
-    elapsed = muldiv64(now - s->last_ns, s->clock_frequency,
-                        NANOSECONDS_PER_SECOND);
+    elapsed = mcs51_clock_elapsed_cycles(s->sysclk, now - s->last_ns,
+                                         &s->clock_remainder);
     if (elapsed >= s->cycles_left) {
         stc8g_wdt_expire(s);
         return;
@@ -214,6 +219,7 @@ static const VMStateDescription stc8g_wdt_vmstate = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gWdtState, STC8G_WDT_MMIO_REGS),
         VMSTATE_UINT64(cycles_left, Stc8gWdtState),
+        VMSTATE_UINT64(clock_remainder, Stc8gWdtState),
         VMSTATE_INT64(last_ns, Stc8gWdtState),
         VMSTATE_TIMER_PTR(timer, Stc8gWdtState),
         VMSTATE_END_OF_LIST()

@@ -15,6 +15,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "hw/nvram/stc8g_iap.h"
 #include "migration/vmstate.h"
 #include "system/runstate.h"
@@ -64,7 +65,7 @@ struct Stc8gIapState {
     uint8_t pending_cmd;
     uint8_t trigger_stage;
     uint64_t remaining_read_cycles;
-    uint32_t clock_remainder;
+    uint64_t clock_remainder;
     int64_t last_ns;
     bool busy;
     bool sw_reset_requested;
@@ -87,8 +88,7 @@ static uint64_t stc8g_iap_operation_ns(Stc8gIapState *s, unsigned cmd)
 {
     switch (cmd) {
     case STC8G_IAP_CMD_READ:
-        return DIV_ROUND_UP(4 * NANOSECONDS_PER_SECOND,
-                            s->clock_frequency);
+        return mcs51_clock_cycles_to_ns(s->sysclk, 4, 0);
     case STC8G_IAP_CMD_PROGRAM:
         return 31 * STC8G_IAP_NANOSECONDS_PER_MICROSECOND;
     case STC8G_IAP_CMD_ERASE:
@@ -137,8 +137,8 @@ static void stc8g_iap_start(Stc8gIapState *s)
     s->clock_remainder = 0;
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     duration = cmd == STC8G_IAP_CMD_READ ?
-        DIV_ROUND_UP(s->remaining_read_cycles * NANOSECONDS_PER_SECOND,
-                     s->clock_frequency) : stc8g_iap_operation_ns(s, cmd);
+        mcs51_clock_cycles_to_ns(s->sysclk, s->remaining_read_cycles, 0) :
+        stc8g_iap_operation_ns(s, cmd);
     if (cmd == STC8G_IAP_CMD_READ) {
         stc8g_iap_schedule(s);
     } else {
@@ -180,15 +180,9 @@ static void stc8g_iap_sync(Stc8gIapState *s)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
     if (s->busy && s->pending_cmd == STC8G_IAP_CMD_READ &&
-        s->clock_frequency) {
-        uint64_t elapsed = now - s->last_ns;
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder;
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
-
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        clock_is_enabled(s->sysclk)) {
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns, &s->clock_remainder);
         if (cycles >= s->remaining_read_cycles) {
             s->remaining_read_cycles = 0;
             s->last_ns = now;
@@ -203,17 +197,15 @@ static void stc8g_iap_sync(Stc8gIapState *s)
 
 static void stc8g_iap_schedule(Stc8gIapState *s)
 {
-    uint64_t numerator;
     uint64_t delta;
 
     timer_del(s->timer);
     if (!s->busy || s->pending_cmd != STC8G_IAP_CMD_READ ||
-        !s->clock_frequency) {
+        !clock_is_enabled(s->sysclk)) {
         return;
     }
-    numerator = s->remaining_read_cycles * NANOSECONDS_PER_SECOND -
-                s->clock_remainder;
-    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    delta = mcs51_clock_cycles_to_ns(s->sysclk, s->remaining_read_cycles,
+                                     s->clock_remainder);
     timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
 }
 
@@ -389,7 +381,7 @@ static const VMStateDescription stc8g_iap_vmstate = {
         VMSTATE_UINT8(pending_cmd, Stc8gIapState),
         VMSTATE_UINT8(trigger_stage, Stc8gIapState),
         VMSTATE_UINT64(remaining_read_cycles, Stc8gIapState),
-        VMSTATE_UINT32(clock_remainder, Stc8gIapState),
+        VMSTATE_UINT64(clock_remainder, Stc8gIapState),
         VMSTATE_INT64(last_ns, Stc8gIapState),
         VMSTATE_BOOL(busy, Stc8gIapState),
         VMSTATE_TIMER_PTR(timer, Stc8gIapState),

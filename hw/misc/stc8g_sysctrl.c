@@ -98,22 +98,38 @@ static uint64_t stc8g_sysctrl_source_frequency(Stc8gSysctrlState *s)
     }
 }
 
+static uint64_t stc8g_sysctrl_clock_period(uint64_t source,
+                                            unsigned divider)
+{
+    uint64_t low;
+    uint64_t high;
+
+    if (!source) {
+        return 0;
+    }
+    mulu64(&low, &high, CLOCK_PERIOD_1SEC, divider);
+    divu128(&low, &high, source);
+    return low;
+}
+
 static void stc8g_sysctrl_update_clocks(Stc8gSysctrlState *s)
 {
     uint64_t source = stc8g_sysctrl_source_frequency(s);
     unsigned divider = MAX(1, s->regs[STC8G_SYSCTRL_CLKDIV]);
     unsigned mclko_divider = FIELD_EX8(
         s->regs[STC8G_SYSCTRL_MCLKOCR], MCLKOCR, MCLKODIV);
-    uint64_t sysclk = source / divider;
-    uint64_t mclko = mclko_divider ? sysclk / mclko_divider : 0;
+    uint64_t sysclk = stc8g_sysctrl_clock_period(source, divider);
+    uint64_t mclko = mclko_divider ?
+        stc8g_sysctrl_clock_period(source, divider * mclko_divider) : 0;
 
-    if (clock_set_hz(s->sysclk, sysclk)) {
+    if (clock_set(s->sysclk, sysclk)) {
         clock_propagate(s->sysclk);
     }
-    if (clock_set_hz(s->mclko, mclko)) {
+    if (clock_set(s->mclko, mclko)) {
         clock_propagate(s->mclko);
     }
-    trace_stc8g_sysctrl_clock(sysclk, mclko,
+    trace_stc8g_sysctrl_clock(clock_get_hz(s->sysclk),
+                              clock_get_hz(s->mclko),
                               FIELD_EX8(s->regs[STC8G_SYSCTRL_CLKSEL],
                                         CLKSEL, MCKSEL), divider);
 }
