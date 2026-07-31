@@ -11,6 +11,7 @@ config STC8G1K08A
     select STC8G_ADC
     select STC8G_GPIO
     select STC8G_INTC
+    select STC8G_SPI
     select STC32G_TIMER
     select STC8G_UART
 

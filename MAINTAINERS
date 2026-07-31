@@ -257,6 +257,7 @@ F: gdbstub/gdb-xml/mcs251-core.xml
 F: hw/char/stc32g_uart.c
 F: hw/char/stc8g_uart.c
 F: hw/adc/stc8g_adc.c
+F: hw/ssi/stc8g_spi.c
 F: hw/gpio/stc32g_gpio.c
 F: hw/gpio/stc8g_gpio.c
 F: hw/intc/stc8g_intc.c
@@ -265,6 +266,7 @@ F: hw/timer/stc32g_timer.c
 F: include/hw/char/stc32g_uart.h
 F: include/hw/char/stc8g_uart.h
 F: include/hw/adc/stc8g_adc.h
+F: include/hw/ssi/stc8g_spi.h
 F: include/hw/gpio/stc32g_gpio.h
 F: include/hw/gpio/stc8g_gpio.h
 F: include/hw/intc/stc8g_intc.h

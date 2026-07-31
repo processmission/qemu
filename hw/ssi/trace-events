@@ -1,3 +1,10 @@
+# stc8g_spi.c
+stc8g_spi_start(uint8_t data, uint64_t delay_ns) "tx=0x%02x delay=%" PRIu64 "ns"
+stc8g_spi_complete(uint8_t tx, uint8_t rx) "tx=0x%02x rx=0x%02x"
+stc8g_spi_collision(uint8_t data) "data=0x%02x"
+stc8g_spi_mode_change(unsigned mode) "master=%u"
+stc8g_spi_slave_receive(uint8_t data) "data=0x%02x"
+
 # aspeed_smc.c
 
 aspeed_smc_flash_set_segment(int cs, uint64_t reg, uint64_t start, uint64_t end) "CS%d segreg=0x%"PRIx64" [ 0x%"PRIx64" - 0x%"PRIx64" ]"

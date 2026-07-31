@@ -15,6 +15,7 @@
 #include "hw/gpio/stc8g_gpio.h"
 #include "hw/intc/stc8g_intc.h"
 #include "hw/mcs51/stc8g.h"
+#include "hw/ssi/stc8g_spi.h"
 #include "hw/timer/stc32g_timer.h"
 #include "system/address-spaces.h"
 #include "system/system.h"
@@ -30,6 +31,9 @@
 #define STC8G_SFR_IP2 0xb5u
 #define STC8G_SFR_IP2H 0xb6u
 #define STC8G_SFR_P3 0xb0u
+#define STC8G_SFR_SPSTAT 0xcdu
+#define STC8G_SFR_SPCTL 0xceu
+#define STC8G_SFR_SPDAT 0xcfu
 #define STC8G_SFR_AUXINTIF 0xefu
 #define STC8G_SFR_ADC_CONTR 0xbcu
 #define STC8G_SFR_ADC_RES 0xbdu
@@ -85,6 +89,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(s->intc), errp)) {
         return;
     }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->spi), errp)) {
+        return;
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->uart), errp)) {
         return;
     }
@@ -117,6 +124,12 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->intc),
                             STC8G_INTC_MMIO_AUXINTIF,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_AUXINTIF), 1);
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->spi), STC8G_SPI_MMIO_STAT,
+                            STC8G_SFR_PHYS_ADDR(STC8G_SFR_SPSTAT), 1);
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->spi), STC8G_SPI_MMIO_CTL,
+                            STC8G_SFR_PHYS_ADDR(STC8G_SFR_SPCTL), 1);
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->spi), STC8G_SPI_MMIO_DATA,
+                            STC8G_SFR_PHYS_ADDR(STC8G_SFR_SPDAT), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->uart), 0,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_SCON), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->gpio), 0,
@@ -139,6 +152,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(s->adc), 0,
                        qdev_get_gpio_in_named(s->intc, "irq-in",
                                                STC8G_INTC_ADC));
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->spi), 0,
+                       qdev_get_gpio_in_named(s->intc, "irq-in",
+                                               STC8G_INTC_SPI));
     for (i = 0; i < 2; i++) {
         qdev_connect_gpio_out_named(s->gpio, "int-line", i,
             qdev_get_gpio_in_named(s->timer, "gate", i));
@@ -158,6 +174,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "gpio", OBJECT(s->gpio));
     s->intc = qdev_new(TYPE_STC8G_INTC);
     object_property_add_child(obj, "intc", OBJECT(s->intc));
+    s->spi = qdev_new(TYPE_STC8G_SPI);
+    object_property_add_child(obj, "spi", OBJECT(s->spi));
     s->timer = qdev_new(TYPE_STC8G_TIMER);
     object_property_add_child(obj, "timer", OBJECT(s->timer));
     s->uart = qdev_new(TYPE_STC8G_UART);

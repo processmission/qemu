@@ -34,6 +34,7 @@ struct Stc8gSoCState {
     DeviceState *adc;
     DeviceState *gpio;
     DeviceState *intc;
+    DeviceState *spi;
     DeviceState *timer;
     DeviceState *uart;
 };

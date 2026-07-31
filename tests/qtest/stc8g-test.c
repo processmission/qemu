@@ -18,6 +18,7 @@
 #define ADC SOC "/adc"
 #define GPIO SOC "/gpio"
 #define INTC SOC "/intc"
+#define SPI SOC "/spi"
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (8 * 1024)
@@ -740,6 +741,46 @@ static void test_adc(void)
     qtest_quit(qts);
 }
 
+static void test_spi(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xce)), ==, 0x04);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcf)), ==, 0x00);
+
+    qtest_writeb(qts, SFR(0xce), 0xd0);
+    qtest_writeb(qts, SFR(0xcf), 0x5a);
+    qtest_writeb(qts, SFR(0xcf), 0xa5);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcf)), ==, 0x5a);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x40);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x40);
+    qtest_clock_step(qts, 500);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcf)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0xc0);
+    g_assert_true(qtest_get_irq(qts, IRQ_SPI));
+    qtest_writeb(qts, SFR(0xcd), 0xc0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    g_assert_false(qtest_get_irq(qts, IRQ_SPI));
+
+    qtest_writeb(qts, SFR(0xce), 0x50);
+    qtest_set_irq_in(qts, SPI, "ss-in", 0, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xce)), ==, 0x40);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x80);
+    qtest_writeb(qts, SFR(0xcd), 0x80);
+    qtest_set_irq_in(qts, SPI, "slave-data", 0, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcf)), ==, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x80);
+    g_assert_true(qtest_get_irq(qts, IRQ_SPI));
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xce)), ==, 0x04);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -996,6 +1037,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
     qtest_add_func("/stc8g/adc", test_adc);
+    qtest_add_func("/stc8g/spi", test_spi);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",
                    test_timer_reload_and_gates);
