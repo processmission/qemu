@@ -62,7 +62,10 @@ struct Stc32gTimerState {
     uint8_t reload_tl[2];
     uint8_t reload_th[2];
     uint8_t counter_prescale_count[2];
-    uint32_t tick_remainder[2];
+    /* Whole source-clock cycles accumulated toward the next timer tick. */
+    uint32_t clock_prescale_count[2];
+    /* Fractional source-clock cycles, in units of one nanosecond. */
+    uint32_t clock_remainder[2];
     int64_t last_ns[2];
     bool gate[2];
     bool counter_input[2];
@@ -108,15 +111,14 @@ static bool stc32g_timer_active(Stc32gTimerState *s, unsigned n,
     return stc32g_timer_counter_mode(s, n) == counter_mode;
 }
 
-static uint32_t stc32g_timer_rate(Stc32gTimerState *s, unsigned n)
+static uint32_t stc32g_timer_divider(Stc32gTimerState *s, unsigned n)
 {
     CPUMCS251State *env = &s->cpu->env;
     bool x12 = n ? FIELD_EX8(env->auxr, AUXR, T1X12) :
                    FIELD_EX8(env->auxr, AUXR, T0X12);
     uint32_t divider = x12 ? 1 : 12;
 
-    divider *= s->xfr_regs[R_TM0PS + n] + 1;
-    return MAX(1u, s->clock_frequency / divider);
+    return divider * (s->xfr_regs[R_TM0PS + n] + 1);
 }
 
 static uint32_t stc32g_timer_value(Stc32gTimerState *s, unsigned n)
@@ -233,15 +235,19 @@ static void stc32g_timer_sync(Stc32gTimerState *s, unsigned n)
 
     if (stc32g_timer_active(s, n, false)) {
         uint64_t elapsed = now - s->last_ns[n];
-        uint32_t rate = stc32g_timer_rate(s, n);
+        uint32_t divider = stc32g_timer_divider(s, n);
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder[n];
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+        uint64_t prescaled;
+        uint64_t ticks;
 
-        /* Retain sub-tick progress across register accesses and resyncs. */
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND * rate +
-                            s->tick_remainder[n];
-        uint64_t ticks = elapsed / NANOSECONDS_PER_SECOND * rate;
-
-        ticks += fraction / NANOSECONDS_PER_SECOND;
-        s->tick_remainder[n] = fraction % NANOSECONDS_PER_SECOND;
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder[n] = fraction % NANOSECONDS_PER_SECOND;
+        prescaled = cycles + s->clock_prescale_count[n];
+        ticks = prescaled / divider;
+        s->clock_prescale_count[n] = prescaled % divider;
         stc32g_timer_advance(s, n, ticks);
     }
     s->last_ns[n] = now;
@@ -259,8 +265,10 @@ static uint32_t stc32g_timer_ticks_to_overflow(Stc32gTimerState *s,
 static void stc32g_timer_schedule(Stc32gTimerState *s, unsigned n)
 {
     uint64_t ticks;
+    uint64_t cycles;
+    uint64_t numerator;
     uint64_t delta;
-    uint32_t rate;
+    uint32_t divider;
 
     timer_del(s->timer[n]);
     if (!stc32g_timer_active(s, n, false)) {
@@ -268,9 +276,10 @@ static void stc32g_timer_schedule(Stc32gTimerState *s, unsigned n)
     }
 
     ticks = stc32g_timer_ticks_to_overflow(s, n);
-    rate = stc32g_timer_rate(s, n);
-    delta = (ticks * NANOSECONDS_PER_SECOND - s->tick_remainder[n] +
-             rate - 1) / rate;
+    divider = stc32g_timer_divider(s, n);
+    cycles = ticks * divider - s->clock_prescale_count[n];
+    numerator = cycles * NANOSECONDS_PER_SECOND - s->clock_remainder[n];
+    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
     timer_mod_ns(s->timer[n], s->last_ns[n] + MAX(1ull, delta));
 }
 
@@ -425,14 +434,25 @@ static void stc32g_timer_auxr_post_write(RegisterInfo *reg, uint64_t value)
 {
     Stc32gTimerState *s = STC32G_TIMER(reg->opaque);
     CPUMCS251State *env = &s->cpu->env;
+    uint8_t old_auxr = env->auxr;
     bool flush = FIELD_EX8(env->auxr, AUXR, RAMEXE) !=
                  FIELD_EX8(value, AUXR, RAMEXE);
+    unsigned n;
 
     if (!s->resetting) {
         stc32g_timer_resync(s);
     }
     env->auxr = value;
     if (!s->resetting) {
+        for (n = 0; n < 2; n++) {
+            unsigned field = n ? R_AUXR_T1X12_SHIFT :
+                                 R_AUXR_T0X12_SHIFT;
+
+            if (extract8(old_auxr, field, 1) !=
+                extract8(value, field, 1)) {
+                s->clock_prescale_count[n] = 0;
+            }
+        }
         if (flush) {
             tlb_flush(CPU(s->cpu));
         }
@@ -467,6 +487,7 @@ static void stc32g_timer_prescaler_post_write(RegisterInfo *reg,
     unsigned n = reg - s->xfr_regs_info;
 
     s->counter_prescale_count[n] = 0;
+    s->clock_prescale_count[n] = 0;
     s->last_ns[n] = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     if (!s->resetting) {
         stc32g_timer_schedule(s, n);
@@ -578,7 +599,9 @@ static void stc32g_timer_reset(DeviceState *dev)
     memset(s->reload_th, 0, sizeof(s->reload_th));
     memset(s->counter_prescale_count, 0,
            sizeof(s->counter_prescale_count));
-    memset(s->tick_remainder, 0, sizeof(s->tick_remainder));
+    memset(s->clock_prescale_count, 0,
+           sizeof(s->clock_prescale_count));
+    memset(s->clock_remainder, 0, sizeof(s->clock_remainder));
     memset(s->counter_input, 0, sizeof(s->counter_input));
     for (n = 0; n < 2; n++) {
         s->last_ns[n] = now;
@@ -619,7 +642,8 @@ static const VMStateDescription stc32g_timer_vmstate = {
         VMSTATE_UINT8_ARRAY(reload_tl, Stc32gTimerState, 2),
         VMSTATE_UINT8_ARRAY(reload_th, Stc32gTimerState, 2),
         VMSTATE_UINT8_ARRAY(counter_prescale_count, Stc32gTimerState, 2),
-        VMSTATE_UINT32_ARRAY(tick_remainder, Stc32gTimerState, 2),
+        VMSTATE_UINT32_ARRAY(clock_prescale_count, Stc32gTimerState, 2),
+        VMSTATE_UINT32_ARRAY(clock_remainder, Stc32gTimerState, 2),
         VMSTATE_INT64_ARRAY(last_ns, Stc32gTimerState, 2),
         VMSTATE_BOOL_ARRAY(gate, Stc32gTimerState, 2),
         VMSTATE_BOOL_ARRAY(counter_input, Stc32gTimerState, 2),
@@ -641,6 +665,8 @@ static void stc32g_timer_realize(DeviceState *dev, Error **errp)
 
     if (!s->cpu) {
         error_setg(errp, "stc32g-timer requires a CPU link");
+    } else if (!s->clock_frequency) {
+        error_setg(errp, "stc32g-timer clock-frequency must be nonzero");
     }
 }
 
