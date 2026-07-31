@@ -1768,6 +1768,9 @@ typedef struct {
     uint32_t current_rom_index;
     uint32_t rom_start_address;
     AddressSpace *as;
+    hwaddr range_start;
+    uint64_t range_size;
+    bool range_limited;
     bool complete;
 } HexParser;
 
@@ -1779,6 +1782,18 @@ static int handle_record_type(HexParser *parser)
     case DATA_RECORD:
         parser->current_address =
             (parser->next_address_to_write & NEXT_ADDR_MASK) | line->address;
+        if (parser->range_limited) {
+            uint64_t offset;
+
+            if (parser->current_address < parser->range_start) {
+                return -1;
+            }
+            offset = parser->current_address - parser->range_start;
+            if (offset > parser->range_size ||
+                line->byte_count > parser->range_size - offset) {
+                return -1;
+            }
+        }
         /* verify this is a contiguous block of memory */
         if (parser->current_address != parser->next_address_to_write) {
             if (parser->current_rom_index != 0) {
@@ -1859,7 +1874,9 @@ static int handle_record_type(HexParser *parser)
 
 /* return size or -1 if error */
 static int parse_hex_blob(const char *filename, hwaddr *addr, uint8_t *hex_blob,
-                          size_t hex_blob_size, AddressSpace *as)
+                          size_t hex_blob_size, AddressSpace *as,
+                          hwaddr range_start, uint64_t range_size,
+                          bool range_limited)
 {
     bool in_process = false; /* avoid re-enter and
                               * check whether record begin with ':' */
@@ -1871,6 +1888,9 @@ static int parse_hex_blob(const char *filename, hwaddr *addr, uint8_t *hex_blob,
         .bin_buf = g_malloc(hex_blob_size),
         .start_addr = addr,
         .as = as,
+        .range_start = range_start,
+        .range_size = range_size,
+        .range_limited = range_limited,
         .complete = false
     };
 
@@ -1923,8 +1943,11 @@ out:
 }
 
 /* return size or -1 if error */
-ssize_t load_targphys_hex_as(const char *filename, hwaddr *entry,
-                             AddressSpace *as)
+static ssize_t load_targphys_hex_as_internal(const char *filename,
+                                             hwaddr *entry, AddressSpace *as,
+                                             hwaddr range_start,
+                                             uint64_t range_size,
+                                             bool range_limited)
 {
     gsize hex_blob_size;
     gchar *hex_blob;
@@ -1935,8 +1958,23 @@ ssize_t load_targphys_hex_as(const char *filename, hwaddr *entry,
     }
 
     total_size = parse_hex_blob(filename, entry, (uint8_t *)hex_blob,
-                                hex_blob_size, as);
+                                hex_blob_size, as, range_start, range_size,
+                                range_limited);
 
     g_free(hex_blob);
     return total_size;
+}
+
+ssize_t load_targphys_hex_as(const char *filename, hwaddr *entry,
+                             AddressSpace *as)
+{
+    return load_targphys_hex_as_internal(filename, entry, as, 0, 0, false);
+}
+
+ssize_t load_targphys_hex_as_range(const char *filename, hwaddr *entry,
+                                   hwaddr addr, uint64_t max_sz,
+                                   AddressSpace *as)
+{
+    return load_targphys_hex_as_internal(filename, entry, as, addr, max_sz,
+                                         true);
 }

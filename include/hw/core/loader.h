@@ -57,6 +57,22 @@ ssize_t load_image_targphys_as(const char *filename,
 ssize_t load_targphys_hex_as(const char *filename, hwaddr *entry,
                              AddressSpace *as);
 
+/**
+ * load_targphys_hex_as_range:
+ * @filename: Path to the .hex file
+ * @entry: Store the entry point given by the .hex file
+ * @addr: Lowest address accepted for data records
+ * @max_sz: Size of the accepted address range
+ * @as: The AddressSpace to load the .hex file to
+ *
+ * Load a fixed .hex file, rejecting data records outside the address range.
+ *
+ * Returns the size of the loaded .hex file on success, -1 otherwise.
+ */
+ssize_t load_targphys_hex_as_range(const char *filename, hwaddr *entry,
+                                   hwaddr addr, uint64_t max_sz,
+                                   AddressSpace *as);
+
 /** load_image_targphys:
  * Same as load_image_targphys_as(), but doesn't allow the caller to specify
  * an AddressSpace.
