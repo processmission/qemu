@@ -59,6 +59,10 @@ config STC32G_UART
     bool
     select REGISTER
 
+config STC8G_UART
+    bool
+    select REGISTER
+
 config STM32F2XX_USART
     bool
 
