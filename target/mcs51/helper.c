@@ -1142,7 +1142,7 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
         break;
     case 0xe2:
     case 0xe3:
-        address = mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
+        address = mcs251_cpu_direct_rmw_read(env, MCS251_SFR_P2) << 8 |
                   mcs251_cpu_get_reg8(
                       env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
 #ifdef TARGET_MCS251
@@ -1175,7 +1175,7 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
         break;
     case 0xf2:
     case 0xf3:
-        address = mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
+        address = mcs251_cpu_direct_rmw_read(env, MCS251_SFR_P2) << 8 |
                   mcs251_cpu_get_reg8(
                       env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
 #ifdef TARGET_MCS251
