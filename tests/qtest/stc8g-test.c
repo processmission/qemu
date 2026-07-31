@@ -20,6 +20,7 @@
 #define I2C SOC "/i2c"
 #define INTC SOC "/intc"
 #define MDU SOC "/mdu"
+#define PCA SOC "/pca"
 #define SPI SOC "/spi"
 
 #define FLASH_BASE 0x00000000
@@ -923,6 +924,85 @@ static void test_i2c(void)
     qtest_quit(qts);
 }
 
+static void test_pca(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd9)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xda)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xf9)), ==, 0x00);
+
+    /* A compare match raises CCF0 and drives the shared PCA interrupt. */
+    qtest_writeb(qts, SFR(0xea), 0x02);
+    qtest_writeb(qts, SFR(0xfa), 0x00);
+    qtest_writeb(qts, SFR(0xda), 0x49);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+    g_assert_true(qtest_get_irq(qts, IRQ_PCA));
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x40);
+    g_assert_false(qtest_get_irq(qts, IRQ_PCA));
+
+    /* CAPP/CAPN capture the current counter value on their selected edges. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x06);
+    qtest_writeb(qts, SFR(0xda), 0x31);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 1);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 0);
+    qtest_set_irq_in(qts, PCA, "ccp-in", 0, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xea)), ==, 0x01);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xfa)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 1);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 0);
+    qtest_set_irq_in(qts, PCA, "ccp-in", 0, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xea)), ==, 0x02);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE);
+    qtest_irq_intercept_out_named(qts, PCA, "ccp-out");
+
+    /* PWM reloads at period boundaries and reports configured output edges. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x08);
+    qtest_writeb(qts, SFR(0xea), 0x04);
+    qtest_writeb(qts, SFR(0xfa), 0x04);
+    qtest_writeb(qts, SFR(0xda), 0x73);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    g_assert_false(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 167);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_clock_step(qts, 10500);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+
+    /* CMOD.CPS=010 clocks PCA from the actual timer-0 overflow pulse. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x04);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_writeb(qts, SFR(0x89), 0x01);
+    qtest_writeb(qts, SFR(0x8a), 0xfe);
+    qtest_writeb(qts, SFR(0x8c), 0xff);
+    qtest_writeb(qts, SFR(0x88), 0x10);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x01);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd9)), ==, 0x00);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1181,6 +1261,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/mdu", test_mdu);
     qtest_add_func("/stc8g/i2c", test_i2c);
+    qtest_add_func("/stc8g/pca", test_pca);
     qtest_add_func("/stc8g/spi", test_spi);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",

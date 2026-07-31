@@ -128,3 +128,8 @@ imx_epit_get_freq(uint32_t freq) "ptimer frequency is %u"
 imx_epit_read(const char *name, uint32_t value) "(%s) = 0x%08x"
 imx_epit_write(const char *name, uint64_t value) "(%s, value = 0x%08" PRIx64 ")"
 imx_epit_cmp(uint32_t sr) "sr was %d"
+
+# stc8g_pca.c
+stc8g_pca_channel_event(unsigned channel, uint16_t count) "channel=%u count=0x%04x"
+stc8g_pca_output(unsigned channel, bool level, uint16_t count) "channel=%u level=%d count=0x%04x"
+stc8g_pca_overflow(void) "counter overflow"

@@ -58,6 +58,7 @@ struct Stc32gTimerState {
     QEMUTimer *timer[2];
     Stc32gTimerChannel channel[2];
     qemu_irq irq[4];
+    qemu_irq pca_clock;
     uint32_t clock_frequency;
     uint8_t reload_tl[2];
     uint8_t reload_th[2];
@@ -191,6 +192,10 @@ static void stc32g_timer_overflow(Stc32gTimerState *s, unsigned n)
     }
     stc32g_timer_update_irq(s, n ? MCS251_IRQ_TIMER1 :
                                   MCS251_IRQ_TIMER0);
+    if (!n) {
+        qemu_set_irq(s->pca_clock, 1);
+        qemu_set_irq(s->pca_clock, 0);
+    }
 }
 
 static void stc32g_timer_advance(Stc32gTimerState *s, unsigned n,
@@ -693,6 +698,7 @@ static void stc32g_timer_init(Object *obj)
     for (n = 0; n < 4; n++) {
         sysbus_init_irq(sbd, &s->irq[n]);
     }
+    qdev_init_gpio_out_named(DEVICE(obj), &s->pca_clock, "pca-clock", 1);
     qdev_init_gpio_in_named(DEVICE(obj), stc32g_timer_set_gate,
                             "gate", 2);
     qdev_init_gpio_in_named(DEVICE(obj), stc32g_timer_set_counter,
