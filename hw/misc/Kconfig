@@ -120,6 +120,10 @@ config STM32_RCC
 config STM32F2XX_SYSCFG
     bool
 
+config STC8G_MDU
+    bool
+    select REGISTER
+
 config STM32F4XX_SYSCFG
     bool
 

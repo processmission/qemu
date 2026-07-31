@@ -15,6 +15,7 @@
 #include "hw/gpio/stc8g_gpio.h"
 #include "hw/intc/stc8g_intc.h"
 #include "hw/mcs51/stc8g.h"
+#include "hw/misc/stc8g_mdu.h"
 #include "hw/ssi/stc8g_spi.h"
 #include "hw/timer/stc32g_timer.h"
 #include "system/address-spaces.h"
@@ -41,6 +42,7 @@
 #define STC8G_SFR_ADCCFG 0xdeu
 #define STC8G_XFR_P3PU 0xfe13u
 #define STC8G_XFR_ADCTIM 0xfea8u
+#define STC8G_XFR_MDU 0xfcf0u
 
 static void stc8g_soc_realize(DeviceState *dev, Error **errp)
 {
@@ -89,6 +91,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(s->intc), errp)) {
         return;
     }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->mdu), errp)) {
+        return;
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->spi), errp)) {
         return;
     }
@@ -115,6 +120,10 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_ADCCFG), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->adc), STC8G_ADC_MMIO_TIM,
                             STC8G_XFR_PHYS_ADDR(STC8G_XFR_ADCTIM), 1);
+    for (i = 0; i < STC8G_MDU_MMIO_REGS; i++) {
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->mdu), i,
+                                STC8G_XFR_PHYS_ADDR(STC8G_XFR_MDU + i), 1);
+    }
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->intc), STC8G_INTC_MMIO_IE2,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_IE2), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->intc), STC8G_INTC_MMIO_IP2,
@@ -174,6 +183,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "gpio", OBJECT(s->gpio));
     s->intc = qdev_new(TYPE_STC8G_INTC);
     object_property_add_child(obj, "intc", OBJECT(s->intc));
+    s->mdu = qdev_new(TYPE_STC8G_MDU);
+    object_property_add_child(obj, "mdu", OBJECT(s->mdu));
     s->spi = qdev_new(TYPE_STC8G_SPI);
     object_property_add_child(obj, "spi", OBJECT(s->spi));
     s->timer = qdev_new(TYPE_STC8G_TIMER);
