@@ -604,8 +604,6 @@ static void stc32g_timer_reset(DeviceState *dev)
     memset(s->clock_remainder, 0, sizeof(s->clock_remainder));
     for (n = 0; n < 2; n++) {
         s->last_ns[n] = now;
-        s->gate[n] = true;
-        s->counter_input[n] = true;
         timer_del(s->timer[n]);
     }
     for (reg = 0; reg < ARRAY_SIZE(stc32g_timer_sfr_regs_info); reg++) {
@@ -700,6 +698,8 @@ static void stc32g_timer_init(Object *obj)
     qdev_init_gpio_in_named(DEVICE(obj), stc32g_timer_set_counter,
                             "counter", 2);
     for (n = 0; n < 2; n++) {
+        s->gate[n] = true;
+        s->counter_input[n] = true;
         s->channel[n].parent = s;
         s->channel[n].index = n;
         s->timer[n] = timer_new_ns(QEMU_CLOCK_VIRTUAL,

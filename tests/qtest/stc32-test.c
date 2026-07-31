@@ -1656,6 +1656,7 @@ static void test_timer_gates(void)
         uint8_t tmod = 0x09 << (timer * 4);
 
         qtest_set_irq_in(qts, GPIO, "gpio-in", gate_pin, 0);
+        qtest_system_reset(qts);
         qtest_writeb(qts, SFR(0x89), tmod);
         timer_set_count(qts, timer, 0xff, 0xfe);
         qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
@@ -1707,6 +1708,17 @@ static void test_timer_external_counters(void)
         g_assert_cmphex(qtest_readb(qts, SFR(0x88)) &
                         timer_flag_mask(timer),
                         ==, timer_flag_mask(timer));
+
+        qtest_system_reset(qts);
+        qtest_writeb(qts, SFR(0x89), tmod);
+        timer_set_count(qts, timer, 0xff, 0xfe);
+        qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
+        qtest_set_irq_in(qts, GPIO, "gpio-in", counter_pin, 0);
+        g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
+                        ==, 0xfe);
+        gpio_pulse_falling(qts, counter_pin);
+        g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
+                        ==, 0xff);
 
         qtest_quit(qts);
     }

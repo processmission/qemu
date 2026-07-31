@@ -730,10 +730,10 @@ static void test_timer_reload_and_gates(void)
         g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
                         ==, 0xbb);
 
-        qtest_writeb(qts, SFR(0x88), 0x00);
+        qtest_set_irq_in(qts, GPIO, "gpio-in", gate_pin, 0);
+        qtest_system_reset(qts);
         qtest_writeb(qts, SFR(0x89), tmod);
         timer_set_count(qts, timer, 0xff, 0xfe);
-        qtest_set_irq_in(qts, GPIO, "gpio-in", gate_pin, 0);
         qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
         qtest_clock_step(qts, 2000);
         g_assert_cmphex(qtest_readb(qts, SFR(0x88)) &
@@ -770,6 +770,18 @@ static void test_timer_counters_and_rates(void)
         g_assert_cmphex(qtest_readb(qts, SFR(0x88)) &
                         timer_flag_mask(timer),
                         ==, timer_flag_mask(timer));
+
+        qtest_system_reset(qts);
+        qtest_writeb(qts, SFR(0x89), tmod);
+        timer_set_count(qts, timer, 0xff, 0xfe);
+        qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
+        qtest_set_irq_in(qts, GPIO, "gpio-in", counter_pin, 0);
+        g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
+                        ==, 0xfe);
+        gpio_pulse_falling(qts, counter_pin);
+        g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
+                        ==, 0xff);
+
         qtest_quit(qts);
     }
 
