@@ -740,10 +740,11 @@ static void test_timer_counters_and_rates(void)
         unsigned counter_pin = 4 + timer;
         uint8_t tmod = 0x05 << (timer * 4);
 
+        qtest_system_reset(qts);
         qtest_writeb(qts, SFR(0x89), tmod);
         timer_set_count(qts, timer, 0xff, 0xfe);
         qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
-        gpio_pulse_falling(qts, counter_pin);
+        qtest_set_irq_in(qts, GPIO, "gpio-in", counter_pin, 0);
         g_assert_cmphex(qtest_readb(qts, SFR(timer_tl_address(timer))),
                         ==, 0xff);
         gpio_pulse_falling(qts, counter_pin);
