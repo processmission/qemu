@@ -262,6 +262,10 @@ static void test_reset_registers(void)
     g_assert_cmphex(qtest_readb(qts, 0x7efea1), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, 0x7efe93), ==, 0x00);
 
+    qtest_writeb(qts, SFR(0x81), 0x55);
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x81)), ==, 0x07);
+
     qtest_quit(qts);
 }
 
