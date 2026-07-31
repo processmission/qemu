@@ -1572,6 +1572,10 @@ static void mcs251_native_displacement_move(CPUMCS251State *env,
         mcs251_cpu_set_reg(env, position, bytes,
                            mcs251_load(env, address, bytes));
     }
+    if (FIELD_EX8(opcode, MCS251_OPCODE, LONG_POINTER) &&
+        pointer_code == MCS251_DPTR_DR_CODE) {
+        mcs251_dptr_finish(env, true);
+    }
 }
 
 static void mcs251_native_shift_execute(CPUMCS251State *env,
