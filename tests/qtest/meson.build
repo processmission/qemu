@@ -150,6 +150,8 @@ qtests_alpha = ['boot-serial-test'] + \
 
 qtests_avr = [ 'boot-serial-test' ]
 
+qtests_mcs51 = [ 'stc8g-test' ]
+
 qtests_mcs251 = [ 'stc32-test' ]
 
 qtests_hppa = \
