@@ -1,0 +1,47 @@
+#
+# MCS-251 Source opcode map
+#
+# Copyright (c) 2026 Process Mission
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+
+# Decodetree's minimum instruction width is 16 bits.  MCS-251 opcodes are
+# 8 bits, so the unused upper byte is padding supplied as zero by translate.c.
+&opcode padding !extern
+@opcode padding:8 ........ &opcode
+
+{
+  SRC_BRANCH         ........ 0--- 1000 @opcode
+  SRC_DISPLACEMENT   ........ 0--- 1001 @opcode
+  SRC_EXTEND         ........ 000- 1010 @opcode
+  SRC_INCDEC         ........ 000- 1011 @opcode
+  SRC_SHIFT          ........ 0000 1110 @opcode
+  SRC_SHIFT          ........ 0001 1110 @opcode
+  SRC_SHIFT          ........ 0011 1110 @opcode
+  SRC_ADD            ........ 0010 11-- @opcode
+  SRC_ORL            ........ 0100 1100 @opcode
+  SRC_ORL            ........ 0100 1101 @opcode
+  SRC_ORL            ........ 0100 1110 @opcode
+  SRC_ANL            ........ 0101 1100 @opcode
+  SRC_ANL            ........ 0101 1101 @opcode
+  SRC_ANL            ........ 0101 1110 @opcode
+  SRC_XRL            ........ 0110 1100 @opcode
+  SRC_XRL            ........ 0110 1101 @opcode
+  SRC_XRL            ........ 0110 1110 @opcode
+  SRC_MOV            ........ 0111 1010 @opcode
+  SRC_MOV            ........ 0111 11-- @opcode
+  SRC_INDIRECT_JUMP  ........ 100- 1001 @opcode
+  SRC_EJMP           ........ 1000 1010 @opcode
+  SRC_DIV            ........ 1000 110- @opcode
+  SRC_ECALL          ........ 1001 1010 @opcode
+  SRC_SUB            ........ 1001 11-- @opcode
+  SRC_BIT            ........ 1010 1001 @opcode
+  SRC_ERET           ........ 1010 1010 @opcode
+  SRC_MUL            ........ 1010 110- @opcode
+  SRC_TRAP           ........ 1011 1001 @opcode
+  SRC_CMP            ........ 1011 11-- @opcode
+  SRC_PUSH           ........ 1100 1010 @opcode
+  SRC_POP            ........ 1101 1010 @opcode
+  SRC_RESERVED       ........ -------- @opcode
+}
