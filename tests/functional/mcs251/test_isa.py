@@ -222,6 +222,11 @@ class MCS251ISATest(QemuSystemTest):
         program.emit(0xe5, direct)
         self.classic_assert_acc(program, value)
 
+    def classic_assert_nz(self, program, value):
+        program.emit(0xe5, 0xd1)
+        program.emit(0x54, 0x22)
+        self.classic_assert_acc(program, value)
+
     @staticmethod
     def assert_branch(program, opcode, taken, name, extended):
         target = f'{name}_target'
@@ -628,20 +633,29 @@ class MCS251ISATest(QemuSystemTest):
 
         p.emit(0x78, 0x7f)
         p.emit(0x08)
+        self.classic_assert_nz(p, 0x20)
         p.emit(0xe8)
         self.classic_assert_acc(p, 0x80)
         p.emit(0x18)
         p.emit(0xe8)
         self.classic_assert_acc(p, 0x7f)
 
+        p.emit(0x74, 0xff)
+        p.emit(0x04)
+        p.emit(0xf5, 0x32)
+        self.classic_assert_nz(p, 0x02)
+        self.classic_assert_direct(p, 0x32, 0x00)
+
         p.emit(0x78, 0x22)
         p.emit(0x76, 0xfe)
         p.emit(0x06)
+        self.classic_assert_nz(p, 0x20)
         p.emit(0x16)
         p.emit(0xe6)
         self.classic_assert_acc(p, 0xfe)
         p.emit(0x75, 0x23, 0xff)
         p.emit(0x05, 0x23)
+        self.classic_assert_nz(p, 0x02)
         self.classic_assert_direct(p, 0x23, 0x00)
         p.emit(0x15, 0x23)
         self.classic_assert_direct(p, 0x23, 0xff)
