@@ -419,6 +419,18 @@ static uint64_t stc8g_pca_config_pre_write(RegisterInfo *reg,
     return value;
 }
 
+static uint64_t stc8g_pca_cmod_pre_write(RegisterInfo *reg, uint64_t value)
+{
+    Stc8gPCAState *s = STC8G_PCA(reg->opaque);
+    uint8_t old = s->regs[STC8G_PCA_CMOD];
+
+    stc8g_pca_resync(s);
+    if (FIELD_EX8(old, CMOD, CPS) != FIELD_EX8(value, CMOD, CPS)) {
+        s->clock_prescale_count = 0;
+    }
+    return value;
+}
+
 static void stc8g_pca_config_post_write(RegisterInfo *reg, uint64_t value)
 {
     Stc8gPCAState *s = STC8G_PCA(reg->opaque);
@@ -435,7 +447,7 @@ static const RegisterAccessInfo stc8g_pca_regs_info[] = {
       .post_read = stc8g_pca_counter_post_read,
       .post_write = stc8g_pca_ccon_post_write },
     { .name = "CMOD", .addr = 0, .rsvd = 0x70,
-      .pre_write = stc8g_pca_config_pre_write,
+      .pre_write = stc8g_pca_cmod_pre_write,
       .post_write = stc8g_pca_config_post_write },
     { .name = "CCAPM0", .addr = 0, .rsvd = 0x80,
       .pre_write = stc8g_pca_config_pre_write,
