@@ -1555,7 +1555,7 @@ static void mcs251_native_displacement_move(CPUMCS251State *env,
         FIELD_EX8(specifier, MCS251_SPECIFIER, MODE);
     unsigned bytes = FIELD_EX8(opcode, MCS251_OPCODE, WIDE) ? 2 : 1;
     unsigned position = data_code * bytes;
-    uint32_t displacement = mcs251_fetch16(env, pc);
+    int32_t displacement = (int16_t)mcs251_fetch16(env, pc);
     uint32_t address;
 
     if (FIELD_EX8(opcode, MCS251_OPCODE, LONG_POINTER)) {
