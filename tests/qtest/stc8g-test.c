@@ -1013,6 +1013,18 @@ static void test_mdu(void)
     g_assert_cmphex(qtest_readb(qts, XFR(0xfcf6)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)), ==, 0x00);
 
+    /* MDU operation cycles pause and resume with the system clock. */
+    mdu_write32(qts, 0x12345678);
+    mdu_write16(qts, 0x0010);
+    qtest_writeb(qts, XFR(0xfcf6), 6 << 5);
+    qtest_writeb(qts, XFR(0xfcf7), 0x01);
+    qtest_clock_step(qts, 300);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 816);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x01);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x00);
+
     qtest_system_reset(qts);
     g_assert_cmphex(mdu_read32(qts), ==, 0x00000000);
     g_assert_cmphex(mdu_read16(qts), ==, 0x0000);
