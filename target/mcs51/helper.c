@@ -911,7 +911,7 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
     case 0xb0:
         direct = mcs251_fetch8(env, pc);
         value = mcs251_bit_read(env, direct);
-        if (FIELD_EX8(opcode, MCS251_OPCODE, NEGATE)) {
+        if (opcode == 0xa0 || opcode == 0xb0) {
             value = !value;
         }
         if (FIELD_EX8(opcode, MCS251_OPCODE, HIGH_NIBBLE) == 0x7 ||

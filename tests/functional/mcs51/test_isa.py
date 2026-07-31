@@ -349,6 +349,8 @@ class MCS51ISATest(QemuSystemTest):
         self.assert_branch(p, 0x50, True, 'anl_not_bit')
         p.emit(0xc2, 0x00, 0xd3, 0x72, 0x00)
         self.assert_branch(p, 0x40, True, 'orl_bit')
+        p.emit(0xc3, 0xd2, 0x00, 0x72, 0x00)
+        self.assert_branch(p, 0x40, True, 'orl_set_bit')
         p.emit(0xd2, 0x00, 0x82, 0x00)
         self.assert_branch(p, 0x40, True, 'anl_bit')
         p.emit(0xb3)
