@@ -589,6 +589,7 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
 
         value = mcs251_cpu_get_reg8(env, reg) + 1;
         mcs251_cpu_set_reg8(env, reg, value);
+        mcs251_set_nz(env, value, 8);
         return;
     }
     if (FIELD_EX8(opcode, MCS251_OPCODE, GROUP5) == 0x03) {
@@ -722,11 +723,13 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
     case 0x04:
         value = acc + 1;
         mcs251_cpu_set_reg8(env, MCS251_REG_ACC, value);
+        mcs251_set_nz(env, value, 8);
         break;
     case 0x05:
         direct = mcs251_fetch8(env, pc);
         value = mcs251_cpu_direct_rmw_read(env, direct) + 1;
         mcs251_cpu_direct_write(env, direct, value);
+        mcs251_set_nz(env, value, 8);
         break;
     case 0x06:
     case 0x07:
@@ -734,6 +737,7 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
             env, FIELD_EX8(opcode, MCS251_OPCODE, RI)) + 1;
         mcs251_indirect_write(
             env, FIELD_EX8(opcode, MCS251_OPCODE, RI), value);
+        mcs251_set_nz(env, value, 8);
         break;
     case 0x10:
         direct = mcs251_fetch8(env, pc);
