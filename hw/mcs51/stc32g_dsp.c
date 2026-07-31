@@ -289,7 +289,7 @@ static uint32_t stc32g_dsp_sub(Stc32gDSPState *s, uint32_t lhs,
     uint64_t effective_rhs = (rhs & mask) + borrow;
     uint32_t result = (lhs - effective_rhs) & mask;
     uint32_t sign = BIT(width - 1);
-    uint32_t masked_rhs = effective_rhs & mask;
+    uint32_t masked_rhs = rhs & mask;
 
     env->flag_c = (lhs & mask) < effective_rhs;
     env->flag_ov =
