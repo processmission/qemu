@@ -16,6 +16,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/stc8g_i2c.h"
+#include "hw/mcs51/clock.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "trace.h"
@@ -76,7 +77,7 @@ struct Stc8gI2CState {
     qemu_irq irq;
     uint32_t clock_frequency;
     uint64_t remaining_cycles;
-    uint32_t clock_remainder;
+    uint64_t clock_remainder;
     int64_t last_ns;
     uint8_t pending_command;
     uint8_t slave_data;
@@ -296,15 +297,9 @@ static void stc8g_i2c_sync(Stc8gI2CState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (s->command_active && s->clock_frequency) {
-        uint64_t elapsed = now - s->last_ns;
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder;
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
-
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+    if (s->command_active && clock_is_enabled(s->sysclk)) {
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns, &s->clock_remainder);
         if (cycles >= s->remaining_cycles) {
             s->remaining_cycles = 0;
             s->last_ns = now;
@@ -319,16 +314,14 @@ static void stc8g_i2c_sync(Stc8gI2CState *s)
 
 static void stc8g_i2c_schedule(Stc8gI2CState *s)
 {
-    uint64_t numerator;
     uint64_t delta;
 
     timer_del(s->timer);
-    if (!s->command_active || !s->clock_frequency) {
+    if (!s->command_active || !clock_is_enabled(s->sysclk)) {
         return;
     }
-    numerator = s->remaining_cycles * NANOSECONDS_PER_SECOND -
-                s->clock_remainder;
-    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    delta = mcs51_clock_cycles_to_ns(s->sysclk, s->remaining_cycles,
+                                     s->clock_remainder);
     timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
 }
 
@@ -344,7 +337,7 @@ static void stc8g_i2c_issue_command(Stc8gI2CState *s, unsigned command)
 {
     unsigned clocks = stc8g_i2c_command_clocks(command);
 
-    if (!s->clock_frequency || !stc8g_i2c_enabled(s) ||
+    if (!clock_is_enabled(s->sysclk) || !stc8g_i2c_enabled(s) ||
         !stc8g_i2c_master(s) || !clocks) {
         return;
     }
@@ -357,9 +350,9 @@ static void stc8g_i2c_issue_command(Stc8gI2CState *s, unsigned command)
     stc8g_i2c_set_master_flag(s, false);
     stc8g_i2c_execute_command(s, command);
     stc8g_i2c_schedule(s);
-    trace_stc8g_i2c_command(command, DIV_ROUND_UP(
-                            s->remaining_cycles * NANOSECONDS_PER_SECOND,
-                            s->clock_frequency));
+    trace_stc8g_i2c_command(command,
+                            mcs51_clock_cycles_to_ns(s->sysclk,
+                                                     s->remaining_cycles, 0));
     stc8g_i2c_update_irq(s);
 }
 
@@ -551,7 +544,7 @@ static const VMStateDescription stc8g_i2c_vmstate = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gI2CState, STC8G_I2C_MMIO_REGS),
         VMSTATE_UINT64(remaining_cycles, Stc8gI2CState),
-        VMSTATE_UINT32(clock_remainder, Stc8gI2CState),
+        VMSTATE_UINT64(clock_remainder, Stc8gI2CState),
         VMSTATE_INT64(last_ns, Stc8gI2CState),
         VMSTATE_UINT8(pending_command, Stc8gI2CState),
         VMSTATE_UINT8(slave_data, Stc8gI2CState),

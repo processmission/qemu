@@ -14,6 +14,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "hw/timer/stc8g_pca.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
@@ -75,7 +76,7 @@ struct Stc8gPCAState {
     qemu_irq irq;
     qemu_irq ccp_out[STC8G_PCA_CHANNELS];
     uint32_t clock_frequency;
-    uint32_t clock_remainder;
+    uint64_t clock_remainder;
     uint32_t clock_prescale_count;
     int64_t last_ns;
     bool ccp_input[STC8G_PCA_CHANNELS];
@@ -311,18 +312,13 @@ static void stc8g_pca_sync(Stc8gPCAState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (s->clock_frequency && stc8g_pca_running(s) &&
+    if (clock_is_enabled(s->sysclk) && stc8g_pca_running(s) &&
         stc8g_pca_internal_clock(s)) {
-        uint64_t elapsed = now - s->last_ns;
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder;
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns, &s->clock_remainder);
         uint64_t prescaled;
         uint64_t ticks;
 
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
         prescaled = cycles + s->clock_prescale_count;
         ticks = prescaled / stc8g_pca_clock_divider(s);
         s->clock_prescale_count =
@@ -338,19 +334,18 @@ static void stc8g_pca_schedule(Stc8gPCAState *s)
 {
     uint64_t cycles;
     uint64_t delta;
-    uint64_t numerator;
     unsigned divider;
 
     timer_del(s->timer);
-    if (!s->clock_frequency || !stc8g_pca_running(s) ||
+    if (!clock_is_enabled(s->sysclk) || !stc8g_pca_running(s) ||
         !stc8g_pca_internal_clock(s)) {
         return;
     }
     divider = stc8g_pca_clock_divider(s);
     cycles = (uint64_t)stc8g_pca_next_event(s) * divider -
              s->clock_prescale_count;
-    numerator = cycles * NANOSECONDS_PER_SECOND - s->clock_remainder;
-    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    delta = mcs51_clock_cycles_to_ns(s->sysclk, cycles,
+                                     s->clock_remainder);
     timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
 }
 
@@ -580,7 +575,7 @@ static const VMStateDescription stc8g_pca_vmstate = {
     .post_load = stc8g_pca_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gPCAState, STC8G_PCA_MMIO_REGS),
-        VMSTATE_UINT32(clock_remainder, Stc8gPCAState),
+        VMSTATE_UINT64(clock_remainder, Stc8gPCAState),
         VMSTATE_UINT32(clock_prescale_count, Stc8gPCAState),
         VMSTATE_INT64(last_ns, Stc8gPCAState),
         VMSTATE_BOOL_ARRAY(ccp_input, Stc8gPCAState, STC8G_PCA_CHANNELS),

@@ -14,6 +14,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "hw/ssi/ssi.h"
 #include "hw/ssi/stc8g_spi.h"
 #include "migration/vmstate.h"
@@ -54,7 +55,7 @@ struct Stc8gSPIState {
     uint32_t clock_frequency;
     uint8_t tx_data;
     uint64_t transfer_cycles;
-    uint32_t clock_remainder;
+    uint64_t clock_remainder;
     int64_t last_ns;
     bool transfer_active;
     bool ss_level;
@@ -130,15 +131,9 @@ static void stc8g_spi_sync(Stc8gSPIState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (s->transfer_active && s->clock_frequency) {
-        uint64_t elapsed = now - s->last_ns;
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder;
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
-
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+    if (s->transfer_active && clock_is_enabled(s->sysclk)) {
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns, &s->clock_remainder);
         if (cycles >= s->transfer_cycles) {
             s->transfer_cycles = 0;
             s->last_ns = now;
@@ -153,16 +148,14 @@ static void stc8g_spi_sync(Stc8gSPIState *s)
 
 static void stc8g_spi_schedule(Stc8gSPIState *s)
 {
-    uint64_t numerator;
     uint64_t delta;
 
     timer_del(s->timer);
-    if (!s->transfer_active || !s->clock_frequency) {
+    if (!s->transfer_active || !clock_is_enabled(s->sysclk)) {
         return;
     }
-    numerator = s->transfer_cycles * NANOSECONDS_PER_SECOND -
-                s->clock_remainder;
-    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    delta = mcs51_clock_cycles_to_ns(s->sysclk, s->transfer_cycles,
+                                     s->clock_remainder);
     timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
 }
 
@@ -182,10 +175,9 @@ static void stc8g_spi_start(Stc8gSPIState *s)
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->transfer_active = true;
     stc8g_spi_schedule(s);
-    trace_stc8g_spi_start(s->tx_data, s->clock_frequency ?
-                          DIV_ROUND_UP(s->transfer_cycles *
-                                       NANOSECONDS_PER_SECOND,
-                                       s->clock_frequency) : 0);
+    trace_stc8g_spi_start(s->tx_data,
+                          mcs51_clock_cycles_to_ns(s->sysclk,
+                                                   s->transfer_cycles, 0));
 }
 
 static uint64_t stc8g_spi_data_pre_write(RegisterInfo *reg, uint64_t value)
@@ -318,7 +310,7 @@ static const VMStateDescription stc8g_spi_vmstate = {
         VMSTATE_UINT8_ARRAY(regs, Stc8gSPIState, STC8G_SPI_REGS),
         VMSTATE_UINT8(tx_data, Stc8gSPIState),
         VMSTATE_UINT64(transfer_cycles, Stc8gSPIState),
-        VMSTATE_UINT32(clock_remainder, Stc8gSPIState),
+        VMSTATE_UINT64(clock_remainder, Stc8gSPIState),
         VMSTATE_INT64(last_ns, Stc8gSPIState),
         VMSTATE_BOOL(transfer_active, Stc8gSPIState),
         VMSTATE_BOOL(ss_level, Stc8gSPIState),

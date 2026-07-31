@@ -15,6 +15,7 @@
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
+#include "hw/mcs51/clock.h"
 #include "hw/timer/stc32g_timer.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
@@ -67,8 +68,8 @@ struct Stc32gTimerState {
     uint8_t counter_prescale_count[2];
     /* Whole source-clock cycles accumulated toward the next timer tick. */
     uint32_t clock_prescale_count[2];
-    /* Fractional source-clock cycles, in units of one nanosecond. */
-    uint32_t clock_remainder[2];
+    /* Fractional source-clock cycles, in Clock period units. */
+    uint64_t clock_remainder[2];
     int64_t last_ns[2];
     bool gate[2];
     bool counter_input[2];
@@ -246,18 +247,13 @@ static void stc32g_timer_sync(Stc32gTimerState *s, unsigned n)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (s->clock_frequency && stc32g_timer_active(s, n, false)) {
-        uint64_t elapsed = now - s->last_ns[n];
+    if (clock_is_enabled(s->sysclk) && stc32g_timer_active(s, n, false)) {
         uint32_t divider = stc32g_timer_divider(s, n);
-        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
-                            s->clock_frequency + s->clock_remainder[n];
-        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
-                          s->clock_frequency;
+        uint64_t cycles = mcs51_clock_elapsed_cycles(
+            s->sysclk, now - s->last_ns[n], &s->clock_remainder[n]);
         uint64_t prescaled;
         uint64_t ticks;
 
-        cycles += fraction / NANOSECONDS_PER_SECOND;
-        s->clock_remainder[n] = fraction % NANOSECONDS_PER_SECOND;
         prescaled = cycles + s->clock_prescale_count[n];
         ticks = prescaled / divider;
         s->clock_prescale_count[n] = prescaled % divider;
@@ -279,20 +275,20 @@ static void stc32g_timer_schedule(Stc32gTimerState *s, unsigned n)
 {
     uint64_t ticks;
     uint64_t cycles;
-    uint64_t numerator;
     uint64_t delta;
     uint32_t divider;
 
     timer_del(s->timer[n]);
-    if (!s->clock_frequency || !stc32g_timer_active(s, n, false)) {
+    if (!clock_is_enabled(s->sysclk) ||
+        !stc32g_timer_active(s, n, false)) {
         return;
     }
 
     ticks = stc32g_timer_ticks_to_overflow(s, n);
     divider = stc32g_timer_divider(s, n);
     cycles = ticks * divider - s->clock_prescale_count[n];
-    numerator = cycles * NANOSECONDS_PER_SECOND - s->clock_remainder[n];
-    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    delta = mcs51_clock_cycles_to_ns(s->sysclk, cycles,
+                                     s->clock_remainder[n]);
     timer_mod_ns(s->timer[n], s->last_ns[n] + MAX(1ull, delta));
 }
 
@@ -674,7 +670,7 @@ static const VMStateDescription stc32g_timer_vmstate = {
         VMSTATE_UINT8_ARRAY(reload_th, Stc32gTimerState, 2),
         VMSTATE_UINT8_ARRAY(counter_prescale_count, Stc32gTimerState, 2),
         VMSTATE_UINT32_ARRAY(clock_prescale_count, Stc32gTimerState, 2),
-        VMSTATE_UINT32_ARRAY(clock_remainder, Stc32gTimerState, 2),
+        VMSTATE_UINT64_ARRAY(clock_remainder, Stc32gTimerState, 2),
         VMSTATE_INT64_ARRAY(last_ns, Stc32gTimerState, 2),
         VMSTATE_BOOL_ARRAY(gate, Stc32gTimerState, 2),
         VMSTATE_BOOL_ARRAY(counter_input, Stc32gTimerState, 2),
@@ -698,6 +694,8 @@ static void stc32g_timer_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "stc32g-timer requires a CPU link");
     } else if (!s->clock_frequency) {
         error_setg(errp, "stc32g-timer clock-frequency must be nonzero");
+    } else if (!clock_has_source(s->sysclk)) {
+        clock_set_hz(s->sysclk, s->clock_frequency);
     }
 }
 
