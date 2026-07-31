@@ -551,9 +551,7 @@ static void stc8g_pca_reset(DeviceState *dev)
     s->clock_remainder = 0;
     s->clock_prescale_count = 0;
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    memset(s->ccp_input, 0, sizeof(s->ccp_input));
     memset(s->ccp_output, 0, sizeof(s->ccp_output));
-    s->eci_input = false;
     for (index = 0; index < ARRAY_SIZE(stc8g_pca_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }

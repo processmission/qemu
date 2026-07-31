@@ -1119,6 +1119,23 @@ static void test_pca(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0xea)), ==, 0x02);
     g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
 
+    /* Preserve externally driven edge history over a system reset. */
+    qtest_system_reset(qts);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 1);
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x06);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_set_irq_in(qts, PCA, "eci", 0, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x01);
+
+    qtest_system_reset(qts);
+    qtest_set_irq_in(qts, PCA, "ccp-in", 0, 1);
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xda), 0x11);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_set_irq_in(qts, PCA, "ccp-in", 0, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
+
     qtest_quit(qts);
 
     qts = qtest_init(MACHINE);
