@@ -1484,7 +1484,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_source_binary_and_escape_maps(self):
         firmware = self.build_firmware()
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -1494,7 +1494,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_intel_hex_firmware(self):
         firmware = self.convert_to_ihex(self.build_firmware())
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -1504,7 +1504,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_classic_instruction_set(self):
         firmware = self.build_classic_firmware()
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -1515,7 +1515,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_native_instruction_set(self):
         firmware = self.build_native_firmware()
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -1526,7 +1526,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_tfpu_command_set(self):
         firmware = self.build_tfpu_firmware()
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -1538,7 +1538,7 @@ class MCS251ISATest(QemuSystemTest):
         firmware = self.build_interrupt_firmware()
         log = Path(self.scratch_file('mcs251-interrupt.log'))
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware),
                          '-d', 'int,cpu_reset,trace:mcs51_*',
                          '-D', str(log))
@@ -1560,7 +1560,7 @@ class MCS251ISATest(QemuSystemTest):
     def test_timer0_mode3_interrupt_is_latched_nmi(self):
         firmware = self.build_interrupt_firmware(mode3=True)
 
-        self.set_machine('stc32g144k246-evb')
+        self.set_machine('stc32g144k246')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()

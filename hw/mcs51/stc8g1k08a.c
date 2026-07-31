@@ -16,7 +16,7 @@
 #include "qom/object.h"
 
 #define TYPE_STC8G1K08A_MACHINE \
-    MACHINE_TYPE_NAME("stc8g1k08a-evb")
+    MACHINE_TYPE_NAME("stc8g1k08a")
 OBJECT_DECLARE_SIMPLE_TYPE(Stc8g1k08aMachineState,
                            STC8G1K08A_MACHINE)
 

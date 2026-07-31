@@ -12,7 +12,7 @@
 #include "qemu/sockets.h"
 #include "libqtest.h"
 
-#define MACHINE "-M stc32g144k246-evb"
+#define MACHINE "-M stc32g144k246"
 #define SOC "/machine/soc"
 #define CPU SOC "/cpu"
 #define GPIO SOC "/gpio"

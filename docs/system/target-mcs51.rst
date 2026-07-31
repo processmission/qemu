@@ -15,10 +15,10 @@ mode at build time.  Build both with::
 The resulting executables and models are:
 
 ``qemu-system-mcs51``
-  Provides the ``mcs51-cpu`` CPU and the ``stc8g1k08a-evb`` machine.
+  Provides the ``mcs51-cpu`` CPU and the ``stc8g1k08a`` machine.
 
 ``qemu-system-mcs251``
-  Provides the ``mcs251-cpu`` CPU and the ``stc32g144k246-evb`` machine.
+  Provides the ``mcs251-cpu`` CPU and the ``stc32g144k246`` machine.
 
 Interrupts, exceptions, and diagnostics
 ---------------------------------------
@@ -37,19 +37,19 @@ reported in the TFPU status register and do not vector through the CPU.
 QEMU's interrupt and reset logs show IRQ input transitions, accepted vectors,
 priority and nesting state, and interrupt returns.  For example::
 
-  qemu-system-mcs251 -M stc32g144k246-evb -bios firmware.hex \
+  qemu-system-mcs251 -M stc32g144k246 -bios firmware.hex \
       -d int,cpu_reset -D mcs251.log -nographic
 
 The same transitions are available as ``mcs51_cpu_reset``,
 ``mcs51_irq_set``, ``mcs51_irq_take``, and ``mcs51_irq_return`` trace events::
 
-  qemu-system-mcs51 -M stc8g1k08a-evb -bios firmware.hex \
+  qemu-system-mcs51 -M stc8g1k08a -bios firmware.hex \
       -d trace:mcs51_* -D mcs51-trace.log -nographic
 
 STC8G1K08A machine
 ------------------
 
-The ``stc8g1k08a-evb`` machine contains one classic MCS-51 CPU and an
+The ``stc8g1k08a`` machine contains one classic MCS-51 CPU and an
 STC8G1K08A MCU with 8 KiB of user Flash, 256 bytes of internal data RAM, and
 1 KiB of extended data RAM.
 
@@ -64,7 +64,7 @@ Flash.  The CPU always resets at ``0x0000``.
 
 For example::
 
-  qemu-system-mcs51 -M stc8g1k08a-evb \
+  qemu-system-mcs51 -M stc8g1k08a \
       -bios firmware.hex -nographic
 
 CPU and memory
@@ -161,7 +161,7 @@ optional start-address record.
 
 For example::
 
-  qemu-system-mcs251 -M stc32g144k246-evb \
+  qemu-system-mcs251 -M stc32g144k246 \
       -bios firmware.hex -nographic
 
 Booting a raw flash image
@@ -175,7 +175,7 @@ exceed 246 KiB.
 
 For example::
 
-  qemu-system-mcs251 -M stc32g144k246-evb \
+  qemu-system-mcs251 -M stc32g144k246 \
       -bios firmware.bin -nographic
 
 CPU and instruction set
