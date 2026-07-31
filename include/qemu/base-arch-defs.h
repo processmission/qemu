@@ -39,6 +39,8 @@ enum {
     QEMU_ARCH_AVR =         (1UL << SYS_EMU_TARGET_AVR),
     QEMU_ARCH_HEXAGON =     (1UL << SYS_EMU_TARGET_HEXAGON),
     QEMU_ARCH_LOONGARCH =   (1UL << SYS_EMU_TARGET_LOONGARCH64),
+    QEMU_ARCH_MCS51 =       (1UL << SYS_EMU_TARGET_MCS51) |
+                            (1UL << SYS_EMU_TARGET_MCS251),
     QEMU_ARCH_ALL =         UINT32_MAX,
 };
 
