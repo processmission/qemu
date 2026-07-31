@@ -13,6 +13,10 @@ config RK3588_SECURE_OTP
     bool
     select REGISTER
 
+config STC8G_IAP
+    bool
+    select REGISTER
+
 # NMC93XX uses the NS uWire interface (similar to SPI but less configurable)
 config NMC93XX_EEPROM
     bool

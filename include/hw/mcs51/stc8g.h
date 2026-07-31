@@ -19,6 +19,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(Stc8gSoCState, STC8G_SOC)
 
 #define STC8G_FLASH_BASE MCS51_CODE_PHYS_BASE
 #define STC8G_FLASH_SIZE (8 * KiB)
+#define STC8G_EEPROM_BASE (STC8G_FLASH_BASE + STC8G_FLASH_SIZE)
+#define STC8G_EEPROM_SIZE (4 * KiB)
 #define STC8G_IDATA_BASE MCS51_IDATA_PHYS_BASE
 #define STC8G_IDATA_SIZE 256
 #define STC8G_XDATA_BASE MCS51_XDATA_PHYS_BASE
@@ -34,6 +36,7 @@ struct Stc8gSoCState {
     DeviceState *adc;
     DeviceState *gpio;
     DeviceState *i2c;
+    DeviceState *iap;
     DeviceState *intc;
     DeviceState *mdu;
     DeviceState *pca;

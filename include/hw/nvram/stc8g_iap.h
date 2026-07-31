@@ -1,0 +1,34 @@
+/*
+ * STC8G1K08A IAP and EEPROM controller
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#ifndef HW_NVRAM_STC8G_IAP_H
+#define HW_NVRAM_STC8G_IAP_H
+
+#include "qom/object.h"
+
+#define TYPE_STC8G_IAP "stc8g-iap"
+OBJECT_DECLARE_SIMPLE_TYPE(Stc8gIapState, STC8G_IAP)
+
+#define STC8G_IAP_EEPROM_SIZE 4096
+#define STC8G_IAP_SECTOR_SIZE 512
+
+enum Stc8gIapMMIO {
+    STC8G_IAP_MMIO_DATA,
+    STC8G_IAP_MMIO_ADDRH,
+    STC8G_IAP_MMIO_ADDRL,
+    STC8G_IAP_MMIO_CMD,
+    STC8G_IAP_MMIO_TRIG,
+    STC8G_IAP_MMIO_CONTR,
+    STC8G_IAP_MMIO_TPS,
+    STC8G_IAP_MMIO_EEPROM,
+    STC8G_IAP_MMIO_COUNT,
+};
+
+#define STC8G_IAP_MMIO_REGS STC8G_IAP_MMIO_EEPROM
+
+#endif
