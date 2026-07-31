@@ -276,6 +276,7 @@ typedef struct CPUArchState {
     uint32_t auxr;
     uint32_t intclko;
     uint32_t auxr2;
+    uint32_t p2;
     uint32_t p_sw2;
     uint32_t dps;
     uint32_t ckcon;

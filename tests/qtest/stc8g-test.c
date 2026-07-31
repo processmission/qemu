@@ -271,6 +271,7 @@ static void test_reset_and_memory(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0x87)), ==, 0x30);
     g_assert_cmphex(qtest_readb(qts, SFR(0x88)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0x8e)), ==, 0x01);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xa0)), ==, 0xff);
     g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xb7)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0x00);
@@ -303,6 +304,8 @@ static void test_reset_and_memory(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0x9f);
     qtest_writeb(qts, SFR(0xb8), 0xff);
     g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0x1f);
+    qtest_writeb(qts, SFR(0xa0), 0x03);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xa0)), ==, 0x03);
 
     qtest_quit(qts);
 }
