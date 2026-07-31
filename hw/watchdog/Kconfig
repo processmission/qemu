@@ -28,3 +28,7 @@ config WDT_SBSA
 config ALLWINNER_WDT
     bool
     select PTIMER
+
+config STC8G_WDT
+    bool
+    select REGISTER

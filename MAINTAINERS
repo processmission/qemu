@@ -266,6 +266,7 @@ F: hw/mcs51/
 F: hw/misc/stc8g_mdu.c
 F: hw/misc/stc8g_sysctrl.c
 F: hw/timer/stc8g_pca.c
+F: hw/watchdog/stc8g_wdt.c
 F: hw/timer/stc32g_timer.c
 F: include/hw/char/stc32g_uart.h
 F: include/hw/char/stc8g_uart.h
@@ -279,6 +280,7 @@ F: include/hw/mcs51/
 F: include/hw/misc/stc8g_mdu.h
 F: include/hw/misc/stc8g_sysctrl.h
 F: include/hw/timer/stc8g_pca.h
+F: include/hw/watchdog/stc8g_wdt.h
 F: include/hw/timer/stc32g_timer.h
 F: target/mcs51/
 F: tests/functional/mcs51/

@@ -25,6 +25,7 @@
 #define PCA SOC "/pca"
 #define SPI SOC "/spi"
 #define SYSCTRL SOC "/sysctrl"
+#define WDT SOC "/wdt"
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (8 * 1024)
@@ -1311,6 +1312,52 @@ static void test_uart1_receive(void)
     uart_test_quit(qts, socket_fd, socket_path);
 }
 
+static void test_wdt(void)
+{
+    QDict *event;
+    QTestState *qts = qtest_init(MACHINE " -watchdog-action none");
+
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0);
+    assert_clock_hz(qts, WDT "/sysclk", 24000000);
+    qtest_writeb(qts, SFR(0xc1), 0x20);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_clock_step(qts, 32767999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_clock_step(qts, 1);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    g_assert_cmpstr(qdict_get_str(qdict_get_qdict(event, "data"), "action"),
+                    ==, "none");
+    qobject_unref(event);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0xa0);
+
+    qtest_writeb(qts, SFR(0xc1), 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE " -watchdog-action none");
+    qtest_writeb(qts, XFR(0xfe01), 2);
+    assert_clock_hz(qts, WDT "/sysclk", 12000000);
+    qtest_writeb(qts, SFR(0xc1), 0x20);
+    qtest_clock_step(qts, 65536000);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    g_assert_cmpstr(qdict_get_str(qdict_get_qdict(event, "data"), "action"),
+                    ==, "none");
+    qobject_unref(event);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0xa0);
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE " -watchdog-action reset");
+    qtest_writeb(qts, SFR(0xc1), 0x20);
+    qtest_clock_step(qts, 32768000);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    g_assert_cmpstr(qdict_get_str(qdict_get_qdict(event, "data"), "action"),
+                    ==, "reset");
+    qobject_unref(event);
+    qtest_qmp_eventwait(qts, "RESET");
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0xa0);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -1349,6 +1396,7 @@ int main(int argc, char **argv)
                    test_timer_counters_and_rates);
     qtest_add_func("/stc8g/uart1/transmit", test_uart1_transmit);
     qtest_add_func("/stc8g/uart1/receive", test_uart1_receive);
+    qtest_add_func("/stc8g/wdt", test_wdt);
 
     return g_test_run();
 }
