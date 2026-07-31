@@ -50,8 +50,9 @@ STC8G1K08A machine
 ------------------
 
 The ``stc8g1k08a`` machine contains one classic MCS-51 CPU and an
-STC8G1K08A MCU with 8 KiB of user Flash, 256 bytes of internal data RAM, and
-1 KiB of extended data RAM.
+STC8G1K08A MCU with 8 KiB of user Flash, 4 KiB of EEPROM, 256 bytes of
+internal data RAM, and 1 KiB of extended data RAM.  The EEPROM is visible in
+the Code space at ``0x2000`` through ``0x2fff``.
 
 Booting firmware
 ~~~~~~~~~~~~~~~~
@@ -136,14 +137,58 @@ UART1
   interrupt are implemented.  Transmission completes at the byte-oriented
   chardev boundary.
 
+System clock and interrupts
+  The HIRC, external-oscillator, and IRC32K clock selections, divider, trim
+  controls, and MCLKO divider are modeled.  The resulting clock drives the
+  timing of the modeled Timer 0/1, PCA, ADC, SPI, I2C, and MDU devices.  The
+  extended interrupt controller provides the ADC, LVD, PCA, SPI, INT2--INT4,
+  and I2C vectors, priority controls, and ``AUXINTIF`` W1C flags.  INT2--INT4
+  requests remain latched until software acknowledges their flag.
+
+ADC and low-voltage detector
+  The 10-bit ADC implements six externally supplied input channels, the
+  internal reference channel, result alignment, conversion timing, and its
+  interrupt.  Conversion progress is retained across system-clock changes.
+  ``RSTCFG`` implements the four low-voltage thresholds, ``PCON.LVDF``, LVD
+  interrupt mode, and automatic reset mode.  The device ``vdd-millivolts``
+  input supplies the modeled voltage.
+
+PCA
+  The three-channel PCA implements its internal and external clock sources,
+  capture edges, compare and high-speed output modes, 6/7/8/10-bit PWM,
+  shadow reload, flags, interrupts, and ``ccp-out`` signals.  Timer 0 overflow
+  is connected as the PCA clock source where selected.
+
+SPI and I2C
+  SPI implements master transfers over a QEMU SSI bus, slave receive events,
+  status flags, and its interrupt.  I2C implements master start, address,
+  send, receive, acknowledge, and stop commands over a QEMU I2C bus, together
+  with the documented slave-state flags and interrupt.  SPI retains an
+  in-flight transfer when the system clock changes or stops.
+
+MDU16
+  The MDU16 XFR block implements the documented normalization, 16-bit
+  multiply/divide, and 32-bit divide operations, including result, remainder,
+  overflow, and operation timing.
+
+Watchdog, IAP, and EEPROM
+  The watchdog implements its prescaler, clear operation, timeout flag, and
+  standard QEMU watchdog action.  It retains its enabled state over warm
+  reset, as specified by the hardware.  The IAP controller implements the
+  ``0x5a``/``0xa5`` trigger sequence, timing and validation, EEPROM read,
+  program, and 512-byte erase commands.  EEPROM starts erased (``0xff``) and
+  persists across warm resets.
+
 STC8G limitations
 ~~~~~~~~~~~~~~~~~
 
-The model is functional rather than cycle exact.  UART bit timing, ninth-bit
-transport and multiprocessor address filtering, analog GPIO characteristics,
-Flash programming, watchdog, ADC, PWM, SPI, I2C, comparators, and other STC8G
-peripherals are not modeled.  Unimplemented and reserved registers read as
-zero and ignore writes.
+The model is functional rather than cycle exact.  Pin multiplexing between the
+modeled controllers and GPIO pins, MCLKO pin routing, UART bit timing,
+ninth-bit transport and multiprocessor address filtering, analog GPIO and ADC
+effects, the comparator, CPU idle/power-down behavior, and unmodeled STC8G
+peripherals are not yet implemented.  IAP does not model the factory ISP ROM
+selected by ``SWBS``.  Unimplemented and reserved registers read as zero and
+ignore writes.
 
 STC32G144K246 machine
 ---------------------
