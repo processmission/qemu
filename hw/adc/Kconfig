@@ -1,2 +1,6 @@
 config STM32F2XX_ADC
     bool
+
+config STC8G_ADC
+    bool
+    select REGISTER
