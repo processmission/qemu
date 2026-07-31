@@ -19,6 +19,7 @@
 #include "hw/mcs51/stc8g.h"
 #include "hw/misc/stc8g_mdu.h"
 #include "hw/misc/stc8g_sysctrl.h"
+#include "hw/nvram/stc8g_iap.h"
 #include "hw/ssi/stc8g_spi.h"
 #include "hw/timer/stc8g_pca.h"
 #include "hw/timer/stc32g_timer.h"
@@ -54,6 +55,8 @@
 #define STC8G_SFR_CH 0xf9u
 #define STC8G_SFR_CCAP0H 0xfau
 #define STC8G_SFR_WDT_CONTR 0xc1u
+#define STC8G_SFR_IAP_DATA 0xc2u
+#define STC8G_SFR_IAP_TPS 0xf5u
 #define STC8G_XFR_P3PU 0xfe13u
 #define STC8G_XFR_I2C 0xfe80u
 #define STC8G_XFR_SYSCTRL 0xfe00u
@@ -99,6 +102,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(s->sysctrl, "sysclk"));
     qdev_connect_clock_in(s->i2c, "sysclk",
                           qdev_get_clock_out(s->sysctrl, "sysclk"));
+    qdev_connect_clock_in(s->iap, "sysclk",
+                          qdev_get_clock_out(s->sysctrl, "sysclk"));
     qdev_connect_clock_in(s->mdu, "sysclk",
                           qdev_get_clock_out(s->sysctrl, "sysclk"));
     qdev_connect_clock_in(s->pca, "sysclk",
@@ -122,6 +127,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->i2c), errp)) {
+        return;
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->iap), errp)) {
         return;
     }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->intc), errp)) {
@@ -149,6 +157,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(sysmem, MCS51_SFR_PHYS_BASE, &s->cpu.sfr);
     memory_region_add_subregion(sysmem, MCS51_DISABLED_PHYS_BASE,
                                 &s->cpu.disabled);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->iap), STC8G_IAP_MMIO_EEPROM,
+                    STC8G_EEPROM_BASE);
 
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->timer), 0,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_TCON), 1);
@@ -165,6 +175,17 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     for (i = 0; i < STC8G_I2C_MMIO_REGS; i++) {
         sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->i2c), i,
                                 STC8G_XFR_PHYS_ADDR(STC8G_XFR_I2C + i), 1);
+    }
+    for (i = 0; i < STC8G_IAP_MMIO_REGS; i++) {
+        static const uint8_t iap_sfrs[] = {
+            STC8G_SFR_IAP_DATA, STC8G_SFR_IAP_DATA + 1,
+            STC8G_SFR_IAP_DATA + 2, STC8G_SFR_IAP_DATA + 3,
+            STC8G_SFR_IAP_DATA + 4, STC8G_SFR_IAP_DATA + 5,
+            STC8G_SFR_IAP_TPS,
+        };
+
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->iap), i,
+                                STC8G_SFR_PHYS_ADDR(iap_sfrs[i]), 1);
     }
     for (i = 0; i < STC8G_SYSCTRL_MMIO_REGS; i++) {
         static const uint16_t sysctrl_regs[] = {
@@ -265,6 +286,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "gpio", OBJECT(s->gpio));
     s->i2c = qdev_new(TYPE_STC8G_I2C);
     object_property_add_child(obj, "i2c", OBJECT(s->i2c));
+    s->iap = qdev_new(TYPE_STC8G_IAP);
+    object_property_add_child(obj, "iap", OBJECT(s->iap));
     s->intc = qdev_new(TYPE_STC8G_INTC);
     object_property_add_child(obj, "intc", OBJECT(s->intc));
     s->mdu = qdev_new(TYPE_STC8G_MDU);

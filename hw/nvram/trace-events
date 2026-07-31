@@ -1,5 +1,11 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
+# stc8g_iap.c
+stc8g_iap_start(unsigned cmd, uint16_t address, uint64_t duration) "cmd %u address 0x%04x duration %" PRIu64 "ns"
+stc8g_iap_complete(unsigned cmd, uint16_t address, uint8_t data) "cmd %u address 0x%04x data 0x%02x"
+stc8g_iap_failure(unsigned cmd, uint16_t address) "cmd %u address 0x%04x"
+stc8g_iap_software_reset(bool isp_boot) "isp boot %u"
+
 # aspeed_otp.c
 aspeed_otp_prog(uint32_t addr, uint32_t prog_value, uint32_t value) "OTP Memory program: addr 0x%" PRIx32 " prog_value 0x%" PRIx32 " value 0x%" PRIx32
 aspeed_otp_prog_conflict(uint32_t addr, uint32_t bits) "Conflict at addr=0x%x, bits=0x%08x"

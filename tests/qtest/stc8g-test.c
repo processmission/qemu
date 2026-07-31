@@ -20,6 +20,7 @@
 #define ADC SOC "/adc"
 #define GPIO SOC "/gpio"
 #define I2C SOC "/i2c"
+#define IAP SOC "/iap"
 #define INTC SOC "/intc"
 #define MDU SOC "/mdu"
 #define PCA SOC "/pca"
@@ -29,6 +30,8 @@
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (8 * 1024)
+#define EEPROM_BASE (FLASH_BASE + FLASH_SIZE)
+#define EEPROM_SIZE (4 * 1024)
 #define IDATA_BASE 0x00800000
 #define IDATA_SIZE 256
 #define XDATA_BASE 0x00810000
@@ -1358,6 +1361,66 @@ static void test_wdt(void)
     qtest_quit(qts);
 }
 
+static void iap_execute(QTestState *qts, uint8_t command, uint16_t address,
+                        uint8_t data)
+{
+    qtest_writeb(qts, SFR(0xc7), 0x80);
+    qtest_writeb(qts, SFR(0xf5), 24);
+    qtest_writeb(qts, SFR(0xc5), command);
+    qtest_writeb(qts, SFR(0xc3), address >> 8);
+    qtest_writeb(qts, SFR(0xc4), address);
+    qtest_writeb(qts, SFR(0xc2), data);
+    qtest_writeb(qts, SFR(0xc6), 0x5a);
+    qtest_writeb(qts, SFR(0xc6), 0xa5);
+}
+
+static void test_iap(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + EEPROM_SIZE - 1),
+                    ==, 0xff);
+    assert_clock_hz(qts, IAP "/sysclk", 24000000);
+
+    iap_execute(qts, 2, 0x0234, 0x5a);
+    qtest_clock_step(qts, 31000);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0x5a);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0200), ==, 0xff);
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0x5a);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0xff);
+
+    iap_execute(qts, 2, 0x0234, 0xf0);
+    qtest_clock_step(qts, 31000);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0x50);
+    iap_execute(qts, 1, 0x0234, 0);
+    qtest_clock_step(qts, 167);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0x50);
+
+    iap_execute(qts, 2, 0x0200, 0x00);
+    qtest_clock_step(qts, 31000);
+    iap_execute(qts, 3, 0x0234, 0);
+    qtest_clock_step(qts, 4571000);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0200), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0xff);
+
+    qtest_writeb(qts, SFR(0xc3), 0x10);
+    qtest_writeb(qts, SFR(0xc4), 0x00);
+    qtest_writeb(qts, SFR(0xc5), 1);
+    qtest_writeb(qts, SFR(0xc6), 0x5a);
+    qtest_writeb(qts, SFR(0xc6), 0xa5);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc7)), ==, 0x90);
+    qtest_writeb(qts, SFR(0xc7), 0x80);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc7)), ==, 0x80);
+
+    qtest_writeb(qts, SFR(0xc7), 0xa0);
+    qtest_qmp_eventwait(qts, "RESET");
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc7)), ==, 0);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -1397,6 +1460,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/uart1/transmit", test_uart1_transmit);
     qtest_add_func("/stc8g/uart1/receive", test_uart1_receive);
     qtest_add_func("/stc8g/wdt", test_wdt);
+    qtest_add_func("/stc8g/iap", test_iap);
 
     return g_test_run();
 }
