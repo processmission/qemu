@@ -602,10 +602,10 @@ static void stc32g_timer_reset(DeviceState *dev)
     memset(s->clock_prescale_count, 0,
            sizeof(s->clock_prescale_count));
     memset(s->clock_remainder, 0, sizeof(s->clock_remainder));
-    memset(s->counter_input, 0, sizeof(s->counter_input));
     for (n = 0; n < 2; n++) {
         s->last_ns[n] = now;
         s->gate[n] = true;
+        s->counter_input[n] = true;
         timer_del(s->timer[n]);
     }
     for (reg = 0; reg < ARRAY_SIZE(stc32g_timer_sfr_regs_info); reg++) {
