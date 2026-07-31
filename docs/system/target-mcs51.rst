@@ -46,12 +46,48 @@ CPU and memory
 
 The ``mcs51-cpu`` implements all 256 classic opcode encodings, including all
 addressing forms, bit operations, calls, returns, and interrupts.  Opcode
-``0xa5`` is the architecturally reserved one-byte NOP on this CPU.  Code and
-data use separate address spaces: instruction fetches address 64 KiB of code,
-direct and indirect accesses address the 256-byte internal RAM and SFR space,
-and ``MOVX`` addresses the 1 KiB extended RAM.  ``P_SW2.EAXFR`` selects the
-STC extended-register window for ``MOVX`` accesses at ``0xfa00`` through
-``0xffff``.
+``0xa5`` is the architecturally reserved one-byte NOP on this CPU.  The
+architecture has overlapping Code, IDATA, XDATA, and SFR address spaces:
+instruction fetches address 64 KiB of code, direct and indirect accesses
+address the 256-byte internal RAM and SFR space, and ``MOVX`` addresses the
+1 KiB extended RAM.  The ``MOVX @Ri`` forms use the P2 latch as address bits
+15:8.  ``P_SW2.EAXFR`` selects the STC extended-register window for ``MOVX``
+accesses at ``0xfa00`` through ``0xffff``.
+
+QEMU address-space representation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The classic architecture allows Code, IDATA, and XDATA addresses to start at
+zero while remaining distinct.  QEMU encodes the access type into disjoint
+internal physical windows in its system address space.  The CPU's MMU index
+and instruction helpers select the appropriate window:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Architectural space
+     - Guest address
+     - QEMU internal address
+   * - Code
+     - ``0x0000`` - ``0xffff``
+     - ``0x00000000`` - ``0x0000ffff``
+   * - IDATA
+     - ``0x00`` - ``0xff``
+     - ``0x00800000`` - ``0x008000ff``
+   * - XDATA
+     - ``0x0000`` - ``0xffff``
+     - ``0x00810000`` - ``0x0081ffff``
+   * - XFR
+     - ``0xfa00`` - ``0xffff``
+     - ``0x00c00000`` - ``0x00c005ff``
+   * - SFR
+     - ``0x80`` - ``0xff``
+     - ``0x01000000`` - ``0x0100007f``
+
+The high addresses reported by the monitor's ``info mtree`` command are this
+QEMU-internal encoding, not addresses on an STC8 hardware bus.  Region names
+such as ``stc8g.flash``, ``stc8g.idata``, and ``stc8g.xdata`` identify the
+architectural space represented by each window.
 
 Modeled peripherals
 ~~~~~~~~~~~~~~~~~~~
