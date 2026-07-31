@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!DOCTYPE feature SYSTEM "gdb-target.dtd">
+<feature name="org.gnu.gdb.mcs51.core">
+  <reg name="r0" bitsize="8" type="uint8" regnum="0"/>
+  <reg name="r1" bitsize="8" type="uint8"/>
+  <reg name="r2" bitsize="8" type="uint8"/>
+  <reg name="r3" bitsize="8" type="uint8"/>
+  <reg name="r4" bitsize="8" type="uint8"/>
+  <reg name="r5" bitsize="8" type="uint8"/>
+  <reg name="r6" bitsize="8" type="uint8"/>
+  <reg name="r7" bitsize="8" type="uint8"/>
+  <reg name="acc" bitsize="8" type="uint8"/>
+  <reg name="b" bitsize="8" type="uint8"/>
+  <reg name="sp" bitsize="8" type="uint8"/>
+  <reg name="dpl" bitsize="8" type="uint8"/>
+  <reg name="dph" bitsize="8" type="uint8"/>
+  <reg name="psw" bitsize="8" type="uint8"/>
+  <reg name="pc" bitsize="16" type="code_ptr"/>
+</feature>
