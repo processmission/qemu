@@ -37,6 +37,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                                 STC8G_FLASH_SIZE, errp)) {
         return;
     }
+    memset(memory_region_get_ram_ptr(&s->flash), 0xff,
+           STC8G_FLASH_SIZE);
     if (!memory_region_init_ram(&s->idata, OBJECT(s), "stc8g.idata",
                                 STC8G_IDATA_SIZE, errp)) {
         return;

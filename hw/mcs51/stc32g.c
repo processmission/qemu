@@ -60,6 +60,8 @@ static void stc32g_soc_realize(DeviceState *dev, Error **errp)
                                 STC32G_FLASH_SIZE, errp)) {
         return;
     }
+    memset(memory_region_get_ram_ptr(&s->flash), 0xff,
+           STC32G_FLASH_SIZE);
 
     if (!qdev_realize(DEVICE(&s->cpu), NULL, errp)) {
         return;
