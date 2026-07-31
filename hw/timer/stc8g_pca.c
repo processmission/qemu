@@ -76,6 +76,7 @@ struct Stc8gPCAState {
     qemu_irq ccp_out[STC8G_PCA_CHANNELS];
     uint32_t clock_frequency;
     uint32_t clock_remainder;
+    uint32_t clock_prescale_count;
     int64_t last_ns;
     bool ccp_input[STC8G_PCA_CHANNELS];
     bool ccp_output[STC8G_PCA_CHANNELS];
@@ -317,11 +318,15 @@ static void stc8g_pca_sync(Stc8gPCAState *s)
                             s->clock_frequency + s->clock_remainder;
         uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
                           s->clock_frequency;
+        uint64_t prescaled;
         uint64_t ticks;
 
         cycles += fraction / NANOSECONDS_PER_SECOND;
         s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
-        ticks = cycles / stc8g_pca_clock_divider(s);
+        prescaled = cycles + s->clock_prescale_count;
+        ticks = prescaled / stc8g_pca_clock_divider(s);
+        s->clock_prescale_count =
+            prescaled % stc8g_pca_clock_divider(s);
         if (ticks) {
             stc8g_pca_advance(s, ticks);
         }
@@ -342,7 +347,8 @@ static void stc8g_pca_schedule(Stc8gPCAState *s)
         return;
     }
     divider = stc8g_pca_clock_divider(s);
-    cycles = (uint64_t)stc8g_pca_next_event(s) * divider;
+    cycles = (uint64_t)stc8g_pca_next_event(s) * divider -
+             s->clock_prescale_count;
     numerator = cycles * NANOSECONDS_PER_SECOND - s->clock_remainder;
     delta = DIV_ROUND_UP(numerator, s->clock_frequency);
     timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
@@ -543,6 +549,7 @@ static void stc8g_pca_reset(DeviceState *dev)
 
     timer_del(s->timer);
     s->clock_remainder = 0;
+    s->clock_prescale_count = 0;
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     memset(s->ccp_input, 0, sizeof(s->ccp_input));
     memset(s->ccp_output, 0, sizeof(s->ccp_output));
@@ -576,6 +583,7 @@ static const VMStateDescription stc8g_pca_vmstate = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gPCAState, STC8G_PCA_MMIO_REGS),
         VMSTATE_UINT32(clock_remainder, Stc8gPCAState),
+        VMSTATE_UINT32(clock_prescale_count, Stc8gPCAState),
         VMSTATE_INT64(last_ns, Stc8gPCAState),
         VMSTATE_BOOL_ARRAY(ccp_input, Stc8gPCAState, STC8G_PCA_CHANNELS),
         VMSTATE_BOOL_ARRAY(ccp_output, Stc8gPCAState, STC8G_PCA_CHANNELS),
