@@ -26,6 +26,11 @@ config STM32F2XX_SPI
     bool
     select SSI
 
+config STC8G_SPI
+    bool
+    select REGISTER
+    select SSI
+
 config BCM2835_SPI
     bool
     select SSI
