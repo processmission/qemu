@@ -777,6 +777,44 @@ static void test_adc(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0xbd)), ==, 0x02);
     g_assert_cmphex(qtest_readb(qts, SFR(0xbe)), ==, 0xab);
 
+    /* In-flight conversions retain their cycle count across clock changes. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xbc), 0x80);
+    qtest_clock_step(qts, 1000000);
+    qtest_writeb(qts, SFR(0xbc), 0xc0);
+    qtest_clock_step(qts, 1000);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 1999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xa0);
+
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xbc), 0x80);
+    qtest_clock_step(qts, 1000000);
+    qtest_writeb(qts, SFR(0xbc), 0xc0);
+    qtest_clock_step(qts, 1000);
+    qtest_writeb(qts, XFR(0xfe00), 0x03);
+    qtest_clock_step(qts, 10000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_writeb(qts, XFR(0xfe00), 0x00);
+    qtest_clock_step(qts, 999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xa0);
+
+    /* START set with a stopped clock resumes when sysclk restarts. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, XFR(0xfe00), 0x03);
+    qtest_writeb(qts, SFR(0xbc), 0xc0);
+    qtest_clock_step(qts, 1000000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_writeb(qts, XFR(0xfe00), 0x00);
+    qtest_clock_step(qts, 1999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xa0);
+
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfea8)), ==, 0x2a);
