@@ -70,5 +70,9 @@ config STC32G_TIMER
     bool
     select REGISTER
 
+config STC8G_PCA
+    bool
+    select REGISTER
+
 config AVR_TIMER16
     bool
