@@ -16,6 +16,7 @@
 #define SOC "/machine/soc"
 #define CPU SOC "/cpu"
 #define GPIO SOC "/gpio"
+#define INTC SOC "/intc"
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (8 * 1024)
@@ -45,6 +46,25 @@ enum {
     IRQ_INT1,
     IRQ_TIMER1,
     IRQ_UART1,
+    IRQ_ADC,
+    IRQ_LVD,
+    IRQ_PCA,
+    IRQ_SPI,
+    IRQ_INT2,
+    IRQ_INT3,
+    IRQ_INT4,
+    IRQ_I2C,
+};
+
+enum {
+    INTC_ADC,
+    INTC_LVD,
+    INTC_PCA,
+    INTC_SPI,
+    INTC_INT2,
+    INTC_INT3,
+    INTC_INT4,
+    INTC_I2C,
 };
 
 typedef struct GPIOPinDef {
@@ -643,6 +663,45 @@ static void test_gpio_external_interrupts(void)
     qtest_quit(qts);
 }
 
+static void test_interrupt_controller(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+    unsigned source;
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xaf)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb5)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb6)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x00);
+
+    qtest_writeb(qts, SFR(0xaf), 0xff);
+    qtest_writeb(qts, SFR(0xb5), 0xff);
+    qtest_writeb(qts, SFR(0xb6), 0xff);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xaf)), ==, 0x02);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb5)), ==, 0x52);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb6)), ==, 0x52);
+
+    for (source = INTC_ADC; source <= INTC_I2C; source++) {
+        qtest_set_irq_in(qts, INTC, "irq-in", source, 1);
+        g_assert_true(qtest_get_irq(qts, IRQ_ADC + source));
+        qtest_set_irq_in(qts, INTC, "irq-in", source, 0);
+        g_assert_false(qtest_get_irq(qts, IRQ_ADC + source));
+    }
+
+    qtest_writeb(qts, SFR(0xef), 0x70);
+    qtest_set_irq_in(qts, INTC, "irq-in", INTC_INT2, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x10);
+    qtest_writeb(qts, SFR(0xef), 0x10);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x00);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xaf)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb5)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb6)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x00);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -896,6 +955,8 @@ int main(int argc, char **argv)
                    test_gpio_pullup_and_input_enable);
     qtest_add_func("/stc8g/gpio/external-interrupts",
                    test_gpio_external_interrupts);
+    qtest_add_func("/stc8g/intc/registers-and-sources",
+                   test_interrupt_controller);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",
                    test_timer_reload_and_gates);
