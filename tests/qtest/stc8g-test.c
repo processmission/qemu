@@ -1231,6 +1231,14 @@ static void test_pca(void)
     }
     g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x08);
 
+    /* Changing CMOD.CPS discards the phase of the old divider. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_clock_step(qts, 400);
+    qtest_writeb(qts, SFR(0xd9), 0x02);
+    qtest_clock_step(qts, 100);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x01);
+
     /* CMOD.CPS=010 clocks PCA from the actual timer-0 overflow pulse. */
     qtest_system_reset(qts);
     qtest_writeb(qts, SFR(0xd9), 0x04);
