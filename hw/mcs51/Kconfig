@@ -1,0 +1,10 @@
+# Copyright (c) 2026 Process Mission
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# MCS-51 family SoCs and machines
+
+config STC32G_DSP
+    bool
+    depends on MCS251
+    select REGISTER
