@@ -1541,6 +1541,9 @@ static void mcs251_native_incdec_execute(CPUMCS251State *env,
     }
     mcs251_cpu_set_reg(env, position, bytes, value);
     mcs251_set_nz(env, value, bytes * 8);
+    if (bytes == 4 && position == MCS251_REG_DPTR_FIRST) {
+        mcs251_dptr_finish(env, false);
+    }
 }
 
 static void mcs251_native_displacement_move(CPUMCS251State *env,
