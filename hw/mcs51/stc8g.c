@@ -110,11 +110,19 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "uart1", OBJECT(s->uart));
 }
 
+static void stc8g_soc_reset(DeviceState *dev)
+{
+    Stc8gSoCState *s = STC8G_SOC(dev);
+
+    cpu_reset(CPU(&s->cpu));
+}
+
 static void stc8g_soc_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = stc8g_soc_realize;
+    device_class_set_legacy_reset(dc, stc8g_soc_reset);
 }
 
 static const TypeInfo stc8g_soc_type = {

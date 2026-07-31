@@ -152,11 +152,19 @@ static void stc32g_soc_init(Object *obj)
     object_property_add_child(obj, "tfpu", OBJECT(s->tfpu));
 }
 
+static void stc32g_soc_reset(DeviceState *dev)
+{
+    Stc32gSoCState *s = STC32G_SOC(dev);
+
+    cpu_reset(CPU(&s->cpu));
+}
+
 static void stc32g_soc_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = stc32g_soc_realize;
+    device_class_set_legacy_reset(dc, stc32g_soc_reset);
 }
 
 static const TypeInfo stc32g_soc_type = {
