@@ -237,6 +237,100 @@ jobs:
       - run: ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       - run: ./build/qemu-system-x86_64-unsigned -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
 
+  build-mcs51-family-linux:
+    needs: checkapply
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            image: ubuntu-24.04
+          - arch: aarch64
+            image: ubuntu-24.04-arm
+    runs-on: ${{ matrix.image }}
+    steps:
+      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - uses: actions/checkout@v6
+      - name: Build MCS-51 family targets
+        run: >
+          podman run --pull newer --init --rm -it
+          -v "$(pwd):$(pwd)" -w "$(pwd)"
+          docker.io/pboqemu/qemu-ci:debian
+          bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
+          --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build'
+      - name: Run MCS-51 family tests
+        run: >
+          podman run --pull newer --init --rm -i
+          -v "$(pwd):$(pwd)" -w "$(pwd)"
+          docker.io/pboqemu/qemu-ci:debian
+          bash -cx './build/pyvenv/bin/meson test -C build --no-rebuild
+          --print-errorlogs qemu:qtest-mcs51/stc8g-test
+          qemu:qtest-mcs251/stc32-test qemu:func-mcs51-isa
+          qemu:func-mcs251-isa'
+
+  build-mcs51-family-macos:
+    needs: checkapply
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            image: macos-15-intel
+          - arch: aarch64
+            image: macos-26
+    runs-on: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew uninstall cmake # conflict with install command below
+      - run: |
+          # shellcheck disable=SC2046
+          brew install --quiet \
+              $(env HOMEBREW_NO_ENV_HINTS=1 brew deps --include-build qemu) \
+              bison flex
+      - run: |
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      - name: Build MCS-51 family targets
+        run: >
+          ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
+          --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build
+      - name: Run MCS-51 family tests
+        run: >
+          ./build/pyvenv/bin/meson test -C build --no-rebuild
+          --print-errorlogs qemu:qtest-mcs51/stc8g-test
+          qemu:qtest-mcs251/stc32-test qemu:func-mcs51-isa
+          qemu:func-mcs251-isa
+
+  build-mcs51-family-mingw:
+    needs: checkapply
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: MINGW64
+      - uses: actions/checkout@v6
+      - run: >
+          pacman -S --noconfirm base-devel binutils bison curl diffutils
+          flex git grep make sed ${MINGW_PACKAGE_PREFIX}-toolchain
+          ${MINGW_PACKAGE_PREFIX}-glib2 ${MINGW_PACKAGE_PREFIX}-gtk3
+          ${MINGW_PACKAGE_PREFIX}-libnfs ${MINGW_PACKAGE_PREFIX}-libssh
+          ${MINGW_PACKAGE_PREFIX}-ninja ${MINGW_PACKAGE_PREFIX}-pixman
+          ${MINGW_PACKAGE_PREFIX}-pkgconf ${MINGW_PACKAGE_PREFIX}-python
+          ${MINGW_PACKAGE_PREFIX}-SDL2 ${MINGW_PACKAGE_PREFIX}-zstd
+      - name: Build MCS-51 family targets
+        run: >
+          ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
+          --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build
+      - name: Run MCS-51 family qtests
+        run: >
+          ./build/pyvenv/bin/meson test -C build --no-rebuild
+          --print-errorlogs qemu:qtest-mcs51/stc8g-test
+          qemu:qtest-mcs251/stc32-test
+
   build-freebsd:
     needs: checkapply
     runs-on: ubuntu-24.04
