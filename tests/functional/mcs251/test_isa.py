@@ -813,6 +813,8 @@ class MCS251ISATest(QemuSystemTest):
         self.assert_branch(p, 0x40, True, 'classic_or_not_bit', False)
         self.assert_branch(p, 0x50, False,
                            'classic_or_not_bit_inverse', False)
+        p.emit(0xc3, 0xd2, 0x00, 0x72, 0x00)
+        self.assert_branch(p, 0x40, True, 'classic_or_set_bit', False)
         p.emit(0xd2, 0x00)
         p.emit(0xb0, 0x00)
         self.assert_branch(p, 0x50, True, 'classic_and_not_bit', False)
