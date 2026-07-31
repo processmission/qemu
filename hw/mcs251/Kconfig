@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config STC32G144K246
+    bool
+    default y
+    depends on MCS251

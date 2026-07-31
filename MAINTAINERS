@@ -245,6 +245,18 @@ F: gdbstub/gdb-xml/avr-cpu.xml
 F: target/avr/
 F: tests/functional/avr/
 
+STC32/MCS-251 TCG CPUs and Machines
+S: Orphan
+F: configs/devices/stc32-softmmu/
+F: configs/targets/stc32-softmmu.mak
+F: docs/system/target-stc32.rst
+F: gdbstub/gdb-xml/mcs251-core.xml
+F: hw/mcs251/
+F: include/hw/mcs251/
+F: target/mcs251/
+F: tests/functional/stc32/
+F: tests/qtest/stc32-test.c
+
 Hexagon TCG CPUs
 M: Brian Cain <brian.cain@oss.qualcomm.com>
 R: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>

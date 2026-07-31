@@ -28,6 +28,7 @@ Contents:
    target-s390x
    target-sparc
    target-sparc64
+   target-stc32
    target-i386
    target-xtensa
    target-hexagon

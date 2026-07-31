@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config MCS251
+    bool
+
+config STC32
+    bool
+    select MCS251
