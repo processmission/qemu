@@ -22,6 +22,7 @@
 #include "hw/ssi/stc8g_spi.h"
 #include "hw/timer/stc8g_pca.h"
 #include "hw/timer/stc32g_timer.h"
+#include "hw/watchdog/stc8g_wdt.h"
 #include "system/address-spaces.h"
 #include "system/system.h"
 
@@ -52,6 +53,7 @@
 #define STC8G_SFR_PCA_PWM0 0xf2u
 #define STC8G_SFR_CH 0xf9u
 #define STC8G_SFR_CCAP0H 0xfau
+#define STC8G_SFR_WDT_CONTR 0xc1u
 #define STC8G_XFR_P3PU 0xfe13u
 #define STC8G_XFR_I2C 0xfe80u
 #define STC8G_XFR_SYSCTRL 0xfe00u
@@ -105,6 +107,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                           qdev_get_clock_out(s->sysctrl, "sysclk"));
     qdev_connect_clock_in(s->timer, "sysclk",
                           qdev_get_clock_out(s->sysctrl, "sysclk"));
+    qdev_connect_clock_in(s->wdt, "sysclk",
+                          qdev_get_clock_out(s->sysctrl, "sysclk"));
     if (!sysbus_realize(SYS_BUS_DEVICE(s->gpio), errp)) {
         return;
     }
@@ -133,6 +137,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->uart), errp)) {
+        return;
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->wdt), errp)) {
         return;
     }
 
@@ -206,6 +213,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_SPDAT), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->uart), 0,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_SCON), 1);
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->wdt), STC8G_WDT_MMIO_CONTR,
+                            STC8G_SFR_PHYS_ADDR(STC8G_SFR_WDT_CONTR), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->gpio), 0,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_P3), 1);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->gpio), 1,
@@ -270,6 +279,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "timer", OBJECT(s->timer));
     s->uart = qdev_new(TYPE_STC8G_UART);
     object_property_add_child(obj, "uart1", OBJECT(s->uart));
+    s->wdt = qdev_new(TYPE_STC8G_WDT);
+    object_property_add_child(obj, "wdt", OBJECT(s->wdt));
 }
 
 static void stc8g_soc_reset(DeviceState *dev)

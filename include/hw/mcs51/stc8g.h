@@ -41,6 +41,7 @@ struct Stc8gSoCState {
     DeviceState *sysctrl;
     DeviceState *timer;
     DeviceState *uart;
+    DeviceState *wdt;
 };
 
 #endif
