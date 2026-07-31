@@ -141,9 +141,11 @@ System clock and interrupts
   The HIRC, external-oscillator, and IRC32K clock selections, divider, trim
   controls, and MCLKO divider are modeled.  The resulting clock drives the
   timing of the modeled Timer 0/1, PCA, ADC, SPI, I2C, and MDU devices.  The
-  extended interrupt controller provides the ADC, LVD, PCA, SPI, INT2--INT4,
-  and I2C vectors, priority controls, and ``AUXINTIF`` W1C flags.  INT2--INT4
-  requests remain latched until software acknowledges their flag.
+  ``PCON.IDL`` mode stops the CPU while peripherals continue, and
+  ``PCON.PD`` gates the system clock until an enabled interrupt wakes the
+  CPU.  The extended interrupt controller provides the ADC, LVD, PCA, SPI,
+  INT2--INT4, and I2C vectors, priority controls, and ``AUXINTIF`` W1C flags.
+  INT2--INT4 requests remain latched until software acknowledges their flag.
 
 ADC and low-voltage detector
   The 10-bit ADC implements six externally supplied input channels, the
@@ -185,10 +187,10 @@ STC8G limitations
 The model is functional rather than cycle exact.  Pin multiplexing between the
 modeled controllers and GPIO pins, MCLKO pin routing, UART bit timing,
 ninth-bit transport and multiprocessor address filtering, analog GPIO and ADC
-effects, the comparator, CPU idle/power-down behavior, and unmodeled STC8G
-peripherals are not yet implemented.  IAP does not model the factory ISP ROM
-selected by ``SWBS``.  Unimplemented and reserved registers read as zero and
-ignore writes.
+effects, power-down wake-source filtering, and unmodeled STC8G peripherals
+are not yet implemented.  (The modeled 8-pin STC8G1K08A does not provide a
+comparator.)  IAP does not model the factory ISP ROM selected by ``SWBS``.
+Unimplemented and reserved registers read as zero and ignore writes.
 
 STC32G144K246 machine
 ---------------------

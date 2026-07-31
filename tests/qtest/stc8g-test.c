@@ -887,6 +887,24 @@ static void test_sysctrl(void)
     qtest_quit(qts);
 }
 
+static void test_power_modes(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_writeb(qts, SFR(0x87), 0x31);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x87)), ==, 0x31);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 24000000);
+
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0x87), 0x32);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x87)), ==, 0x32);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 0);
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x87)), ==, 0x30);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 24000000);
+    qtest_quit(qts);
+}
+
 static void test_spi(void)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1657,6 +1675,7 @@ int main(int argc, char **argv)
                    test_interrupt_controller);
     qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/sysctrl", test_sysctrl);
+    qtest_add_func("/stc8g/power-modes", test_power_modes);
     qtest_add_func("/stc8g/mdu", test_mdu);
     qtest_add_func("/stc8g/i2c", test_i2c);
     qtest_add_func("/stc8g/pca", test_pca);
