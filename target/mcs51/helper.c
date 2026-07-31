@@ -11,7 +11,9 @@
 #include "internals.h"
 #include "accel/tcg/cpu-ldst.h"
 #include "exec/helper-proto.h"
+#include "exec/log.h"
 #include "qemu/plugin.h"
+#include "trace.h"
 
 static uint8_t mcs251_code_load8(CPUMCS251State *env, uint32_t addr)
 {
@@ -526,6 +528,9 @@ static void mcs251_return_extended(CPUMCS251State *env, uint32_t *pc)
 
 static void mcs251_return_interrupt(CPUMCS251State *env, uint32_t *pc)
 {
+    CPUState *cs = env_cpu(env);
+    int active;
+
 #ifndef TARGET_MCS251
     uint32_t high = mcs251_pop(env);
     uint32_t low = mcs251_pop(env);
@@ -546,6 +551,13 @@ static void mcs251_return_interrupt(CPUMCS251State *env, uint32_t *pc)
     } else {
         env->irq_level = UINT32_MAX;
     }
+    active = env->irq_level == UINT32_MAX ? -1 : env->irq_level;
+    trace_mcs51_irq_return(cs->cpu_index, *pc, active, env->irq_depth);
+    qemu_log_mask(CPU_LOG_INT,
+                  "%s: CPU %d RETI to PC=0x%06" PRIx32
+                  " active=%d depth=%u\n",
+                  object_get_typename(OBJECT(cs)), cs->cpu_index, *pc,
+                  active, env->irq_depth);
 }
 
 static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
@@ -2131,6 +2143,13 @@ void mcs251_cpu_do_interrupt(CPUState *cs)
         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
     }
     env->pc = vectors[irq];
+    trace_mcs51_irq_take(cs->cpu_index, irq, level, old_pc,
+                         env->pc, env->irq_depth);
+    qemu_log_mask(CPU_LOG_INT,
+                  "%s: CPU %d taking IRQ %u level=%u PC=0x%06" PRIx32
+                  " vector=0x%06" PRIx32 " depth=%u\n",
+                  object_get_typename(OBJECT(cs)), cs->cpu_index, irq,
+                  level, old_pc, env->pc, env->irq_depth);
     env->irq_ack = UINT32_MAX;
     qemu_plugin_vcpu_interrupt_cb(cs, old_pc);
 }

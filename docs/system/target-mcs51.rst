@@ -20,6 +20,32 @@ The resulting executables and models are:
 ``qemu-system-mcs251``
   Provides the ``mcs251-cpu`` CPU and the ``stc32g144k246-evb`` machine.
 
+Interrupts, exceptions, and diagnostics
+---------------------------------------
+
+The classic MCS-51 architecture responds to reset and vectored hardware
+interrupts.  MCS-251 adds programmable four-level interrupt priorities and
+nesting.  The STC32 Timer 0 mode-3 interrupt is modeled as a level above the
+four programmable levels.  ``RETI`` restores the saved PC and interrupt
+priority state; the MCS-251 model also restores the saved ``PSW1``.
+
+These CPUs do not define general synchronous privilege, alignment, or illegal
+instruction exceptions.  Reserved classic encodings and the MCS-251 ``TRAP``
+instruction execute as documented NOPs.  TFPU arithmetic exceptions are
+reported in the TFPU status register and do not vector through the CPU.
+
+QEMU's interrupt and reset logs show IRQ input transitions, accepted vectors,
+priority and nesting state, and interrupt returns.  For example::
+
+  qemu-system-mcs251 -M stc32g144k246-evb -bios firmware.hex \
+      -d int,cpu_reset -D mcs251.log -nographic
+
+The same transitions are available as ``mcs51_cpu_reset``,
+``mcs51_irq_set``, ``mcs51_irq_take``, and ``mcs51_irq_return`` trace events::
+
+  qemu-system-mcs51 -M stc8g1k08a-evb -bios firmware.hex \
+      -d trace:mcs51_* -D mcs51-trace.log -nographic
+
 STC8G1K08A machine
 ------------------
 
