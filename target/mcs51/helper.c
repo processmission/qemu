@@ -1142,14 +1142,11 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
         break;
     case 0xe2:
     case 0xe3:
-#ifndef TARGET_MCS251
-        address = mcs251_cpu_get_reg8(
-            env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
-#else
-        address = env->mxax << 16 |
-                  mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
+        address = mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
                   mcs251_cpu_get_reg8(
                       env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
+#ifdef TARGET_MCS251
+        address |= env->mxax << 16;
 #endif
         mcs251_cpu_set_reg8(env, MCS251_REG_ACC,
                             mcs251_xdata_load8(env, address));
@@ -1178,14 +1175,11 @@ static void mcs251_classic_execute(CPUMCS251State *env, uint8_t opcode,
         break;
     case 0xf2:
     case 0xf3:
-#ifndef TARGET_MCS251
-        address = mcs251_cpu_get_reg8(
-            env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
-#else
-        address = env->mxax << 16 |
-                  mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
+        address = mcs251_cpu_direct_read(env, MCS251_SFR_P2) << 8 |
                   mcs251_cpu_get_reg8(
                       env, FIELD_EX8(opcode, MCS251_OPCODE, RI));
+#ifdef TARGET_MCS251
+        address |= env->mxax << 16;
 #endif
         mcs251_xdata_store8(env, address, acc);
         break;

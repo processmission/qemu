@@ -35,6 +35,7 @@ const VMStateDescription vms_mcs251_cpu = {
         VMSTATE_UINT32(env.auxr, MCS251CPU),
         VMSTATE_UINT32(env.intclko, MCS251CPU),
         VMSTATE_UINT32(env.auxr2, MCS251CPU),
+        VMSTATE_UINT32(env.p2, MCS251CPU),
         VMSTATE_UINT32(env.p_sw2, MCS251CPU),
         VMSTATE_UINT32(env.dps, MCS251CPU),
         VMSTATE_UINT32(env.ckcon, MCS251CPU),

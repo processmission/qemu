@@ -287,6 +287,8 @@ static uint64_t mcs251_cpu_sfr_read(void *opaque, hwaddr offset,
     case MCS251_SFR_AUXR2:
         return env->auxr2;
 #endif
+    case MCS251_SFR_P2:
+        return env->p2;
     case MCS251_SFR_IE:
         return env->ie;
     case MCS251_SFR_IPH:
@@ -374,6 +376,9 @@ static void mcs251_cpu_sfr_write(void *opaque, hwaddr offset,
         env->auxr2 = byte & R_AUXR2_CPUMODE_MASK;
         break;
 #endif
+    case MCS251_SFR_P2:
+        env->p2 = byte;
+        break;
     case MCS251_SFR_IE:
         env->ie = byte & MCS251_IE_WRITABLE_MASK;
         if (env->timer0_mode3 && FIELD_EX8(env->ie, IE, ET0)) {
@@ -508,6 +513,7 @@ static void mcs251_cpu_reset_hold(Object *obj, ResetType type)
     env->regs[MCS251_REG_SP] = 0x07;
     env->pcon = 0x30;
     env->auxr = 0x01;
+    env->p2 = 0xff;
 #ifdef TARGET_MCS251
     env->ckcon = 0x07;
     env->mxax = 0x01;
