@@ -277,10 +277,6 @@ static void stc8g_gpio_reset(DeviceState *dev)
     unsigned index;
 
     s->resetting = true;
-    s->external_level[STC8G_GPIO_PORT3] = 0x0f;
-    s->external_level[STC8G_GPIO_PORT5] = 0x30;
-    s->external_driven[STC8G_GPIO_PORT3] = 0x0f;
-    s->external_driven[STC8G_GPIO_PORT5] = 0x30;
     for (index = 0; index < ARRAY_SIZE(stc8g_gpio_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }
@@ -333,6 +329,10 @@ static void stc8g_gpio_init(Object *obj)
                       STC8G_GPIO_REGS);
     QEMU_BUILD_BUG_ON(ARRAY_SIZE(stc8g_gpio_reg_defs) !=
                       STC8G_GPIO_REGS);
+    s->external_level[STC8G_GPIO_PORT3] = 0x0f;
+    s->external_level[STC8G_GPIO_PORT5] = 0x30;
+    s->external_driven[STC8G_GPIO_PORT3] = 0x0f;
+    s->external_driven[STC8G_GPIO_PORT5] = 0x30;
     memory_region_init(&s->sfr, obj, "stc8g.gpio-sfr",
                        STC8G_GPIO_SFR_SIZE);
     memory_region_init(&s->xfr, obj, "stc8g.gpio-xfr",

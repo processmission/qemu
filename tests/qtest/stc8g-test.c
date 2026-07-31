@@ -502,6 +502,23 @@ static void test_gpio_registers(void)
     qtest_quit(qts);
 }
 
+static void test_gpio_input_reset(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_writeb(qts, SFR(0xb1), 0x00);
+    qtest_writeb(qts, SFR(0xb2), 0x01);
+    qtest_writeb(qts, SFR(0xb0), 0x01);
+    qtest_set_irq_in(qts, GPIO, "gpio-in", 0, 0);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb1)), ==, 0x0c);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb2)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb0)) & 0x01, ==, 0x00);
+
+    qtest_quit(qts);
+}
+
 static void test_gpio_modes(void)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -861,6 +878,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/cpu/instruction-disassembly",
                    test_instruction_disassembly);
     qtest_add_func("/stc8g/gpio/registers", test_gpio_registers);
+    qtest_add_func("/stc8g/gpio/input-reset", test_gpio_input_reset);
     qtest_add_func("/stc8g/gpio/modes", test_gpio_modes);
     qtest_add_func("/stc8g/gpio/pullup-and-input-enable",
                    test_gpio_pullup_and_input_enable);
