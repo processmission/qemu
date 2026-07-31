@@ -75,6 +75,9 @@ struct Stc8gI2CState {
     I2CBus *i2c;
     qemu_irq irq;
     uint32_t clock_frequency;
+    uint64_t remaining_cycles;
+    uint32_t clock_remainder;
+    int64_t last_ns;
     uint8_t pending_command;
     uint8_t slave_data;
     bool command_active;
@@ -135,22 +138,28 @@ static void stc8g_i2c_set_master_ack(Stc8gI2CState *s, bool nack)
         s->regs[STC8G_I2C_MSST], I2CMSST, MSACKI, nack);
 }
 
-static uint64_t stc8g_i2c_command_ns(Stc8gI2CState *s, unsigned clocks)
+static uint64_t stc8g_i2c_command_cycles(Stc8gI2CState *s,
+                                         unsigned clocks)
 {
     unsigned speed = FIELD_EX8(s->regs[STC8G_I2C_CFG], I2CCFG, MSSPEED);
-    uint64_t cycles = (uint64_t)clocks * 2 * (speed * 2 + 4);
 
-    return DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND,
-                        s->clock_frequency);
+    return (uint64_t)clocks * 2 * (speed * 2 + 4);
 }
+
+static void stc8g_i2c_sync(Stc8gI2CState *s);
+static void stc8g_i2c_schedule(Stc8gI2CState *s);
 
 static void stc8g_i2c_clock_update(void *opaque, ClockEvent event)
 {
     Stc8gI2CState *s = opaque;
 
-    if (event == ClockUpdate) {
-        s->clock_frequency = clock_get_hz(s->sysclk);
+    if (event == ClockPreUpdate) {
+        stc8g_i2c_sync(s);
+        return;
     }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    stc8g_i2c_schedule(s);
 }
 
 static unsigned stc8g_i2c_command_clocks(unsigned command)
@@ -283,6 +292,54 @@ static void stc8g_i2c_complete(void *opaque)
     stc8g_i2c_update_irq(s);
 }
 
+static void stc8g_i2c_sync(Stc8gI2CState *s)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (s->command_active && s->clock_frequency) {
+        uint64_t elapsed = now - s->last_ns;
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder;
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        if (cycles >= s->remaining_cycles) {
+            s->remaining_cycles = 0;
+            s->last_ns = now;
+            timer_del(s->timer);
+            stc8g_i2c_complete(s);
+            return;
+        }
+        s->remaining_cycles -= cycles;
+    }
+    s->last_ns = now;
+}
+
+static void stc8g_i2c_schedule(Stc8gI2CState *s)
+{
+    uint64_t numerator;
+    uint64_t delta;
+
+    timer_del(s->timer);
+    if (!s->command_active || !s->clock_frequency) {
+        return;
+    }
+    numerator = s->remaining_cycles * NANOSECONDS_PER_SECOND -
+                s->clock_remainder;
+    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
+}
+
+static void stc8g_i2c_expire(void *opaque)
+{
+    Stc8gI2CState *s = opaque;
+
+    stc8g_i2c_sync(s);
+    stc8g_i2c_schedule(s);
+}
+
 static void stc8g_i2c_issue_command(Stc8gI2CState *s, unsigned command)
 {
     unsigned clocks = stc8g_i2c_command_clocks(command);
@@ -294,11 +351,15 @@ static void stc8g_i2c_issue_command(Stc8gI2CState *s, unsigned command)
     s->pending_command = command;
     s->command_active = true;
     s->sample_ack = false;
+    s->remaining_cycles = stc8g_i2c_command_cycles(s, clocks);
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     stc8g_i2c_set_master_flag(s, false);
     stc8g_i2c_execute_command(s, command);
-    timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                 stc8g_i2c_command_ns(s, clocks));
-    trace_stc8g_i2c_command(command, stc8g_i2c_command_ns(s, clocks));
+    stc8g_i2c_schedule(s);
+    trace_stc8g_i2c_command(command, DIV_ROUND_UP(
+                            s->remaining_cycles * NANOSECONDS_PER_SECOND,
+                            s->clock_frequency));
     stc8g_i2c_update_irq(s);
 }
 
@@ -336,6 +397,8 @@ static void stc8g_i2c_cfg_post_write(RegisterInfo *reg, uint64_t value)
     if (!stc8g_i2c_enabled(s) || !stc8g_i2c_master(s)) {
         timer_del(s->timer);
         s->command_active = false;
+        s->remaining_cycles = 0;
+        s->clock_remainder = 0;
         stc8g_i2c_stop(s);
     }
     stc8g_i2c_update_irq(s);
@@ -460,6 +523,9 @@ static void stc8g_i2c_reset(DeviceState *dev)
     }
     s->pending_command = 0;
     s->command_active = false;
+    s->remaining_cycles = 0;
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->bus_active = false;
     s->expect_address = false;
     s->receive_direction = false;
@@ -484,6 +550,9 @@ static const VMStateDescription stc8g_i2c_vmstate = {
     .post_load = stc8g_i2c_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gI2CState, STC8G_I2C_MMIO_REGS),
+        VMSTATE_UINT64(remaining_cycles, Stc8gI2CState),
+        VMSTATE_UINT32(clock_remainder, Stc8gI2CState),
+        VMSTATE_INT64(last_ns, Stc8gI2CState),
         VMSTATE_UINT8(pending_command, Stc8gI2CState),
         VMSTATE_UINT8(slave_data, Stc8gI2CState),
         VMSTATE_BOOL(command_active, Stc8gI2CState),
@@ -527,9 +596,10 @@ static void stc8g_i2c_init(Object *obj)
             false, 1);
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
-    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_i2c_complete, s);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_i2c_expire, s);
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
-                                   stc8g_i2c_clock_update, s, ClockUpdate);
+                                   stc8g_i2c_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
     s->i2c = i2c_init_bus(DEVICE(obj), "i2c");
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_i2c_slave_event,
                             "slave-event", 1);
