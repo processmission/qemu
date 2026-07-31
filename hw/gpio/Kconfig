@@ -24,6 +24,10 @@ config STC32G_GPIO
     bool
     select REGISTER
 
+config STC8G_GPIO
+    bool
+    select REGISTER
+
 config STM32L4X5_GPIO
     bool
 
