@@ -62,7 +62,10 @@ struct Stc8gADCState {
     uint16_t sample;
     uint32_t clock_frequency;
     uint16_t vdd_millivolts;
+    uint64_t conversion_cycles;
+    uint32_t clock_remainder;
     int64_t power_on_ns;
+    int64_t last_ns;
     bool powered;
     bool converting;
 };
@@ -84,26 +87,37 @@ static uint16_t stc8g_adc_channel_value(Stc8gADCState *s, unsigned channel)
     return 0;
 }
 
-static uint64_t stc8g_adc_conversion_ns(Stc8gADCState *s)
+static uint64_t stc8g_adc_conversion_cycles(Stc8gADCState *s)
 {
-    uint64_t cycles;
     uint64_t phases = FIELD_EX8(s->regs[STC8G_ADC_TIM], ADCTIM, CSSETUP) +
                       FIELD_EX8(s->regs[STC8G_ADC_TIM], ADCTIM, CSHOLD) +
                       FIELD_EX8(s->regs[STC8G_ADC_TIM], ADCTIM, SMPDUTY) +
                       13;
 
-    cycles = 2 * (FIELD_EX8(s->regs[STC8G_ADC_CFG], ADCCFG, SPEED) + 1) *
-             phases;
-    return DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND,
-                        s->clock_frequency);
+    return 2 * (FIELD_EX8(s->regs[STC8G_ADC_CFG], ADCCFG, SPEED) + 1) *
+           phases;
 }
+
+static void stc8g_adc_start(Stc8gADCState *s);
+static void stc8g_adc_sync(Stc8gADCState *s);
+static void stc8g_adc_schedule(Stc8gADCState *s);
 
 static void stc8g_adc_clock_update(void *opaque, ClockEvent event)
 {
     Stc8gADCState *s = opaque;
 
-    if (event == ClockUpdate) {
-        s->clock_frequency = clock_get_hz(s->sysclk);
+    if (event == ClockPreUpdate) {
+        stc8g_adc_sync(s);
+        return;
+    }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    if (s->clock_frequency && s->powered &&
+        FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, START) &&
+        !s->converting) {
+        stc8g_adc_start(s);
+    } else {
+        stc8g_adc_schedule(s);
     }
 }
 
@@ -128,10 +142,63 @@ static void stc8g_adc_complete(void *opaque)
     stc8g_adc_update_irq(s);
 }
 
+static void stc8g_adc_sync(Stc8gADCState *s)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (s->converting && s->clock_frequency) {
+        uint64_t elapsed = now - s->last_ns;
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder;
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        if (cycles >= s->conversion_cycles) {
+            s->conversion_cycles = 0;
+        } else {
+            s->conversion_cycles -= cycles;
+        }
+    }
+    s->last_ns = now;
+    if (s->converting && !s->conversion_cycles && s->clock_frequency &&
+        now >= s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS) {
+        timer_del(s->timer);
+        stc8g_adc_complete(s);
+    }
+}
+
+static void stc8g_adc_schedule(Stc8gADCState *s)
+{
+    int64_t deadline;
+
+    timer_del(s->timer);
+    if (!s->converting || !s->clock_frequency) {
+        return;
+    }
+    deadline = s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS;
+    if (s->conversion_cycles) {
+        uint64_t numerator = s->conversion_cycles *
+                             NANOSECONDS_PER_SECOND - s->clock_remainder;
+        uint64_t delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+
+        deadline = MAX(deadline, s->last_ns + MAX(1ull, delta));
+    }
+    timer_mod_ns(s->timer, deadline);
+}
+
+static void stc8g_adc_expire(void *opaque)
+{
+    Stc8gADCState *s = opaque;
+
+    stc8g_adc_sync(s);
+    stc8g_adc_schedule(s);
+}
+
 static void stc8g_adc_start(Stc8gADCState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    int64_t deadline = now + stc8g_adc_conversion_ns(s);
     unsigned channel = FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, CHS);
 
     if (!s->clock_frequency ||
@@ -140,10 +207,16 @@ static void stc8g_adc_start(Stc8gADCState *s)
         return;
     }
     s->sample = stc8g_adc_channel_value(s, channel);
+    s->conversion_cycles = stc8g_adc_conversion_cycles(s);
+    s->clock_remainder = 0;
+    s->last_ns = now;
     s->converting = true;
-    deadline = MAX(deadline, s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS);
-    trace_stc8g_adc_start(channel, s->sample, deadline - now);
-    timer_mod_ns(s->timer, deadline);
+    stc8g_adc_schedule(s);
+    trace_stc8g_adc_start(channel, s->sample,
+                          MAX(s->power_on_ns + STC8G_ADC_POWER_STABILIZE_NS,
+                              now + DIV_ROUND_UP(s->conversion_cycles *
+                                                 NANOSECONDS_PER_SECOND,
+                                                 s->clock_frequency)) - now);
 }
 
 static uint64_t stc8g_adc_contr_pre_write(RegisterInfo *reg, uint64_t value)
@@ -164,6 +237,8 @@ static void stc8g_adc_contr_post_write(RegisterInfo *reg, uint64_t value)
     if (!powered) {
         timer_del(s->timer);
         s->converting = false;
+        s->conversion_cycles = 0;
+        s->clock_remainder = 0;
         s->regs[STC8G_ADC_CONTR] = FIELD_DP8(
             s->regs[STC8G_ADC_CONTR], ADC_CONTR, START, 0);
     } else if (!s->powered) {
@@ -209,7 +284,10 @@ static void stc8g_adc_reset(DeviceState *dev)
     timer_del(s->timer);
     s->converting = false;
     s->sample = 0;
+    s->conversion_cycles = 0;
+    s->clock_remainder = 0;
     s->power_on_ns = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->powered = false;
     for (index = 0; index < ARRAY_SIZE(stc8g_adc_regs_info); index++) {
         register_reset(&s->regs_info[index]);
@@ -235,7 +313,10 @@ static const VMStateDescription stc8g_adc_vmstate = {
         VMSTATE_UINT16_ARRAY(channel_value, Stc8gADCState,
                              STC8G_ADC_CHANNELS),
         VMSTATE_UINT16(sample, Stc8gADCState),
+        VMSTATE_UINT64(conversion_cycles, Stc8gADCState),
+        VMSTATE_UINT32(clock_remainder, Stc8gADCState),
         VMSTATE_INT64(power_on_ns, Stc8gADCState),
+        VMSTATE_INT64(last_ns, Stc8gADCState),
         VMSTATE_BOOL(powered, Stc8gADCState),
         VMSTATE_BOOL(converting, Stc8gADCState),
         VMSTATE_TIMER_PTR(timer, Stc8gADCState),
@@ -279,9 +360,10 @@ static void stc8g_adc_init(Object *obj)
             false, 1);
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
-    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_adc_complete, s);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_adc_expire, s);
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
-                                   stc8g_adc_clock_update, s, ClockUpdate);
+                                   stc8g_adc_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_adc_set_input, "adc-in",
                             STC8G_ADC_CHANNELS);
     sysbus_init_irq(sbd, &s->irq);
