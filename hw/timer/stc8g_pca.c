@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
@@ -70,6 +71,7 @@ struct Stc8gPCAState {
     RegisterInfo regs_info[STC8G_PCA_MMIO_REGS];
     uint8_t regs[STC8G_PCA_MMIO_REGS];
     QEMUTimer *timer;
+    Clock *sysclk;
     qemu_irq irq;
     qemu_irq ccp_out[STC8G_PCA_CHANNELS];
     uint32_t clock_frequency;
@@ -308,7 +310,8 @@ static void stc8g_pca_sync(Stc8gPCAState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (stc8g_pca_running(s) && stc8g_pca_internal_clock(s)) {
+    if (s->clock_frequency && stc8g_pca_running(s) &&
+        stc8g_pca_internal_clock(s)) {
         uint64_t elapsed = now - s->last_ns;
         uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
                             s->clock_frequency + s->clock_remainder;
@@ -334,7 +337,8 @@ static void stc8g_pca_schedule(Stc8gPCAState *s)
     unsigned divider;
 
     timer_del(s->timer);
-    if (!stc8g_pca_running(s) || !stc8g_pca_internal_clock(s)) {
+    if (!s->clock_frequency || !stc8g_pca_running(s) ||
+        !stc8g_pca_internal_clock(s)) {
         return;
     }
     divider = stc8g_pca_clock_divider(s);
@@ -355,6 +359,19 @@ static void stc8g_pca_expire(void *opaque)
 static void stc8g_pca_resync(Stc8gPCAState *s)
 {
     stc8g_pca_sync(s);
+    stc8g_pca_schedule(s);
+}
+
+static void stc8g_pca_clock_update(void *opaque, ClockEvent event)
+{
+    Stc8gPCAState *s = opaque;
+
+    if (event == ClockPreUpdate) {
+        stc8g_pca_resync(s);
+        return;
+    }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     stc8g_pca_schedule(s);
 }
 
@@ -603,6 +620,9 @@ static void stc8g_pca_init(Object *obj)
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_pca_set_eci, "eci", 1);
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_pca_timer0_overflow,
                             "timer0-overflow", 1);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc8g_pca_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
     qdev_init_gpio_out_named(DEVICE(obj), s->ccp_out, "ccp-out",
                              STC8G_PCA_CHANNELS);
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_pca_expire, s);

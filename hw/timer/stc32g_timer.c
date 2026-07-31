@@ -10,6 +10,7 @@
 #include "qapi/error.h"
 #include "exec/cputlb.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
@@ -56,6 +57,7 @@ struct Stc32gTimerState {
     uint8_t sfr_regs[STC32G_TIMER_SFR_REGS];
     uint8_t xfr_regs[STC32G_TIMER_XFR_REGS];
     QEMUTimer *timer[2];
+    Clock *sysclk;
     Stc32gTimerChannel channel[2];
     qemu_irq irq[4];
     qemu_irq pca_clock;
@@ -238,7 +240,7 @@ static void stc32g_timer_sync(Stc32gTimerState *s, unsigned n)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (stc32g_timer_active(s, n, false)) {
+    if (s->clock_frequency && stc32g_timer_active(s, n, false)) {
         uint64_t elapsed = now - s->last_ns[n];
         uint32_t divider = stc32g_timer_divider(s, n);
         uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
@@ -276,7 +278,7 @@ static void stc32g_timer_schedule(Stc32gTimerState *s, unsigned n)
     uint32_t divider;
 
     timer_del(s->timer[n]);
-    if (!stc32g_timer_active(s, n, false)) {
+    if (!s->clock_frequency || !stc32g_timer_active(s, n, false)) {
         return;
     }
 
@@ -295,6 +297,26 @@ static void stc32g_timer_resync(Stc32gTimerState *s)
     for (n = 0; n < 2; n++) {
         stc32g_timer_sync(s, n);
         stc32g_timer_schedule(s, n);
+    }
+}
+
+static void stc32g_timer_clock_update(void *opaque, ClockEvent event)
+{
+    Stc32gTimerState *s = opaque;
+    unsigned n;
+
+    if (event == ClockPreUpdate) {
+        if (!s->resetting) {
+            stc32g_timer_resync(s);
+        }
+        return;
+    }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    if (!s->resetting) {
+        for (n = 0; n < 2; n++) {
+            s->last_ns[n] = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            stc32g_timer_schedule(s, n);
+        }
     }
 }
 
@@ -703,6 +725,9 @@ static void stc32g_timer_init(Object *obj)
                             "gate", 2);
     qdev_init_gpio_in_named(DEVICE(obj), stc32g_timer_set_counter,
                             "counter", 2);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc32g_timer_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
     for (n = 0; n < 2; n++) {
         s->gate[n] = true;
         s->counter_input[n] = true;

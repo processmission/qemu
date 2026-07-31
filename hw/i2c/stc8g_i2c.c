@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
@@ -70,6 +71,7 @@ struct Stc8gI2CState {
     RegisterInfo regs_info[STC8G_I2C_MMIO_REGS];
     uint8_t regs[STC8G_I2C_MMIO_REGS];
     QEMUTimer *timer;
+    Clock *sysclk;
     I2CBus *i2c;
     qemu_irq irq;
     uint32_t clock_frequency;
@@ -140,6 +142,15 @@ static uint64_t stc8g_i2c_command_ns(Stc8gI2CState *s, unsigned clocks)
 
     return DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND,
                         s->clock_frequency);
+}
+
+static void stc8g_i2c_clock_update(void *opaque, ClockEvent event)
+{
+    Stc8gI2CState *s = opaque;
+
+    if (event == ClockUpdate) {
+        s->clock_frequency = clock_get_hz(s->sysclk);
+    }
 }
 
 static unsigned stc8g_i2c_command_clocks(unsigned command)
@@ -276,7 +287,8 @@ static void stc8g_i2c_issue_command(Stc8gI2CState *s, unsigned command)
 {
     unsigned clocks = stc8g_i2c_command_clocks(command);
 
-    if (!stc8g_i2c_enabled(s) || !stc8g_i2c_master(s) || !clocks) {
+    if (!s->clock_frequency || !stc8g_i2c_enabled(s) ||
+        !stc8g_i2c_master(s) || !clocks) {
         return;
     }
     s->pending_command = command;
@@ -516,6 +528,8 @@ static void stc8g_i2c_init(Object *obj)
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_i2c_complete, s);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc8g_i2c_clock_update, s, ClockUpdate);
     s->i2c = i2c_init_bus(DEVICE(obj), "i2c");
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_i2c_slave_event,
                             "slave-event", 1);

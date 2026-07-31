@@ -117,6 +117,10 @@ config FSL_IMX8MP_CCM
 config STM32_RCC
     bool
 
+config STC8G_SYSCTRL
+    bool
+    select REGISTER
+
 config STM32F2XX_SYSCFG
     bool
 

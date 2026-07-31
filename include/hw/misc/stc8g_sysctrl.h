@@ -1,0 +1,31 @@
+/*
+ * STC8G1K08A system clock controller
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#ifndef HW_MISC_STC8G_SYSCTRL_H
+#define HW_MISC_STC8G_SYSCTRL_H
+
+#include "qom/object.h"
+
+#define TYPE_STC8G_SYSCTRL "stc8g-sysctrl"
+OBJECT_DECLARE_SIMPLE_TYPE(Stc8gSysctrlState, STC8G_SYSCTRL)
+
+enum Stc8gSysctrlMMIO {
+    STC8G_SYSCTRL_MMIO_CLKSEL,
+    STC8G_SYSCTRL_MMIO_CLKDIV,
+    STC8G_SYSCTRL_MMIO_HIRCCR,
+    STC8G_SYSCTRL_MMIO_XOSCCR,
+    STC8G_SYSCTRL_MMIO_IRC32KCR,
+    STC8G_SYSCTRL_MMIO_MCLKOCR,
+    STC8G_SYSCTRL_MMIO_IRCDB,
+    STC8G_SYSCTRL_MMIO_IRCBAND,
+    STC8G_SYSCTRL_MMIO_LIRTRIM,
+    STC8G_SYSCTRL_MMIO_IRTRIM,
+    STC8G_SYSCTRL_MMIO_REGS,
+};
+
+#endif
