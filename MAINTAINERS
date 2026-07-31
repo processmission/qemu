@@ -245,6 +245,33 @@ F: gdbstub/gdb-xml/avr-cpu.xml
 F: target/avr/
 F: tests/functional/avr/
 
+MCS-51 and MCS-251 TCG CPUs and Machines
+S: Orphan
+F: configs/devices/mcs51-softmmu/
+F: configs/devices/mcs251-softmmu/
+F: configs/targets/mcs51-softmmu.mak
+F: configs/targets/mcs251-softmmu.mak
+F: docs/system/target-mcs51.rst
+F: gdbstub/gdb-xml/mcs51-core.xml
+F: gdbstub/gdb-xml/mcs251-core.xml
+F: hw/char/stc32g_uart.c
+F: hw/char/stc8g_uart.c
+F: hw/gpio/stc32g_gpio.c
+F: hw/gpio/stc8g_gpio.c
+F: hw/mcs51/
+F: hw/timer/stc32g_timer.c
+F: include/hw/char/stc32g_uart.h
+F: include/hw/char/stc8g_uart.h
+F: include/hw/gpio/stc32g_gpio.h
+F: include/hw/gpio/stc8g_gpio.h
+F: include/hw/mcs51/
+F: include/hw/timer/stc32g_timer.h
+F: target/mcs51/
+F: tests/functional/mcs51/
+F: tests/functional/mcs251/
+F: tests/qtest/stc8g-test.c
+F: tests/qtest/stc32-test.c
+
 Hexagon TCG CPUs
 M: Brian Cain <brian.cain@oss.qualcomm.com>
 R: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
