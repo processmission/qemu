@@ -209,6 +209,7 @@ static void stc32g_timer_advance(Stc32gTimerState *s, unsigned n,
     bool reload_mode = mode == 0 || (n == 0 && mode == 3) || mode == 2;
     uint32_t reload = stc32g_timer_reload(s, n);
     uint64_t distance;
+    uint64_t overflows;
 
     if (!ticks) {
         return;
@@ -221,16 +222,21 @@ static void stc32g_timer_advance(Stc32gTimerState *s, unsigned n,
     }
 
     ticks -= distance;
-    stc32g_timer_overflow(s, n);
     if (!reload_mode) {
+        overflows = 1 + ticks / limit;
+        ticks %= limit;
+        while (overflows--) {
+            stc32g_timer_overflow(s, n);
+        }
         stc32g_timer_set_value(s, n, ticks % limit);
         return;
     }
 
     value = reload;
     distance = limit - value;
-    if (ticks >= distance) {
-        ticks %= distance;
+    overflows = 1 + ticks / distance;
+    ticks %= distance;
+    while (overflows--) {
         stc32g_timer_overflow(s, n);
     }
     stc32g_timer_set_value(s, n, value + ticks);

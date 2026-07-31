@@ -1098,6 +1098,17 @@ static void test_pca(void)
     qtest_clock_step(qts, 1000);
     g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x01);
 
+    /* Each timer-0 overflow clocks the PCA, including a long time step. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x04);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_writeb(qts, SFR(0x89), 0x02);
+    qtest_writeb(qts, SFR(0x8a), 0xff);
+    qtest_writeb(qts, SFR(0x8c), 0xff);
+    qtest_writeb(qts, SFR(0x88), 0x10);
+    qtest_clock_step(qts, 4000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x08);
+
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xd9)), ==, 0x00);
