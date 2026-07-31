@@ -93,6 +93,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                              &error_abort);
     object_property_set_link(OBJECT(s->adc), "cpu", OBJECT(&s->cpu),
                              &error_abort);
+    object_property_set_link(OBJECT(s->sysctrl), "cpu", OBJECT(&s->cpu),
+                             &error_abort);
     object_property_set_link(OBJECT(s->timer), "cpu", OBJECT(&s->cpu),
                              &error_abort);
     object_property_set_link(OBJECT(s->intc), "cpu", OBJECT(&s->cpu),

@@ -37,10 +37,9 @@ static vaddr mcs251_cpu_get_pc(CPUState *cs)
 
 static bool mcs251_cpu_has_work(CPUState *cs)
 {
-    CPUMCS251State *env = cpu_env(cs);
-
-    return env->irq_pending != 0 ||
-           cpu_test_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_RESET);
+    return (cpu_test_interrupt(cs, CPU_INTERRUPT_HARD) &&
+            mcs251_cpu_has_interrupt(cs)) ||
+           cpu_test_interrupt(cs, CPU_INTERRUPT_RESET);
 }
 
 static void mcs251_cpu_update_interrupt_request(MCS251CPU *cpu)
@@ -427,6 +426,11 @@ static void mcs251_cpu_sfr_write(void *opaque, hwaddr offset,
 #endif
     case MCS251_SFR_PCON:
         env->pcon = byte;
+#ifndef TARGET_MCS251
+        if (FIELD_EX8(byte, PCON, IDL) || FIELD_EX8(byte, PCON, PD)) {
+            cs->halted = 1;
+        }
+#endif
         break;
     case MCS251_SFR_TCON:
         env->tcon = byte;
@@ -601,6 +605,7 @@ static void mcs251_cpu_reset_hold(Object *obj, ResetType type)
     env->irq_level = UINT32_MAX;
 
     mcs251_cpu_sync_irq_configuration(cpu);
+    mcs251_cpu_notify_sfr_write(cpu, MCS251_SFR_PCON, env->pcon);
 
     cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_RESET);
     trace_mcs51_cpu_reset(cs->cpu_index, env->pc,

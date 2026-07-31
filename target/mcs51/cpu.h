@@ -190,6 +190,8 @@ FIELD(AUXR, EXTRAM, 1, 1)
 FIELD(AUXR, T1X12, 6, 1)
 FIELD(AUXR, T0X12, 7, 1)
 FIELD(AUXR2, CPUMODE, 6, 1)
+FIELD(PCON, IDL, 0, 1)
+FIELD(PCON, PD, 1, 1)
 FIELD(P_SW2, EAXFR, 7, 1)
 FIELD(CKCON, EAXRAM, 7, 1)
 
@@ -369,6 +371,7 @@ void mcs251_cpu_configure_irq(MCS251CPU *cpu, unsigned irq,
                               bool enabled, bool auto_clear);
 void mcs251_cpu_sync_irq_configuration(MCS251CPU *cpu);
 
+bool mcs251_cpu_has_interrupt(CPUState *cs);
 bool mcs251_cpu_exec_interrupt(CPUState *cs, int interrupt_request);
 void mcs251_cpu_do_interrupt(CPUState *cs);
 bool mcs251_cpu_tlb_fill(CPUState *cs, vaddr address, int size,

@@ -491,6 +491,79 @@ class MCS51ISATest(QemuSystemTest):
         path.write_bytes(image)
         return path
 
+    def build_idle_firmware(self):
+        image = bytearray(self.FLASH_SIZE)
+
+        def write(address, data):
+            image[address:address + len(data)] = data
+
+        write(0x0000, bytes((0x02, 0x01, 0x00)))
+        write(0x000b, bytes((0x02, 0x02, 0x00)))
+
+        main = Program()
+        main.emit(0x75, 0x20, 0x00)
+        main.emit(0x75, 0x89, 0x01)
+        main.emit(0x75, 0x8c, 0x00, 0x75, 0x8a, 0x00)
+        main.emit(0x75, 0xa8, 0x82, 0x75, 0x88, 0x10)
+        main.emit(0x75, 0x87, 0x31)
+        self.assert_direct(main, 0x20, 0x01)
+        self.assert_direct(main, 0x87, 0x30)
+        self.emit_text(main, b'IDLE-PASS\n')
+        main.label('done')
+        main.branch(0x80, 'done')
+        main.label('fail')
+        self.emit_text(main, b'IDLE-FAIL\n')
+        main.branch(0x80, 'done')
+        write(0x0100, main.finish(0x0100))
+
+        handler = bytes((
+            0x75, 0x88, 0x00,
+            0x75, 0x20, 0x01,
+            0x32,
+        ))
+        write(0x0200, handler)
+
+        path = Path(self.scratch_file('mcs51-idle.bin'))
+        path.write_bytes(image)
+        return path
+
+    def build_powerdown_firmware(self):
+        image = bytearray(self.FLASH_SIZE)
+
+        def write(address, data):
+            image[address:address + len(data)] = data
+
+        write(0x0000, bytes((0x02, 0x01, 0x00)))
+        write(0x0023, bytes((0x02, 0x02, 0x00)))
+
+        main = Program()
+        main.emit(0x75, 0x20, 0x00)
+        main.emit(0x75, 0x98, 0x10)
+        self.emit_text(main, b'PD-READY\n')
+        main.emit(0x75, 0x98, 0x10)
+        main.emit(0x75, 0xa8, 0x90)
+        main.emit(0x75, 0x87, 0x32)
+        self.assert_direct(main, 0x20, 0x01)
+        self.assert_direct(main, 0x87, 0x30)
+        self.emit_text(main, b'PD-PASS\n')
+        main.label('done')
+        main.branch(0x80, 'done')
+        main.label('fail')
+        self.emit_text(main, b'PD-FAIL\n')
+        main.branch(0x80, 'done')
+        write(0x0100, main.finish(0x0100))
+
+        handler = bytes((
+            0x75, 0x98, 0x10,
+            0x75, 0x20, 0x01,
+            0x32,
+        ))
+        write(0x0200, handler)
+
+        path = Path(self.scratch_file('mcs51-powerdown.bin'))
+        path.write_bytes(image)
+        return path
+
     def run_firmware(self, firmware, success, failure=None):
         self.set_machine('stc8g1k08a')
         self.vm.add_args('-bios', str(firmware))
@@ -528,6 +601,19 @@ class MCS51ISATest(QemuSystemTest):
     def test_timer0_mode3_is_nmi(self):
         self.run_firmware(self.build_interrupt_firmware(mode3=True),
                           'IRQ-PASS', 'IRQ-FAIL')
+
+    def test_idle_mode_wakes_on_timer_interrupt(self):
+        self.run_firmware(self.build_idle_firmware(), 'IDLE-PASS',
+                          'IDLE-FAIL')
+
+    def test_powerdown_mode_wakes_on_uart_receive(self):
+        self.set_machine('stc8g1k08a')
+        self.vm.add_args('-bios', str(self.build_powerdown_firmware()))
+        self.vm.set_console()
+        self.vm.launch()
+        wait_for_console_pattern(self, 'PD-READY')
+        self.vm.console_socket.sendall(b'W')
+        wait_for_console_pattern(self, 'PD-PASS', failure_message='PD-FAIL')
 
 
 if __name__ == '__main__':

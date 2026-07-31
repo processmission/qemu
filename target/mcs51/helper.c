@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
 #include "internals.h"
+#include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-ldst.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
@@ -2058,6 +2059,11 @@ static int mcs251_pick_interrupt(CPUMCS251State *env)
     return best;
 }
 
+bool mcs251_cpu_has_interrupt(CPUState *cs)
+{
+    return mcs251_pick_interrupt(cpu_env(cs)) >= 0;
+}
+
 bool mcs251_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
     CPUMCS251State *env = cpu_env(cs);
@@ -2072,6 +2078,15 @@ bool mcs251_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         return false;
     }
 
+#ifndef TARGET_MCS251
+    if (FIELD_EX8(env->pcon, PCON, IDL) ||
+        FIELD_EX8(env->pcon, PCON, PD)) {
+        mcs251_cpu_direct_write(env, MCS251_SFR_PCON,
+                                env->pcon & ~(R_PCON_IDL_MASK |
+                                              R_PCON_PD_MASK));
+        cs->halted = 0;
+    }
+#endif
     env->irq_ack = irq;
     mcs251_cpu_do_interrupt(cs);
     return true;
@@ -2172,4 +2187,8 @@ void HELPER(mcs251_execute)(CPUMCS251State *env, uint32_t first_opcode)
         env->ta_stage = MCS251_TA_STAGE_LOCKED;
     }
     env->pc = pc & MCS_TARGET_ADDR_MASK;
+    if (env_cpu(env)->halted) {
+        env_cpu(env)->exception_index = EXCP_HLT;
+        cpu_loop_exit(env_cpu(env));
+    }
 }

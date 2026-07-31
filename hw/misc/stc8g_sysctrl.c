@@ -15,6 +15,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/misc/stc8g_sysctrl.h"
 #include "migration/vmstate.h"
+#include "target/mcs51/cpu.h"
 #include "trace.h"
 
 REG8(CLKSEL, 0)
@@ -52,6 +53,7 @@ struct Stc8gSysctrlState {
     RegisterInfoArray *reg_array[STC8G_SYSCTRL_MMIO_REGS];
     RegisterInfo regs_info[STC8G_SYSCTRL_MMIO_REGS];
     uint8_t regs[STC8G_SYSCTRL_MMIO_REGS];
+    MCS51CPU *cpu;
     Clock *sysclk;
     Clock *mclko;
     uint32_t hirc_frequency;
@@ -82,6 +84,9 @@ static uint64_t stc8g_sysctrl_hirc_frequency(Stc8gSysctrlState *s)
 
 static uint64_t stc8g_sysctrl_source_frequency(Stc8gSysctrlState *s)
 {
+    if (FIELD_EX8(s->cpu->env.pcon, PCON, PD)) {
+        return 0;
+    }
     switch (FIELD_EX8(s->regs[STC8G_SYSCTRL_CLKSEL], CLKSEL, MCKSEL)) {
     case 0:
         return FIELD_EX8(s->regs[STC8G_SYSCTRL_HIRCCR], HIRCCR, ENHIRC) ?
@@ -156,6 +161,16 @@ static void stc8g_sysctrl_clock_post_write(RegisterInfo *reg,
     stc8g_sysctrl_update_clocks(s);
 }
 
+static void stc8g_sysctrl_sfr_write(void *opaque, uint8_t addr,
+                                    uint8_t value)
+{
+    Stc8gSysctrlState *s = opaque;
+
+    if (addr == MCS251_SFR_PCON) {
+        stc8g_sysctrl_update_clocks(s);
+    }
+}
+
 static const RegisterAccessInfo stc8g_sysctrl_regs_info[] = {
     { .name = "CLKSEL", .addr = 0, .rsvd = 0xfc,
       .post_write = stc8g_sysctrl_clock_post_write },
@@ -220,6 +235,8 @@ static const VMStateDescription stc8g_sysctrl_vmstate = {
 };
 
 static const Property stc8g_sysctrl_properties[] = {
+    DEFINE_PROP_LINK("cpu", Stc8gSysctrlState, cpu, TYPE_MCS51_CPU,
+                     MCS51CPU *),
     DEFINE_PROP_UINT32("hirc-frequency", Stc8gSysctrlState,
                        hirc_frequency, 24000000),
     DEFINE_PROP_UINT32("hirc-high-frequency", Stc8gSysctrlState,
@@ -234,12 +251,17 @@ static void stc8g_sysctrl_realize(DeviceState *dev, Error **errp)
 {
     Stc8gSysctrlState *s = STC8G_SYSCTRL(dev);
 
+    if (!s->cpu) {
+        error_setg(errp, "stc8g-sysctrl requires a CPU link");
+        return;
+    }
     if (!s->hirc_frequency || !s->hirc_high_frequency ||
         !s->xosc_frequency || !s->irc32k_frequency) {
         error_setg(errp,
                    "stc8g-sysctrl oscillator frequencies must be nonzero");
         return;
     }
+    mcs251_cpu_add_sfr_write_notifier(s->cpu, stc8g_sysctrl_sfr_write, s);
     stc8g_sysctrl_update_clocks(s);
 }
 
