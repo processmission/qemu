@@ -163,8 +163,8 @@ SPI and I2C
   SPI implements master transfers over a QEMU SSI bus, slave receive events,
   status flags, and its interrupt.  I2C implements master start, address,
   send, receive, acknowledge, and stop commands over a QEMU I2C bus, together
-  with the documented slave-state flags and interrupt.  SPI retains an
-  in-flight transfer when the system clock changes or stops.
+  with the documented slave-state flags and interrupt.  Both controllers
+  retain an in-flight transfer when the system clock changes or stops.
 
 MDU16
   The MDU16 XFR block implements the documented normalization, 16-bit
