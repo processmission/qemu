@@ -38,6 +38,7 @@ struct Stc8gSoCState {
     DeviceState *i2c;
     DeviceState *iap;
     DeviceState *intc;
+    DeviceState *lvd;
     DeviceState *mdu;
     DeviceState *pca;
     DeviceState *spi;

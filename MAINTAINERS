@@ -264,6 +264,7 @@ F: hw/i2c/stc8g_i2c.c
 F: hw/intc/stc8g_intc.c
 F: hw/mcs51/
 F: hw/misc/stc8g_mdu.c
+F: hw/misc/stc8g_lvd.c
 F: hw/misc/stc8g_sysctrl.c
 F: hw/nvram/stc8g_iap.c
 F: hw/timer/stc8g_pca.c
@@ -279,6 +280,7 @@ F: include/hw/i2c/stc8g_i2c.h
 F: include/hw/intc/stc8g_intc.h
 F: include/hw/mcs51/
 F: include/hw/misc/stc8g_mdu.h
+F: include/hw/misc/stc8g_lvd.h
 F: include/hw/misc/stc8g_sysctrl.h
 F: include/hw/nvram/stc8g_iap.h
 F: include/hw/timer/stc8g_pca.h
