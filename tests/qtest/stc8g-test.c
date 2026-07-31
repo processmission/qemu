@@ -17,6 +17,7 @@
 #define CPU SOC "/cpu"
 #define ADC SOC "/adc"
 #define GPIO SOC "/gpio"
+#define I2C SOC "/i2c"
 #define INTC SOC "/intc"
 #define MDU SOC "/mdu"
 #define SPI SOC "/spi"
@@ -863,6 +864,65 @@ static void test_mdu(void)
     qtest_quit(qts);
 }
 
+static void test_i2c(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe80)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe88)), ==, 0x00);
+    qtest_writeb(qts, XFR(0xfe80), 0xc0);
+    qtest_writeb(qts, XFR(0xfe86), 0xa0);
+    qtest_writeb(qts, XFR(0xfe81), 0x89);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0x80);
+    qtest_clock_step(qts, 3000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0x80);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0xc2);
+    g_assert_true(qtest_get_irq(qts, IRQ_I2C));
+    qtest_writeb(qts, XFR(0xfe82), 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0x82);
+    g_assert_false(qtest_get_irq(qts, IRQ_I2C));
+    qtest_writeb(qts, XFR(0xfe81), 0x86);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0x42);
+
+    qtest_writeb(qts, XFR(0xfe82), 0x00);
+    qtest_writeb(qts, XFR(0xfe81), 0x81);
+    qtest_clock_step(qts, 1000);
+    qtest_writeb(qts, XFR(0xfe82), 0x00);
+    qtest_writeb(qts, XFR(0xfe88), 0x01);
+    qtest_writeb(qts, XFR(0xfe86), 0xa0);
+    qtest_clock_step(qts, 4000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0xc2);
+
+    qtest_writeb(qts, XFR(0xfe80), 0x80);
+    qtest_writeb(qts, XFR(0xfe83), 0x78);
+    qtest_set_irq_in(qts, I2C, "slave-event", 0, 1);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0xc0);
+    g_assert_true(qtest_get_irq(qts, IRQ_I2C));
+    qtest_writeb(qts, XFR(0xfe84), 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0x80);
+    qtest_set_irq_in(qts, I2C, "slave-data", 0, 0xa5);
+    qtest_set_irq_in(qts, I2C, "slave-event", 0, 2);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe87)), ==, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0xa0);
+    qtest_writeb(qts, XFR(0xfe84), 0x00);
+    qtest_set_irq_in(qts, I2C, "slave-ack", 0, 1);
+    qtest_set_irq_in(qts, I2C, "slave-event", 0, 3);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0x92);
+    qtest_writeb(qts, XFR(0xfe84), 0x00);
+    qtest_set_irq_in(qts, I2C, "slave-event", 0, 4);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0x0a);
+    qtest_writeb(qts, XFR(0xfe83), 0x01);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe83)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0x00);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe80)), ==, 0x00);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1120,6 +1180,7 @@ int main(int argc, char **argv)
                    test_interrupt_controller);
     qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/mdu", test_mdu);
+    qtest_add_func("/stc8g/i2c", test_i2c);
     qtest_add_func("/stc8g/spi", test_spi);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",

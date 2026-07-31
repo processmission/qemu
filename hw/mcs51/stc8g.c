@@ -14,6 +14,7 @@
 #include "hw/core/qdev-properties-system.h"
 #include "hw/gpio/stc8g_gpio.h"
 #include "hw/intc/stc8g_intc.h"
+#include "hw/i2c/stc8g_i2c.h"
 #include "hw/mcs51/stc8g.h"
 #include "hw/misc/stc8g_mdu.h"
 #include "hw/ssi/stc8g_spi.h"
@@ -41,6 +42,7 @@
 #define STC8G_SFR_ADC_RESL 0xbeu
 #define STC8G_SFR_ADCCFG 0xdeu
 #define STC8G_XFR_P3PU 0xfe13u
+#define STC8G_XFR_I2C 0xfe80u
 #define STC8G_XFR_ADCTIM 0xfea8u
 #define STC8G_XFR_MDU 0xfcf0u
 
@@ -88,6 +90,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(s->timer), errp)) {
         return;
     }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->i2c), errp)) {
+        return;
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->intc), errp)) {
         return;
     }
@@ -120,6 +125,10 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_ADCCFG), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->adc), STC8G_ADC_MMIO_TIM,
                             STC8G_XFR_PHYS_ADDR(STC8G_XFR_ADCTIM), 1);
+    for (i = 0; i < STC8G_I2C_MMIO_REGS; i++) {
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->i2c), i,
+                                STC8G_XFR_PHYS_ADDR(STC8G_XFR_I2C + i), 1);
+    }
     for (i = 0; i < STC8G_MDU_MMIO_REGS; i++) {
         sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->mdu), i,
                                 STC8G_XFR_PHYS_ADDR(STC8G_XFR_MDU + i), 1);
@@ -164,6 +173,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(s->spi), 0,
                        qdev_get_gpio_in_named(s->intc, "irq-in",
                                                STC8G_INTC_SPI));
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->i2c), 0,
+                       qdev_get_gpio_in_named(s->intc, "irq-in",
+                                               STC8G_INTC_I2C));
     for (i = 0; i < 2; i++) {
         qdev_connect_gpio_out_named(s->gpio, "int-line", i,
             qdev_get_gpio_in_named(s->timer, "gate", i));
@@ -181,6 +193,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "adc", OBJECT(s->adc));
     s->gpio = qdev_new(TYPE_STC8G_GPIO);
     object_property_add_child(obj, "gpio", OBJECT(s->gpio));
+    s->i2c = qdev_new(TYPE_STC8G_I2C);
+    object_property_add_child(obj, "i2c", OBJECT(s->i2c));
     s->intc = qdev_new(TYPE_STC8G_INTC);
     object_property_add_child(obj, "intc", OBJECT(s->intc));
     s->mdu = qdev_new(TYPE_STC8G_MDU);
