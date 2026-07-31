@@ -18,6 +18,7 @@
 #include "hw/i2c/stc8g_i2c.h"
 #include "hw/mcs51/stc8g.h"
 #include "hw/misc/stc8g_mdu.h"
+#include "hw/misc/stc8g_lvd.h"
 #include "hw/misc/stc8g_sysctrl.h"
 #include "hw/nvram/stc8g_iap.h"
 #include "hw/ssi/stc8g_spi.h"
@@ -57,6 +58,7 @@
 #define STC8G_SFR_WDT_CONTR 0xc1u
 #define STC8G_SFR_IAP_DATA 0xc2u
 #define STC8G_SFR_IAP_TPS 0xf5u
+#define STC8G_SFR_RSTCFG 0xffu
 #define STC8G_XFR_P3PU 0xfe13u
 #define STC8G_XFR_I2C 0xfe80u
 #define STC8G_XFR_SYSCTRL 0xfe00u
@@ -94,6 +96,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     object_property_set_link(OBJECT(s->timer), "cpu", OBJECT(&s->cpu),
                              &error_abort);
     object_property_set_link(OBJECT(s->intc), "cpu", OBJECT(&s->cpu),
+                             &error_abort);
+    object_property_set_link(OBJECT(s->lvd), "cpu", OBJECT(&s->cpu),
                              &error_abort);
     object_property_set_link(OBJECT(s->uart), "cpu", OBJECT(&s->cpu),
                              &error_abort);
@@ -133,6 +137,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->intc), errp)) {
+        return;
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->lvd), errp)) {
         return;
     }
     if (!sysbus_realize(SYS_BUS_DEVICE(s->mdu), errp)) {
@@ -236,6 +243,8 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_SCON), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->wdt), STC8G_WDT_MMIO_CONTR,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_WDT_CONTR), 1);
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->lvd), STC8G_LVD_MMIO_RSTCFG,
+                            STC8G_SFR_PHYS_ADDR(STC8G_SFR_RSTCFG), 1);
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->gpio), 0,
                             STC8G_SFR_PHYS_ADDR(STC8G_SFR_P3), 1);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->gpio), 1,
@@ -262,6 +271,9 @@ static void stc8g_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(s->i2c), 0,
                        qdev_get_gpio_in_named(s->intc, "irq-in",
                                                STC8G_INTC_I2C));
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->lvd), 0,
+                       qdev_get_gpio_in_named(s->intc, "irq-in",
+                                               STC8G_INTC_LVD));
     sysbus_connect_irq(SYS_BUS_DEVICE(s->pca), 0,
                        qdev_get_gpio_in_named(s->intc, "irq-in",
                                                STC8G_INTC_PCA));
@@ -290,6 +302,8 @@ static void stc8g_soc_init(Object *obj)
     object_property_add_child(obj, "iap", OBJECT(s->iap));
     s->intc = qdev_new(TYPE_STC8G_INTC);
     object_property_add_child(obj, "intc", OBJECT(s->intc));
+    s->lvd = qdev_new(TYPE_STC8G_LVD);
+    object_property_add_child(obj, "lvd", OBJECT(s->lvd));
     s->mdu = qdev_new(TYPE_STC8G_MDU);
     object_property_add_child(obj, "mdu", OBJECT(s->mdu));
     s->pca = qdev_new(TYPE_STC8G_PCA);

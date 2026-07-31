@@ -22,6 +22,7 @@
 #define I2C SOC "/i2c"
 #define IAP SOC "/iap"
 #define INTC SOC "/intc"
+#define LVD SOC "/lvd"
 #define MDU SOC "/mdu"
 #define PCA SOC "/pca"
 #define SPI SOC "/spi"
@@ -1421,6 +1422,35 @@ static void test_iap(void)
     qtest_quit(qts);
 }
 
+static void test_lvd(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xff)), ==, 0);
+    qtest_writeb(qts, SFR(0x87), 0x10);
+    g_assert_false(qtest_get_irq(qts, IRQ_LVD));
+    qtest_writeb(qts, SFR(0xff), 0x03);
+    qtest_set_irq_in(qts, LVD, "vdd-millivolts", 0, 2999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x87)) & 0x20, ==, 0x20);
+    g_assert_true(qtest_get_irq(qts, IRQ_LVD));
+    qtest_writeb(qts, SFR(0x87), 0x10);
+    g_assert_false(qtest_get_irq(qts, IRQ_LVD));
+    qtest_set_irq_in(qts, LVD, "vdd-millivolts", 0, 3300);
+    qtest_set_irq_in(qts, LVD, "vdd-millivolts", 0, 2999);
+    g_assert_true(qtest_get_irq(qts, IRQ_LVD));
+    qtest_writeb(qts, SFR(0xff), 0x13);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xff)), ==, 0x13);
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE);
+    qtest_writeb(qts, SFR(0xff), 0x43);
+    qtest_set_irq_in(qts, LVD, "vdd-millivolts", 0, 2999);
+    qtest_qmp_eventwait(qts, "RESET");
+    g_assert_cmphex(qtest_readb(qts, SFR(0xff)), ==, 0);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -1461,6 +1491,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/uart1/receive", test_uart1_receive);
     qtest_add_func("/stc8g/wdt", test_wdt);
     qtest_add_func("/stc8g/iap", test_iap);
+    qtest_add_func("/stc8g/lvd", test_lvd);
 
     return g_test_run();
 }

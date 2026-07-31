@@ -5,6 +5,9 @@ stc8g_mdu_start(unsigned mode, uint32_t operand, uint16_t divisor, uint64_t dela
 stc8g_mdu_complete(unsigned mode, uint32_t result, uint16_t remainder) "mode=%u result=0x%08x remainder=0x%04x"
 stc8g_mdu_reset(void) ""
 
+# stc8g_lvd.c
+stc8g_lvd_event(uint16_t voltage, uint16_t threshold, bool reset) "voltage %umV threshold %umV reset %u"
+
 # k230_dewarp.c
 k230_dewarp_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
 k230_dewarp_write(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
