@@ -831,9 +831,9 @@ static void test_cpu_control_registers(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0x8e)), ==, 0xe7);
     g_assert_cmphex(qtest_readb(qts, SFR(0x8f)), ==, 0xaa);
     g_assert_cmphex(qtest_readb(qts, SFR(0x97)), ==, 0x40);
-    g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0x9f);
-    g_assert_cmphex(qtest_readb(qts, SFR(0xb7)), ==, 0x1f);
-    g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0x1f);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb7)), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0xff);
     g_assert_cmphex(qtest_readb(qts, SFR(0xba)), ==, 0x80);
     g_assert_cmphex(qtest_readb(qts, SFR(0xea)), ==, 0x55);
     g_assert_cmphex(qtest_readb(qts, SFR(0xeb)), ==, 0xaa);

@@ -10,14 +10,21 @@
 #include "internals.h"
 #include "migration/vmstate.h"
 
+static int mcs251_cpu_post_load(void *opaque, int version_id)
+{
+    mcs251_cpu_sync_irq_configuration(opaque);
+    return 0;
+}
+
 const VMStateDescription vms_mcs251_cpu = {
 #ifndef TARGET_MCS251
     .name = "mcs51-cpu",
 #else
     .name = "mcs251-cpu",
 #endif
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .post_load = mcs251_cpu_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(env.pc, MCS251CPU),
         VMSTATE_UINT32_ARRAY(env.regs, MCS251CPU,
@@ -45,7 +52,7 @@ const VMStateDescription vms_mcs251_cpu = {
         VMSTATE_UINT32(env.ie, MCS251CPU),
         VMSTATE_UINT32(env.ip, MCS251CPU),
         VMSTATE_UINT32(env.iph, MCS251CPU),
-        VMSTATE_UINT32(env.irq_pending, MCS251CPU),
+        VMSTATE_UINT64(env.irq_pending, MCS251CPU),
         VMSTATE_UINT32(env.irq_ack, MCS251CPU),
         VMSTATE_UINT32(env.irq_level, MCS251CPU),
         VMSTATE_UINT32(env.irq_depth, MCS251CPU),
