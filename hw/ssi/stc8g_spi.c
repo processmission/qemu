@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
@@ -47,6 +48,7 @@ struct Stc8gSPIState {
     RegisterInfo regs_info[STC8G_SPI_REGS];
     uint8_t regs[STC8G_SPI_REGS];
     QEMUTimer *timer;
+    Clock *sysclk;
     SSIBus *ssi;
     qemu_irq irq;
     uint32_t clock_frequency;
@@ -90,6 +92,15 @@ static uint64_t stc8g_spi_transfer_ns(Stc8gSPIState *s)
                         s->clock_frequency);
 }
 
+static void stc8g_spi_clock_update(void *opaque, ClockEvent event)
+{
+    Stc8gSPIState *s = opaque;
+
+    if (event == ClockUpdate) {
+        s->clock_frequency = clock_get_hz(s->sysclk);
+    }
+}
+
 static void stc8g_spi_complete(void *opaque)
 {
     Stc8gSPIState *s = opaque;
@@ -108,6 +119,9 @@ static void stc8g_spi_complete(void *opaque)
 
 static void stc8g_spi_start(Stc8gSPIState *s)
 {
+    if (!s->clock_frequency) {
+        return;
+    }
     s->tx_data = s->regs[STC8G_SPI_REG_DATA];
     s->transfer_active = true;
     timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
@@ -275,6 +289,8 @@ static void stc8g_spi_init(Object *obj)
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_spi_complete, s);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc8g_spi_clock_update, s, ClockUpdate);
     s->ssi = ssi_create_bus(DEVICE(obj), "ssi");
     s->ss_level = true;
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_spi_set_ss, "ss-in", 1);

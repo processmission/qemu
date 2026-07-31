@@ -10,6 +10,7 @@
 #include "qapi/error.h"
 #include "hw/adc/stc8g_adc.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
@@ -55,6 +56,7 @@ struct Stc8gADCState {
     RegisterInfo regs_info[STC8G_ADC_REGS];
     uint8_t regs[STC8G_ADC_REGS];
     QEMUTimer *timer;
+    Clock *sysclk;
     qemu_irq irq;
     uint16_t channel_value[STC8G_ADC_CHANNELS];
     uint16_t sample;
@@ -96,6 +98,15 @@ static uint64_t stc8g_adc_conversion_ns(Stc8gADCState *s)
                         s->clock_frequency);
 }
 
+static void stc8g_adc_clock_update(void *opaque, ClockEvent event)
+{
+    Stc8gADCState *s = opaque;
+
+    if (event == ClockUpdate) {
+        s->clock_frequency = clock_get_hz(s->sysclk);
+    }
+}
+
 static void stc8g_adc_complete(void *opaque)
 {
     Stc8gADCState *s = opaque;
@@ -123,7 +134,8 @@ static void stc8g_adc_start(Stc8gADCState *s)
     int64_t deadline = now + stc8g_adc_conversion_ns(s);
     unsigned channel = FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, CHS);
 
-    if (!FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, POWER) ||
+    if (!s->clock_frequency ||
+        !FIELD_EX8(s->regs[STC8G_ADC_CONTR], ADC_CONTR, POWER) ||
         s->converting) {
         return;
     }
@@ -268,6 +280,8 @@ static void stc8g_adc_init(Object *obj)
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_adc_complete, s);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc8g_adc_clock_update, s, ClockUpdate);
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_adc_set_input, "adc-in",
                             STC8G_ADC_CHANNELS);
     sysbus_init_irq(sbd, &s->irq);

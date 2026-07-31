@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
@@ -43,6 +44,7 @@ struct Stc8gMDUState {
     RegisterInfo regs_info[STC8G_MDU_MMIO_REGS];
     uint8_t regs[STC8G_MDU_MMIO_REGS];
     QEMUTimer *timer;
+    Clock *sysclk;
     uint32_t clock_frequency;
     uint32_t operand;
     uint16_t divisor;
@@ -110,6 +112,15 @@ static uint64_t stc8g_mdu_operation_ns(Stc8gMDUState *s)
                         NANOSECONDS_PER_SECOND, s->clock_frequency);
 }
 
+static void stc8g_mdu_clock_update(void *opaque, ClockEvent event)
+{
+    Stc8gMDUState *s = opaque;
+
+    if (event == ClockUpdate) {
+        s->clock_frequency = clock_get_hz(s->sysclk);
+    }
+}
+
 static void stc8g_mdu_complete(void *opaque)
 {
     Stc8gMDUState *s = opaque;
@@ -171,6 +182,9 @@ static void stc8g_mdu_start(Stc8gMDUState *s)
 {
     uint64_t delay;
 
+    if (!s->clock_frequency) {
+        return;
+    }
     s->operand = stc8g_mdu_get_operand(s);
     s->divisor = stc8g_mdu_get_divisor(s);
     s->mode = FIELD_EX8(s->regs[STC8G_MDU_ARCON], ARCON, MODE);
@@ -293,6 +307,8 @@ static void stc8g_mdu_init(Object *obj)
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_mdu_complete, s);
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
+                                   stc8g_mdu_clock_update, s, ClockUpdate);
 }
 
 static void stc8g_mdu_class_init(ObjectClass *oc, const void *data)

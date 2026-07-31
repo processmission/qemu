@@ -8,8 +8,10 @@
 
 #include "qemu/osdep.h"
 #include <glib/gstdio.h>
+#include "hw/core/clock.h"
 #include "qemu/bitops.h"
 #include "qemu/sockets.h"
+#include "qobject/qdict.h"
 #include "libqtest.h"
 
 #define MACHINE "-M stc8g1k08a"
@@ -22,6 +24,7 @@
 #define MDU SOC "/mdu"
 #define PCA SOC "/pca"
 #define SPI SOC "/spi"
+#define SYSCTRL SOC "/sysctrl"
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (8 * 1024)
@@ -125,6 +128,28 @@ static void gpio_set_latch(QTestState *qts, const GPIOPinDef *pin,
 static bool gpio_read_pin(QTestState *qts, const GPIOPinDef *pin)
 {
     return extract8(qtest_readb(qts, SFR(pin->data)), pin->bit, 1);
+}
+
+static uint64_t qom_get_uint(QTestState *qts, const char *path,
+                             const char *property)
+{
+    QDict *response;
+    uint64_t value;
+
+    response = qtest_qmp(qts,
+                         "{ 'execute': 'qom-get', 'arguments': {"
+                         "  'path': %s, 'property': %s } }",
+                         path, property);
+    g_assert_false(qdict_haskey(response, "error"));
+    value = qdict_get_int(response, "return");
+    qobject_unref(response);
+    return value;
+}
+
+static void assert_clock_hz(QTestState *qts, const char *path, uint64_t hz)
+{
+    g_assert_cmphex(qom_get_uint(qts, path, "qtest-clock-period"), ==,
+                    hz ? CLOCK_PERIOD_1SEC / hz : 0);
 }
 
 static uint8_t timer_run_mask(unsigned timer)
@@ -744,6 +769,59 @@ static void test_adc(void)
     qtest_quit(qts);
 }
 
+static void test_sysctrl(void)
+{
+    static const char * const sysclk_consumers[] = {
+        ADC "/sysclk", I2C "/sysclk", MDU "/sysclk", PCA "/sysclk",
+        SPI "/sysclk", SOC "/timer/sysclk",
+    };
+    QTestState *qts = qtest_init(MACHINE);
+    unsigned index;
+
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe00)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe01)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe02)), ==, 0x81);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe03)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe04)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe05)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe06)), ==, 0x80);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x9d)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x9e)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x9f)), ==, 0x80);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 24000000);
+    assert_clock_hz(qts, SYSCTRL "/mclko", 0);
+
+    qtest_writeb(qts, XFR(0xfe05), 0x82);
+    assert_clock_hz(qts, SYSCTRL "/mclko", 12000000);
+    qtest_writeb(qts, XFR(0xfe01), 0x08);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 3000000);
+    assert_clock_hz(qts, SYSCTRL "/mclko", 1500000);
+    for (index = 0; index < ARRAY_SIZE(sysclk_consumers); index++) {
+        assert_clock_hz(qts, sysclk_consumers[index], 3000000);
+    }
+    qtest_writeb(qts, SFR(0x9f), 0x81);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 3007200);
+    qtest_writeb(qts, SFR(0x9d), 0x01);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 4134900);
+    qtest_writeb(qts, SFR(0x9d), 0x00);
+    qtest_writeb(qts, SFR(0x9f), 0x80);
+
+    qtest_writeb(qts, XFR(0xfe03), 0x80);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe03)), ==, 0x81);
+    qtest_writeb(qts, XFR(0xfe00), 0x01);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 3000000);
+    qtest_writeb(qts, XFR(0xfe00), 0x03);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 0);
+    qtest_writeb(qts, XFR(0xfe04), 0x80);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe04)), ==, 0x81);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 4096);
+
+    qtest_system_reset(qts);
+    assert_clock_hz(qts, SYSCTRL "/sysclk", 24000000);
+    assert_clock_hz(qts, SYSCTRL "/mclko", 0);
+    qtest_quit(qts);
+}
+
 static void test_spi(void)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1259,6 +1337,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
     qtest_add_func("/stc8g/adc", test_adc);
+    qtest_add_func("/stc8g/sysctrl", test_sysctrl);
     qtest_add_func("/stc8g/mdu", test_mdu);
     qtest_add_func("/stc8g/i2c", test_i2c);
     qtest_add_func("/stc8g/pca", test_pca);
