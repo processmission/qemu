@@ -1086,6 +1086,16 @@ static void test_i2c(void)
     g_assert_cmphex(qtest_readb(qts, XFR(0xfe84)), ==, 0x00);
 
     qtest_system_reset(qts);
+    qtest_writeb(qts, XFR(0xfe80), 0xc0);
+    qtest_writeb(qts, XFR(0xfe81), 0x81);
+    qtest_clock_step(qts, 300);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 733);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0x80);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfe82)), ==, 0xc0);
+
+    qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, XFR(0xfe80)), ==, 0x00);
     qtest_quit(qts);
 }
