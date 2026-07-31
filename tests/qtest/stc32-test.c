@@ -1415,6 +1415,24 @@ static void test_gpio_registers(void)
     qtest_quit(qts);
 }
 
+static void test_gpio_input_reset(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+    const unsigned pin = 8;
+
+    qtest_writeb(qts, SFR(0x91), 0x00);
+    qtest_writeb(qts, SFR(0x92), 0x01);
+    qtest_writeb(qts, SFR(0x90), 0x01);
+    qtest_set_irq_in(qts, GPIO, "gpio-in", pin, 0);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x91)), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x92)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x90)) & 0x01, ==, 0x00);
+
+    qtest_quit(qts);
+}
+
 static void test_gpio_modes(void)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1889,6 +1907,7 @@ int main(int argc, char **argv)
                    test_dsp32_compound);
     qtest_add_func("/stc32/tfpu/registers", test_tfpu_registers);
     qtest_add_func("/stc32/gpio/registers", test_gpio_registers);
+    qtest_add_func("/stc32/gpio/input-reset", test_gpio_input_reset);
     qtest_add_func("/stc32/gpio/modes", test_gpio_modes);
     qtest_add_func("/stc32/gpio/external-interrupts",
                    test_external_interrupts);

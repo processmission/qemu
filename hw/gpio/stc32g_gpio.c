@@ -224,7 +224,6 @@ static void stc32g_gpio_reset(DeviceState *dev)
     Stc32gGPIOState *s = STC32G_GPIO(dev);
     unsigned index;
 
-    memset(s->input, 0xff, sizeof(s->input));
     for (index = 0; index < ARRAY_SIZE(stc32g_gpio_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }
@@ -275,6 +274,7 @@ static void stc32g_gpio_init(Object *obj)
                       STC32G_GPIO_REGS);
     QEMU_BUILD_BUG_ON(ARRAY_SIZE(stc32g_gpio_reg_offsets) !=
                       STC32G_GPIO_REGS);
+    memset(s->input, 0xff, sizeof(s->input));
     memory_region_init(&s->sfr, obj, "stc32g.gpio-sfr",
                        STC32G_GPIO_SFR_SIZE);
     for (index = 0; index < ARRAY_SIZE(stc32g_gpio_regs_info); index++) {
