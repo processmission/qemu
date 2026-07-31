@@ -1286,6 +1286,22 @@ class MCS251ISATest(QemuSystemTest):
         self.tfpu_command(p, 0x25)
         self.tfpu_assert32(p, 4, 0xfffffffe)
 
+        int8_boundary_vectors = (
+            (0x42fe0000, 0x7f, 0),
+            (0xc3000000, 0x80, 0),
+            (0x43000000, 0x7f, 1),
+            (0xc3010000, 0x80, 1),
+        )
+        for value, expected, expected_status in int8_boundary_vectors:
+            self.tfpu_command(p, 0x32)
+            self.tfpu_write32(p, 4, value)
+            self.tfpu_command(p, 0x23)
+            self.cmp_imm(p, 7, expected)
+            p.fail_if(0x78)
+            self.tfpu_command(p, 0x33)
+            self.cmp_imm(p, 7, expected_status)
+            p.fail_if(0x78)
+
         rounding_vectors = (
             (0, 2),
             (1, 1),
