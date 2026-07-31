@@ -15,6 +15,7 @@
 #define MACHINE "-M stc8g1k08a"
 #define SOC "/machine/soc"
 #define CPU SOC "/cpu"
+#define ADC SOC "/adc"
 #define GPIO SOC "/gpio"
 #define INTC SOC "/intc"
 
@@ -702,6 +703,43 @@ static void test_interrupt_controller(void)
     qtest_quit(qts);
 }
 
+static void test_adc(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    qtest_irq_intercept_in(qts, CPU);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbd)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbe)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xde)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfea8)), ==, 0x2a);
+
+    qtest_set_irq_in(qts, ADC, "adc-in", 0, 0x155);
+    qtest_writeb(qts, SFR(0xbc), 0xc0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xc0);
+    qtest_clock_step(qts, 1010000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0xa0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbd)), ==, 0x55);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbe)), ==, 0x40);
+    g_assert_true(qtest_get_irq(qts, IRQ_ADC));
+
+    qtest_writeb(qts, SFR(0xbc), 0x80);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0x80);
+    g_assert_false(qtest_get_irq(qts, IRQ_ADC));
+
+    qtest_set_irq_in(qts, ADC, "adc-in", 1, 0x2ab);
+    qtest_writeb(qts, SFR(0xde), 0x20);
+    qtest_writeb(qts, SFR(0xbc), 0xc1);
+    qtest_clock_step(qts, 10000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbd)), ==, 0x02);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbe)), ==, 0xab);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xbc)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfea8)), ==, 0x2a);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -957,6 +995,7 @@ int main(int argc, char **argv)
                    test_gpio_external_interrupts);
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
+    qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",
                    test_timer_reload_and_gates);
