@@ -1012,11 +1012,39 @@ static void test_dsp32_arithmetic(void)
     dsp_assert_flags(qts, true, false, false);
 
     dsp_set_flags(qts, true);
+    dsp_write32(qts, DSP_EAX, 0);
+    dsp_write32(qts, DSP_EBX, 0x7fffffff);
+    dsp_command(qts, 0x94);
+    g_assert_cmphex(dsp_read32(qts, DSP_EAX), ==, 0x80000000);
+    dsp_assert_flags(qts, true, false, false);
+
+    dsp_set_flags(qts, true);
+    dsp_write32(qts, DSP_EAX, 0x80000000);
+    dsp_write32(qts, DSP_EBX, 0x7fffffff);
+    dsp_command(qts, 0x94);
+    g_assert_cmphex(dsp_read32(qts, DSP_EAX), ==, 0);
+    dsp_assert_flags(qts, false, true, true);
+
+    dsp_set_flags(qts, true);
     dsp_write32(qts, DSP_EAX, 0xa5a50000);
     dsp_write32(qts, DSP_EBX, 0);
     dsp_command(qts, 0x95);
     g_assert_cmphex(dsp_read32(qts, DSP_EAX), ==, 0xa5a5ffff);
     dsp_assert_flags(qts, true, false, false);
+
+    dsp_set_flags(qts, true);
+    dsp_write32(qts, DSP_EAX, 0xa5a50000);
+    dsp_write32(qts, DSP_EBX, 0x5a5a7fff);
+    dsp_command(qts, 0x95);
+    g_assert_cmphex(dsp_read32(qts, DSP_EAX), ==, 0xa5a58000);
+    dsp_assert_flags(qts, true, false, false);
+
+    dsp_set_flags(qts, true);
+    dsp_write32(qts, DSP_EAX, 0xa5a58000);
+    dsp_write32(qts, DSP_EBX, 0x5a5a7fff);
+    dsp_command(qts, 0x95);
+    g_assert_cmphex(dsp_read32(qts, DSP_EAX), ==, 0xa5a50000);
+    dsp_assert_flags(qts, false, true, true);
 
     dsp_set_flags(qts, false);
     dsp_write32(qts, DSP_EAX, 0x80000000);
