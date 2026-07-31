@@ -2026,17 +2026,13 @@ static void mcs251_source_execute(CPUMCS251State *env, uint8_t opcode,
 
 static int mcs251_pick_interrupt(CPUMCS251State *env)
 {
-    uint32_t enabled =
-        env->irq_pending & env->ie & MCS251_IP_WRITABLE_MASK;
+    MCS251CPU *cpu = env_archcpu(env);
     bool timer0_nmi = env->timer0_mode3_armed &&
-                      (env->irq_pending & BIT(MCS251_IRQ_TIMER0));
+                      (env->irq_pending & BIT_ULL(MCS251_IRQ_TIMER0));
     int best = -1;
     int best_level = -1;
     int irq;
 
-    if (timer0_nmi) {
-        enabled |= BIT(MCS251_IRQ_TIMER0);
-    }
     if (!FIELD_EX8(env->ie, IE, EA) && !timer0_nmi) {
         return -1;
     }
@@ -2044,12 +2040,13 @@ static int mcs251_pick_interrupt(CPUMCS251State *env)
     for (irq = 0; irq < MCS251_NUM_IRQS; irq++) {
         int level;
 
-        if (!(enabled & BIT(irq))) {
+        if (!(env->irq_pending & BIT_ULL(irq)) ||
+            (!cpu->irq_enabled[irq] &&
+             !(irq == MCS251_IRQ_TIMER0 && timer0_nmi))) {
             continue;
         }
         level = irq == MCS251_IRQ_TIMER0 && timer0_nmi ? 4 :
-                extract32(env->iph, irq, 1) * 2 +
-                extract32(env->ip, irq, 1);
+                cpu->irq_priority[irq];
         if (env->irq_level != UINT32_MAX && level <= env->irq_level) {
             continue;
         }
@@ -2082,16 +2079,8 @@ bool mcs251_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 
 void mcs251_cpu_do_interrupt(CPUState *cs)
 {
-#ifndef TARGET_MCS251
-    static const uint32_t vectors[MCS251_NUM_IRQS] = {
-        0x0003, 0x000b, 0x0013, 0x001b, 0x0023,
-    };
-#else
-    static const uint32_t vectors[MCS251_NUM_IRQS] = {
-        0xff0003, 0xff000b, 0xff0013, 0xff001b, 0xff0023,
-    };
-#endif
     CPUMCS251State *env = cpu_env(cs);
+    MCS251CPU *cpu = MCS251_CPU(cs);
     uint32_t old_pc = env->pc;
     unsigned irq = env->irq_ack;
     unsigned level;
@@ -2102,8 +2091,7 @@ void mcs251_cpu_do_interrupt(CPUState *cs)
 
     env->ta_stage = MCS251_TA_STAGE_LOCKED;
     level = irq == MCS251_IRQ_TIMER0 && env->timer0_mode3_armed ? 4 :
-            extract32(env->iph, irq, 1) * 2 +
-            extract32(env->ip, irq, 1);
+            cpu->irq_priority[irq];
     if (env->irq_depth < MCS251_MAX_IRQ_DEPTH) {
         env->irq_level_stack[env->irq_depth++] = env->irq_level;
     }
@@ -2139,17 +2127,13 @@ void mcs251_cpu_do_interrupt(CPUState *cs)
         break;
     }
 
-    /*
-     * The timer and external-interrupt flags are cleared on acknowledge.
-     * UART RI/TI are software-cleared level sources and must remain pending.
-     */
-    if (irq != MCS251_IRQ_UART1) {
-        env->irq_pending &= ~BIT(irq);
+    if (cpu->irq_auto_clear[irq]) {
+        env->irq_pending &= ~BIT_ULL(irq);
     }
     if (!env->irq_pending) {
         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
     }
-    env->pc = vectors[irq];
+    env->pc = cpu->irq_vector[irq];
     trace_mcs51_irq_take(cs->cpu_index, irq, level, old_pc,
                          env->pc, env->irq_depth);
     qemu_log_mask(CPU_LOG_INT,

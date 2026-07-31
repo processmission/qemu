@@ -38,8 +38,9 @@
 #define MCS251_DISABLED_PHYS_BASE MCS51_DISABLED_PHYS_BASE
 
 #define MCS251_NUM_REG_POSITIONS 64
-#define MCS251_NUM_IRQS 5
+#define MCS251_NUM_IRQS 64
 #define MCS251_MAX_IRQ_DEPTH 8
+#define MCS251_MAX_SFR_WRITE_NOTIFIERS 4
 #define MCS251_TB_FLAG_BINARY BIT(0)
 #define MCS251_OPCODE_ESCAPE 0xa5
 #define MCS251_DPTR_DR_CODE 14
@@ -197,6 +198,8 @@ FIELD(IE, ET0, 1, 1)
 FIELD(IE, EX1, 2, 1)
 FIELD(IE, ET1, 3, 1)
 FIELD(IE, ES, 4, 1)
+FIELD(IE, EADC, 5, 1)
+FIELD(IE, ELVD, 6, 1)
 FIELD(IE, EA, 7, 1)
 
 FIELD(IP, PX0, 0, 1)
@@ -204,6 +207,9 @@ FIELD(IP, PT0, 1, 1)
 FIELD(IP, PX1, 2, 1)
 FIELD(IP, PT1, 3, 1)
 FIELD(IP, PS, 4, 1)
+FIELD(IP, PADC, 5, 1)
+FIELD(IP, PLVD, 6, 1)
+FIELD(IP, PPCA, 7, 1)
 
 FIELD(DPS, SEL, 0, 1)
 FIELD(DPS, AU0, 3, 1)
@@ -236,10 +242,10 @@ FIELD(MCS251_INCDEC_MODE, WIDTH, 2, 2)
 
 #define MCS251_IE_WRITABLE_MASK \
     (R_IE_EX0_MASK | R_IE_ET0_MASK | R_IE_EX1_MASK | R_IE_ET1_MASK | \
-     R_IE_ES_MASK | R_IE_EA_MASK)
+     R_IE_ES_MASK | R_IE_EADC_MASK | R_IE_ELVD_MASK | R_IE_EA_MASK)
 #define MCS251_IP_WRITABLE_MASK \
     (R_IP_PX0_MASK | R_IP_PT0_MASK | R_IP_PX1_MASK | R_IP_PT1_MASK | \
-     R_IP_PS_MASK)
+     R_IP_PS_MASK | R_IP_PADC_MASK | R_IP_PLVD_MASK | R_IP_PPCA_MASK)
 #define MCS251_DPS_WRITABLE_MASK \
     (R_DPS_SEL_MASK | R_DPS_AU0_MASK | R_DPS_AU1_MASK | R_DPS_TSL_MASK | \
      R_DPS_ID0_MASK | R_DPS_ID1_MASK)
@@ -250,6 +256,9 @@ enum {
     MCS251_IRQ_INT1,
     MCS251_IRQ_TIMER1,
     MCS251_IRQ_UART1,
+    MCS251_IRQ_ADC,
+    MCS251_IRQ_LVD,
+    MCS251_IRQ_PCA,
 };
 
 typedef struct CPUArchState {
@@ -288,7 +297,7 @@ typedef struct CPUArchState {
     uint32_t ip;
     uint32_t iph;
 
-    uint32_t irq_pending;
+    uint64_t irq_pending;
     uint32_t irq_ack;
     uint32_t irq_level;
     uint32_t irq_depth;
@@ -301,6 +310,8 @@ typedef struct CPUArchState {
 
 typedef void (*MCS251SFRImmediateWrite)(void *opaque, uint8_t addr,
                                        uint8_t value);
+typedef void (*MCS251SFRWriteNotifier)(void *opaque, uint8_t addr,
+                                       uint8_t value);
 
 struct ArchCPU {
     CPUState parent_obj;
@@ -310,6 +321,14 @@ struct ArchCPU {
     MemoryRegion disabled;
     MCS251SFRImmediateWrite sfr_immediate_write;
     void *sfr_immediate_opaque;
+    uint32_t irq_vector[MCS251_NUM_IRQS];
+    uint8_t irq_enabled[MCS251_NUM_IRQS];
+    uint8_t irq_priority[MCS251_NUM_IRQS];
+    uint8_t irq_auto_clear[MCS251_NUM_IRQS];
+    MCS251SFRWriteNotifier sfr_write_notifier[
+        MCS251_MAX_SFR_WRITE_NOTIFIERS];
+    void *sfr_write_notifier_opaque[MCS251_MAX_SFR_WRITE_NOTIFIERS];
+    unsigned sfr_write_notifier_count;
 };
 
 struct MCS251CPUClass {
@@ -342,6 +361,13 @@ void mcs251_cpu_direct_write_immediate(CPUMCS251State *env, uint8_t addr,
 void mcs251_cpu_set_sfr_immediate_write(MCS251CPU *cpu,
                                         MCS251SFRImmediateWrite callback,
                                         void *opaque);
+void mcs251_cpu_add_sfr_write_notifier(MCS251CPU *cpu,
+                                       MCS251SFRWriteNotifier callback,
+                                       void *opaque);
+void mcs251_cpu_configure_irq(MCS251CPU *cpu, unsigned irq,
+                              uint32_t vector, unsigned priority,
+                              bool enabled, bool auto_clear);
+void mcs251_cpu_sync_irq_configuration(MCS251CPU *cpu);
 
 bool mcs251_cpu_exec_interrupt(CPUState *cs, int interrupt_request);
 void mcs251_cpu_do_interrupt(CPUState *cs);

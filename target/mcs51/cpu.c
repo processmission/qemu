@@ -43,6 +43,41 @@ static bool mcs251_cpu_has_work(CPUState *cs)
            cpu_test_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_RESET);
 }
 
+static void mcs251_cpu_update_interrupt_request(MCS251CPU *cpu)
+{
+    CPUState *cs = CPU(cpu);
+
+    if (cpu->env.irq_pending) {
+        cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+    } else {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
+}
+
+static void mcs251_cpu_update_classic_irq_configuration(MCS251CPU *cpu)
+{
+    CPUMCS251State *env = &cpu->env;
+    unsigned irq;
+
+    for (irq = MCS251_IRQ_INT0; irq <= MCS251_IRQ_UART1; irq++) {
+        cpu->irq_enabled[irq] = extract8(env->ie, irq, 1);
+        cpu->irq_priority[irq] = extract8(env->iph, irq, 1) * 2 +
+                                 extract8(env->ip, irq, 1);
+    }
+    mcs251_cpu_update_interrupt_request(cpu);
+}
+
+static void mcs251_cpu_notify_sfr_write(MCS251CPU *cpu, uint8_t addr,
+                                         uint8_t value)
+{
+    unsigned index;
+
+    for (index = 0; index < cpu->sfr_write_notifier_count; index++) {
+        cpu->sfr_write_notifier[index](
+            cpu->sfr_write_notifier_opaque[index], addr, value);
+    }
+}
+
 static int mcs251_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
 #ifndef TARGET_MCS251
@@ -258,6 +293,42 @@ void mcs251_cpu_set_sfr_immediate_write(MCS251CPU *cpu,
     cpu->sfr_immediate_opaque = opaque;
 }
 
+void mcs251_cpu_add_sfr_write_notifier(MCS251CPU *cpu,
+                                       MCS251SFRWriteNotifier callback,
+                                       void *opaque)
+{
+    unsigned index = cpu->sfr_write_notifier_count;
+
+    g_assert(index < MCS251_MAX_SFR_WRITE_NOTIFIERS);
+    cpu->sfr_write_notifier[index] = callback;
+    cpu->sfr_write_notifier_opaque[index] = opaque;
+    cpu->sfr_write_notifier_count++;
+}
+
+void mcs251_cpu_configure_irq(MCS251CPU *cpu, unsigned irq,
+                              uint32_t vector, unsigned priority,
+                              bool enabled, bool auto_clear)
+{
+    g_assert(irq < MCS251_NUM_IRQS);
+
+    cpu->irq_vector[irq] = vector & MCS_TARGET_ADDR_MASK;
+    cpu->irq_priority[irq] = priority;
+    cpu->irq_enabled[irq] = enabled;
+    cpu->irq_auto_clear[irq] = auto_clear;
+    mcs251_cpu_update_interrupt_request(cpu);
+}
+
+void mcs251_cpu_sync_irq_configuration(MCS251CPU *cpu)
+{
+    CPUMCS251State *env = &cpu->env;
+
+    mcs251_cpu_update_classic_irq_configuration(cpu);
+    mcs251_cpu_notify_sfr_write(cpu, MCS251_SFR_IE, env->ie);
+    mcs251_cpu_notify_sfr_write(cpu, MCS251_SFR_IPH, env->iph);
+    mcs251_cpu_notify_sfr_write(cpu, MCS251_SFR_IP, env->ip);
+    mcs251_cpu_notify_sfr_write(cpu, MCS251_SFR_INTCLKO, env->intclko);
+}
+
 static uint64_t mcs251_cpu_sfr_read(void *opaque, hwaddr offset,
                                     unsigned size)
 {
@@ -463,6 +534,12 @@ static void mcs251_cpu_sfr_write(void *opaque, hwaddr offset,
     if (flush) {
         tlb_flush(cs);
     }
+    if (addr == MCS251_SFR_IE || addr == MCS251_SFR_IPH ||
+        addr == MCS251_SFR_IP) {
+        mcs251_cpu_update_classic_irq_configuration(MCS251_CPU(cs));
+    }
+    mcs251_cpu_notify_sfr_write(MCS251_CPU(cs), addr,
+                                 mcs251_cpu_sfr_read(env, offset, size));
 }
 
 static const MemoryRegionOps mcs251_cpu_sfr_ops = {
@@ -522,6 +599,8 @@ static void mcs251_cpu_reset_hold(Object *obj, ResetType type)
 #endif
     env->irq_ack = UINT32_MAX;
     env->irq_level = UINT32_MAX;
+
+    mcs251_cpu_sync_irq_configuration(cpu);
 
     cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_RESET);
     trace_mcs51_cpu_reset(cs->cpu_index, env->pc,
@@ -584,7 +663,7 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
 {
     MCS251CPU *cpu = opaque;
     CPUState *cs = CPU(cpu);
-    uint32_t mask = BIT(irq);
+    uint64_t mask = BIT_ULL(irq);
     bool changed = !!(cpu->env.irq_pending & mask) != !!level;
     int active;
 
@@ -593,9 +672,7 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
         cpu_interrupt(cs, CPU_INTERRUPT_HARD);
     } else {
         cpu->env.irq_pending &= ~mask;
-        if (!cpu->env.irq_pending) {
-            cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
-        }
+        mcs251_cpu_update_interrupt_request(cpu);
     }
     if (!changed) {
         return;
@@ -605,7 +682,7 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
     trace_mcs51_irq_set(cs->cpu_index, irq, level, cpu->env.irq_pending,
                         cpu->env.ie, cpu->env.ip, cpu->env.iph, active);
     qemu_log_mask(CPU_LOG_INT,
-                  "%s: CPU %d IRQ %d input %s pending=0x%02" PRIx32
+                  "%s: CPU %d IRQ %d input %s pending=0x%016" PRIx64
                   " IE=0x%02x IP=0x%02x IPH=0x%02x active=%d\n",
                   object_get_typename(OBJECT(cpu)), cs->cpu_index, irq,
                   level ? "asserted" : "cleared", cpu->env.irq_pending,
@@ -615,6 +692,18 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
 static void mcs251_cpu_init(Object *obj)
 {
     MCS251CPU *cpu = MCS251_CPU(obj);
+    uint32_t vector_base;
+    unsigned irq;
+
+#ifndef TARGET_MCS251
+    vector_base = 0;
+#else
+    vector_base = 0xff0000;
+#endif
+    for (irq = MCS251_IRQ_INT0; irq <= MCS251_IRQ_UART1; irq++) {
+        cpu->irq_vector[irq] = vector_base + 0x0003 + irq * 8;
+        cpu->irq_auto_clear[irq] = irq != MCS251_IRQ_UART1;
+    }
 
     qdev_init_gpio_in(DEVICE(cpu), mcs251_cpu_set_irq, MCS251_NUM_IRQS);
 }

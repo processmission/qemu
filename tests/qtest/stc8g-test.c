@@ -310,9 +310,9 @@ static void test_reset_and_memory(void)
 
     /* Sparse GPIO and UART containers must not hide CPU-owned SFRs. */
     qtest_writeb(qts, SFR(0xa8), 0xff);
-    g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0x9f);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xa8)), ==, 0xff);
     qtest_writeb(qts, SFR(0xb8), 0xff);
-    g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0x1f);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xb8)), ==, 0xff);
     qtest_writeb(qts, SFR(0xa0), 0x03);
     g_assert_cmphex(qtest_readb(qts, SFR(0xa0)), ==, 0x03);
     qtest_writeb(qts, SFR(0x81), 0x55);
