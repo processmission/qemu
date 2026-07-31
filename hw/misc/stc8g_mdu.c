@@ -50,6 +50,9 @@ struct Stc8gMDUState {
     uint16_t divisor;
     uint8_t mode;
     uint8_t shift;
+    uint64_t remaining_cycles;
+    uint32_t clock_remainder;
+    int64_t last_ns;
     bool active;
 };
 
@@ -106,19 +109,20 @@ static uint64_t stc8g_mdu_operation_cycles(Stc8gMDUState *s)
     }
 }
 
-static uint64_t stc8g_mdu_operation_ns(Stc8gMDUState *s)
-{
-    return DIV_ROUND_UP(stc8g_mdu_operation_cycles(s) *
-                        NANOSECONDS_PER_SECOND, s->clock_frequency);
-}
+static void stc8g_mdu_sync(Stc8gMDUState *s);
+static void stc8g_mdu_schedule(Stc8gMDUState *s);
 
 static void stc8g_mdu_clock_update(void *opaque, ClockEvent event)
 {
     Stc8gMDUState *s = opaque;
 
-    if (event == ClockUpdate) {
-        s->clock_frequency = clock_get_hz(s->sysclk);
+    if (event == ClockPreUpdate) {
+        stc8g_mdu_sync(s);
+        return;
     }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    stc8g_mdu_schedule(s);
 }
 
 static void stc8g_mdu_complete(void *opaque)
@@ -178,13 +182,56 @@ static void stc8g_mdu_complete(void *opaque)
                              stc8g_mdu_get_divisor(s));
 }
 
-static void stc8g_mdu_start(Stc8gMDUState *s)
+static void stc8g_mdu_sync(Stc8gMDUState *s)
 {
-    uint64_t delay;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (!s->clock_frequency) {
+    if (s->active && s->clock_frequency) {
+        uint64_t elapsed = now - s->last_ns;
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder;
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        if (cycles >= s->remaining_cycles) {
+            s->remaining_cycles = 0;
+            s->last_ns = now;
+            timer_del(s->timer);
+            stc8g_mdu_complete(s);
+            return;
+        }
+        s->remaining_cycles -= cycles;
+    }
+    s->last_ns = now;
+}
+
+static void stc8g_mdu_schedule(Stc8gMDUState *s)
+{
+    uint64_t numerator;
+    uint64_t delta;
+
+    timer_del(s->timer);
+    if (!s->active || !s->clock_frequency) {
         return;
     }
+    numerator = s->remaining_cycles * NANOSECONDS_PER_SECOND -
+                s->clock_remainder;
+    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
+}
+
+static void stc8g_mdu_expire(void *opaque)
+{
+    Stc8gMDUState *s = opaque;
+
+    stc8g_mdu_sync(s);
+    stc8g_mdu_schedule(s);
+}
+
+static void stc8g_mdu_start(Stc8gMDUState *s)
+{
     s->operand = stc8g_mdu_get_operand(s);
     s->divisor = stc8g_mdu_get_divisor(s);
     s->mode = FIELD_EX8(s->regs[STC8G_MDU_ARCON], ARCON, MODE);
@@ -193,15 +240,20 @@ static void stc8g_mdu_start(Stc8gMDUState *s)
         s->shift = s->operand ? MIN(31, clz32(s->operand)) : 0;
     }
     stc8g_mdu_set_overflow(s, false);
-    delay = stc8g_mdu_operation_ns(s);
-    if (!delay) {
+    s->remaining_cycles = stc8g_mdu_operation_cycles(s);
+    if (!s->remaining_cycles) {
         s->regs[STC8G_MDU_OPCON] = FIELD_DP8(
             s->regs[STC8G_MDU_OPCON], OPCON, ENOP, 0);
         return;
     }
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->active = true;
-    timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay);
-    trace_stc8g_mdu_start(s->mode, s->operand, s->divisor, delay);
+    stc8g_mdu_schedule(s);
+    trace_stc8g_mdu_start(s->mode, s->operand, s->divisor,
+                          s->clock_frequency ? DIV_ROUND_UP(
+                          s->remaining_cycles * NANOSECONDS_PER_SECOND,
+                          s->clock_frequency) : 0);
 }
 
 static void stc8g_mdu_arcon_post_write(RegisterInfo *reg, uint64_t value)
@@ -216,6 +268,8 @@ static void stc8g_mdu_opcon_post_write(RegisterInfo *reg, uint64_t value)
     if (FIELD_EX8(value, OPCON, RST)) {
         timer_del(s->timer);
         s->active = false;
+        s->remaining_cycles = 0;
+        s->clock_remainder = 0;
         s->regs[STC8G_MDU_ARCON] = 0;
         s->regs[STC8G_MDU_OPCON] = 0;
         trace_stc8g_mdu_reset();
@@ -256,6 +310,9 @@ static void stc8g_mdu_reset(DeviceState *dev)
     s->divisor = 0;
     s->mode = 0;
     s->shift = 0;
+    s->remaining_cycles = 0;
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     for (index = 0; index < ARRAY_SIZE(stc8g_mdu_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }
@@ -271,6 +328,9 @@ static const VMStateDescription stc8g_mdu_vmstate = {
         VMSTATE_UINT16(divisor, Stc8gMDUState),
         VMSTATE_UINT8(mode, Stc8gMDUState),
         VMSTATE_UINT8(shift, Stc8gMDUState),
+        VMSTATE_UINT64(remaining_cycles, Stc8gMDUState),
+        VMSTATE_UINT32(clock_remainder, Stc8gMDUState),
+        VMSTATE_INT64(last_ns, Stc8gMDUState),
         VMSTATE_BOOL(active, Stc8gMDUState),
         VMSTATE_TIMER_PTR(timer, Stc8gMDUState),
         VMSTATE_END_OF_LIST()
@@ -306,9 +366,10 @@ static void stc8g_mdu_init(Object *obj)
             false, 1);
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
-    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_mdu_complete, s);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_mdu_expire, s);
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
-                                   stc8g_mdu_clock_update, s, ClockUpdate);
+                                   stc8g_mdu_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
 }
 
 static void stc8g_mdu_class_init(ObjectClass *oc, const void *data)
