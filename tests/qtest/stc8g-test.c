@@ -1529,6 +1529,15 @@ static void test_iap(void)
     qtest_clock_step(qts, 167);
     g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0x50);
 
+    iap_execute(qts, 1, 0x0234, 0);
+    qtest_clock_step(qts, 83);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 167);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0x00);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0x50);
+    qtest_writeb(qts, XFR(0xfe01), 0x00);
+
     iap_execute(qts, 2, 0x0200, 0x00);
     qtest_clock_step(qts, 31000);
     iap_execute(qts, 3, 0x0234, 0);

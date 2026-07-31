@@ -63,6 +63,9 @@ struct Stc8gIapState {
     uint8_t pending_data;
     uint8_t pending_cmd;
     uint8_t trigger_stage;
+    uint64_t remaining_read_cycles;
+    uint32_t clock_remainder;
+    int64_t last_ns;
     bool busy;
     bool sw_reset_requested;
     bool resetting;
@@ -95,6 +98,9 @@ static uint64_t stc8g_iap_operation_ns(Stc8gIapState *s, unsigned cmd)
     }
 }
 
+static void stc8g_iap_sync(Stc8gIapState *s);
+static void stc8g_iap_schedule(Stc8gIapState *s);
+
 static bool stc8g_iap_tps_valid(Stc8gIapState *s)
 {
     unsigned expected;
@@ -123,12 +129,21 @@ static void stc8g_iap_start(Stc8gIapState *s)
         return;
     }
 
-    duration = stc8g_iap_operation_ns(s, cmd);
     s->pending_addr = stc8g_iap_address(s);
     s->pending_data = s->regs[STC8G_IAP_MMIO_DATA];
     s->pending_cmd = cmd;
     s->busy = true;
-    timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + duration);
+    s->remaining_read_cycles = cmd == STC8G_IAP_CMD_READ ? 4 : 0;
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    duration = cmd == STC8G_IAP_CMD_READ ?
+        DIV_ROUND_UP(s->remaining_read_cycles * NANOSECONDS_PER_SECOND,
+                     s->clock_frequency) : stc8g_iap_operation_ns(s, cmd);
+    if (cmd == STC8G_IAP_CMD_READ) {
+        stc8g_iap_schedule(s);
+    } else {
+        timer_mod_ns(s->timer, s->last_ns + duration);
+    }
     trace_stc8g_iap_start(cmd, s->pending_addr, duration);
 }
 
@@ -158,6 +173,60 @@ static void stc8g_iap_complete(void *opaque)
     s->busy = false;
     trace_stc8g_iap_complete(s->pending_cmd, s->pending_addr,
                              s->regs[STC8G_IAP_MMIO_DATA]);
+}
+
+static void stc8g_iap_sync(Stc8gIapState *s)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (s->busy && s->pending_cmd == STC8G_IAP_CMD_READ &&
+        s->clock_frequency) {
+        uint64_t elapsed = now - s->last_ns;
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder;
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        if (cycles >= s->remaining_read_cycles) {
+            s->remaining_read_cycles = 0;
+            s->last_ns = now;
+            timer_del(s->timer);
+            stc8g_iap_complete(s);
+            return;
+        }
+        s->remaining_read_cycles -= cycles;
+    }
+    s->last_ns = now;
+}
+
+static void stc8g_iap_schedule(Stc8gIapState *s)
+{
+    uint64_t numerator;
+    uint64_t delta;
+
+    timer_del(s->timer);
+    if (!s->busy || s->pending_cmd != STC8G_IAP_CMD_READ ||
+        !s->clock_frequency) {
+        return;
+    }
+    numerator = s->remaining_read_cycles * NANOSECONDS_PER_SECOND -
+                s->clock_remainder;
+    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
+}
+
+static void stc8g_iap_expire(void *opaque)
+{
+    Stc8gIapState *s = opaque;
+
+    if (s->pending_cmd == STC8G_IAP_CMD_READ) {
+        stc8g_iap_sync(s);
+        stc8g_iap_schedule(s);
+    } else {
+        stc8g_iap_complete(s);
+    }
 }
 
 static uint64_t stc8g_iap_eeprom_read(void *opaque, hwaddr offset,
@@ -281,9 +350,13 @@ static void stc8g_iap_clock_update(void *opaque, ClockEvent event)
 {
     Stc8gIapState *s = opaque;
 
-    if (event == ClockUpdate) {
-        s->clock_frequency = clock_get_hz(s->sysclk);
+    if (event == ClockPreUpdate) {
+        stc8g_iap_sync(s);
+        return;
     }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    stc8g_iap_schedule(s);
 }
 
 static void stc8g_iap_reset(DeviceState *dev)
@@ -297,6 +370,9 @@ static void stc8g_iap_reset(DeviceState *dev)
     }
     s->resetting = false;
     s->busy = false;
+    s->remaining_read_cycles = 0;
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->trigger_stage = STC8G_IAP_TRIGGER_IDLE;
     s->sw_reset_requested = false;
     timer_del(s->timer);
@@ -312,6 +388,9 @@ static const VMStateDescription stc8g_iap_vmstate = {
         VMSTATE_UINT8(pending_data, Stc8gIapState),
         VMSTATE_UINT8(pending_cmd, Stc8gIapState),
         VMSTATE_UINT8(trigger_stage, Stc8gIapState),
+        VMSTATE_UINT64(remaining_read_cycles, Stc8gIapState),
+        VMSTATE_UINT32(clock_remainder, Stc8gIapState),
+        VMSTATE_INT64(last_ns, Stc8gIapState),
         VMSTATE_BOOL(busy, Stc8gIapState),
         VMSTATE_TIMER_PTR(timer, Stc8gIapState),
         VMSTATE_END_OF_LIST()
@@ -350,8 +429,9 @@ static void stc8g_iap_init(Object *obj)
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
-                                   stc8g_iap_clock_update, s, ClockUpdate);
-    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_iap_complete, s);
+                                   stc8g_iap_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_iap_expire, s);
 }
 
 static void stc8g_iap_finalize(Object *obj)
