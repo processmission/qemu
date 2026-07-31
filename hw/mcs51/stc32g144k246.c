@@ -16,7 +16,7 @@
 #include "qom/object.h"
 
 #define TYPE_STC32G144K246_MACHINE \
-    MACHINE_TYPE_NAME("stc32g144k246-evb")
+    MACHINE_TYPE_NAME("stc32g144k246")
 OBJECT_DECLARE_SIMPLE_TYPE(Stc32g144k246MachineState,
                            STC32G144K246_MACHINE)
 

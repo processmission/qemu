@@ -490,7 +490,7 @@ class MCS51ISATest(QemuSystemTest):
         return path
 
     def run_firmware(self, firmware, success, failure=None):
-        self.set_machine('stc8g1k08a-evb')
+        self.set_machine('stc8g1k08a')
         self.vm.add_args('-bios', str(firmware))
         self.vm.set_console()
         self.vm.launch()
@@ -504,7 +504,7 @@ class MCS51ISATest(QemuSystemTest):
         firmware = self.build_interrupt_firmware()
         log = Path(self.scratch_file('mcs51-interrupt.log'))
 
-        self.set_machine('stc8g1k08a-evb')
+        self.set_machine('stc8g1k08a')
         self.vm.add_args('-bios', str(firmware),
                          '-d', 'int,cpu_reset,trace:mcs51_*',
                          '-D', str(log))

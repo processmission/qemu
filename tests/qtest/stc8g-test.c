@@ -12,7 +12,7 @@
 #include "qemu/sockets.h"
 #include "libqtest.h"
 
-#define MACHINE "-M stc8g1k08a-evb"
+#define MACHINE "-M stc8g1k08a"
 #define SOC "/machine/soc"
 #define CPU SOC "/cpu"
 #define GPIO SOC "/gpio"
