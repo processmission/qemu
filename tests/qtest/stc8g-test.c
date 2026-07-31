@@ -30,6 +30,15 @@
 #define OPCODE_SLOT_SIZE 4
 #define INVALID_HEX_ENV "QTEST_STC8G_INVALID_HEX"
 
+static char *quote_firmware_path(const char *path)
+{
+#ifdef _WIN32
+    return g_strdup_printf("\"%s\"", path);
+#else
+    return g_shell_quote(path);
+#endif
+}
+
 enum {
     IRQ_INT0,
     IRQ_TIMER0,
@@ -319,6 +328,7 @@ static void test_raw_firmware_loading(void)
     g_autoptr(GError) error = NULL;
     g_autofree char *directory = NULL;
     g_autofree char *filename = NULL;
+    g_autofree char *quoted = NULL;
     const uint8_t image[] = { 0x74, 0x5a, 0x80, 0xfe };
     QTestState *qts;
 
@@ -329,7 +339,8 @@ static void test_raw_firmware_loading(void)
                                       sizeof(image), &error));
     g_assert_no_error(error);
 
-    qts = qtest_initf(MACHINE " -bios %s", filename);
+    quoted = quote_firmware_path(filename);
+    qts = qtest_initf(MACHINE " -bios %s", quoted);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, image[0]);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 3), ==, image[3]);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 4), ==, 0xff);
@@ -344,6 +355,7 @@ static void test_hex_firmware_loading(void)
     g_autoptr(GError) error = NULL;
     g_autofree char *directory = NULL;
     g_autofree char *filename = NULL;
+    g_autofree char *quoted = NULL;
     const char hex[] = ":04000000745A80FEB0\n:00000001FF\n";
     QTestState *qts;
 
@@ -353,7 +365,8 @@ static void test_hex_firmware_loading(void)
     g_assert_true(g_file_set_contents(filename, hex, -1, &error));
     g_assert_no_error(error);
 
-    qts = qtest_initf(MACHINE " -bios %s", filename);
+    quoted = quote_firmware_path(filename);
+    qts = qtest_initf(MACHINE " -bios %s", quoted);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0x74);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 1), ==, 0x5a);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 2), ==, 0x80);
@@ -380,7 +393,7 @@ static void test_invalid_hex_firmware(gconstpointer opaque)
         QTestState *qts;
 
         g_assert_nonnull(child_filename);
-        quoted = g_shell_quote(child_filename);
+        quoted = quote_firmware_path(child_filename);
         qts = qtest_initf(MACHINE " -bios %s", quoted);
         qtest_quit(qts);
         g_error("invalid Intel HEX firmware was accepted");
@@ -423,7 +436,7 @@ static void test_instruction_disassembly(void)
     g_assert_true(g_file_set_contents(filename, (char *)image,
                                       FLASH_SIZE, &error));
     g_assert_no_error(error);
-    quoted = g_shell_quote(filename);
+    quoted = quote_firmware_path(filename);
     qts = qtest_initf(MACHINE " -S -bios %s", quoted);
 
     for (opcode = 0; opcode < 256; opcode++) {

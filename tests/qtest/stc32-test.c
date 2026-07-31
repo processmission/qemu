@@ -33,6 +33,15 @@
 #define DPUST_DBZ BIT(6)
 #define DPUST_SC_MASK MAKE_64BIT_MASK(0, 6)
 
+static char *quote_firmware_path(const char *path)
+{
+#ifdef _WIN32
+    return g_strdup_printf("\"%s\"", path);
+#else
+    return g_shell_quote(path);
+#endif
+}
+
 enum {
     IRQ_INT0,
     IRQ_TIMER0,
@@ -306,7 +315,7 @@ static void test_hex_firmware_loading(void)
     filename = g_build_filename(directory, "firmware.hex", NULL);
     g_file_set_contents(filename, hex, -1, &error);
     g_assert_no_error(error);
-    quoted = g_shell_quote(filename);
+    quoted = quote_firmware_path(filename);
 
     qts = qtest_initf(MACHINE " -S -bios %s", quoted);
     g_assert_cmphex(qtest_readb(qts, 0xff0000), ==, 0x01);
@@ -336,7 +345,7 @@ static void test_invalid_hex_firmware(gconstpointer opaque)
         QTestState *qts;
 
         g_assert_nonnull(child_filename);
-        quoted = g_shell_quote(child_filename);
+        quoted = quote_firmware_path(child_filename);
         qts = qtest_initf(MACHINE " -S -bios %s", quoted);
         qtest_quit(qts);
         g_error("invalid Intel HEX firmware was accepted");
@@ -750,7 +759,7 @@ static void test_instruction_disassembly(void)
     filename = g_build_filename(directory, "firmware.bin", NULL);
     g_file_set_contents(filename, (char *)image, FLASH_SIZE, &error);
     g_assert_no_error(error);
-    quoted = g_shell_quote(filename);
+    quoted = quote_firmware_path(filename);
     qts = qtest_initf(MACHINE " -S -bios %s", quoted);
 
     qtest_writeb(qts, SFR(0x97), 0x00);
