@@ -8,3 +8,8 @@ config STC32G_DSP
     bool
     depends on MCS251
     select REGISTER
+
+config STC32G_TFPU
+    bool
+    depends on MCS251
+    select REGISTER
