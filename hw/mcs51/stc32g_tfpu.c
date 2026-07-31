@@ -191,6 +191,22 @@ static uint8_t stc32g_tfpu_classify(float32 value)
                       TFPU_CLASS_POSITIVE_NORMAL;
 }
 
+static int8_t stc32g_tfpu_float_to_int8(float32 value,
+                                         float_status *status)
+{
+    int32_t result = float32_to_int32(value, status);
+
+    if (result < INT8_MIN || result > INT8_MAX) {
+        FloatExceptionFlags flags = get_float_exception_flags(status);
+
+        flags &= ~float_flag_inexact;
+        flags |= float_flag_invalid | float_flag_invalid_cvti;
+        set_float_exception_flags(flags, status);
+        result = result < 0 ? INT8_MIN : INT8_MAX;
+    }
+    return result;
+}
+
 static float32 stc32g_tfpu_trigonometric(Stc32gTFPUState *s,
                                          uint8_t command, float32 value)
 {
@@ -278,7 +294,7 @@ static void stc32g_tfpu_execute(Stc32gTFPUState *s, uint8_t command)
         stc32g_tfpu_set_r7(s, stc32g_tfpu_classify(ar));
         break;
     case TFPU_FLOAT_TO_INT8:
-        stc32g_tfpu_set_r7(s, float32_to_int32(ar, &status));
+        stc32g_tfpu_set_r7(s, stc32g_tfpu_float_to_int8(ar, &status));
         stc32g_tfpu_record_exceptions(s, &status);
         break;
     case TFPU_FLOAT_TO_INT16:
