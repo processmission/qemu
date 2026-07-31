@@ -1731,6 +1731,40 @@ static void test_timer_fractional_ticks(void)
     }
 }
 
+static void test_timer_fractional_rate(void)
+{
+    unsigned timer;
+
+    for (timer = 0; timer < 2; timer++) {
+        QTestState *qts = qtest_init(MACHINE);
+        uint16_t count;
+
+        qtest_writeb(qts, SFR(0x8e), 0x01);
+        qtest_writeb(qts, 0x7efea0 + timer, 0xff);
+        qtest_writeb(qts, SFR(0x89), 0x01 << (timer * 4));
+        timer_set_count(qts, timer, 0x00, 0x00);
+        qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
+
+        qtest_clock_step(qts, 2000000000LL);
+        count = qtest_readb(qts, SFR(timer_th_address(timer))) << 8;
+        count |= qtest_readb(qts, SFR(timer_tl_address(timer)));
+        g_assert_cmphex(count, ==, 15625);
+
+        qtest_writeb(qts, SFR(0x88), 0);
+        timer_set_count(qts, timer, 0xc2, 0xf7);
+        qtest_writeb(qts, SFR(0x88), timer_run_mask(timer));
+        qtest_clock_step(qts, 1999999999LL);
+        g_assert_cmphex(qtest_readb(qts, SFR(0x88)) &
+                        timer_flag_mask(timer), ==, 0);
+        qtest_clock_step(qts, 1);
+        g_assert_cmphex(qtest_readb(qts, SFR(0x88)) &
+                        timer_flag_mask(timer),
+                        ==, timer_flag_mask(timer));
+
+        qtest_quit(qts);
+    }
+}
+
 static void test_uart1_transmit(void)
 {
     char socket_path[] = "stc32-uart-tx.XXXXXX";
@@ -1854,6 +1888,8 @@ int main(int argc, char **argv)
                    test_timer_clock_and_prescaler);
     qtest_add_func("/stc32/timer/fractional-ticks",
                    test_timer_fractional_ticks);
+    qtest_add_func("/stc32/timer/fractional-rate",
+                   test_timer_fractional_rate);
     qtest_add_func("/stc32/uart1/transmit", test_uart1_transmit);
     qtest_add_func("/stc32/uart1/receive", test_uart1_receive);
 
