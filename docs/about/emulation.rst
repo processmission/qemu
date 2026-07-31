@@ -46,6 +46,10 @@ depending on the guest architecture.
     - :ref:`Yes<ColdFire-System-emulator>`
     - Yes
     - Motorola 68000 variants and ColdFire
+  * - MCS-51 family (mcs51, mcs251)
+    - :ref:`Yes<MCS51-System-emulator>`
+    - No
+    - 8 bit microcontrollers and their MCS-251 extensions
   * - Microblaze
     - Yes
     - Yes

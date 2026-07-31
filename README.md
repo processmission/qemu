@@ -23,6 +23,8 @@ for new machine requests or bug reports.
 | ARM | [`rock-5b-plus`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`s32k566-cvb-r52`](docs/system/arm/s32k5.rst) | ✅ | - | PM |
 | ARM | [`stm32g474`](docs/system/arm/stm32g474.rst) | ✅ | - | PM |
+| MCS-51 | [`stc8g1k08a-evb`](docs/system/target-mcs51.rst) | ✅ | ✅ | PM |
+| MCS-251 | [`stc32g144k246-evb`](docs/system/target-mcs51.rst) | ✅ | ✅ | PM |
 
 Source legend:
 

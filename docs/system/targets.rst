@@ -20,6 +20,7 @@ Contents:
    target-avr
    target-loongarch
    target-m68k
+   target-mcs51
    target-mips
    target-or1k
    target-ppc
