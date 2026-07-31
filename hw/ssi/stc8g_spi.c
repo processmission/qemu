@@ -53,6 +53,9 @@ struct Stc8gSPIState {
     qemu_irq irq;
     uint32_t clock_frequency;
     uint8_t tx_data;
+    uint64_t transfer_cycles;
+    uint32_t clock_remainder;
+    int64_t last_ns;
     bool transfer_active;
     bool ss_level;
 };
@@ -83,22 +86,28 @@ static void stc8g_spi_update_irq(Stc8gSPIState *s)
                                    SPSTAT, SPIF));
 }
 
-static uint64_t stc8g_spi_transfer_ns(Stc8gSPIState *s)
+static uint64_t stc8g_spi_transfer_cycles(Stc8gSPIState *s)
 {
     unsigned divisor = 4 << FIELD_EX8(s->regs[STC8G_SPI_REG_CTL],
                                        SPCTL, SPR);
 
-    return DIV_ROUND_UP(8 * (uint64_t)divisor * NANOSECONDS_PER_SECOND,
-                        s->clock_frequency);
+    return 8 * (uint64_t)divisor;
 }
+
+static void stc8g_spi_sync(Stc8gSPIState *s);
+static void stc8g_spi_schedule(Stc8gSPIState *s);
 
 static void stc8g_spi_clock_update(void *opaque, ClockEvent event)
 {
     Stc8gSPIState *s = opaque;
 
-    if (event == ClockUpdate) {
-        s->clock_frequency = clock_get_hz(s->sysclk);
+    if (event == ClockPreUpdate) {
+        stc8g_spi_sync(s);
+        return;
     }
+    s->clock_frequency = clock_get_hz(s->sysclk);
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    stc8g_spi_schedule(s);
 }
 
 static void stc8g_spi_complete(void *opaque)
@@ -117,16 +126,66 @@ static void stc8g_spi_complete(void *opaque)
     stc8g_spi_update_irq(s);
 }
 
-static void stc8g_spi_start(Stc8gSPIState *s)
+static void stc8g_spi_sync(Stc8gSPIState *s)
 {
-    if (!s->clock_frequency) {
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (s->transfer_active && s->clock_frequency) {
+        uint64_t elapsed = now - s->last_ns;
+        uint64_t fraction = elapsed % NANOSECONDS_PER_SECOND *
+                            s->clock_frequency + s->clock_remainder;
+        uint64_t cycles = elapsed / NANOSECONDS_PER_SECOND *
+                          s->clock_frequency;
+
+        cycles += fraction / NANOSECONDS_PER_SECOND;
+        s->clock_remainder = fraction % NANOSECONDS_PER_SECOND;
+        if (cycles >= s->transfer_cycles) {
+            s->transfer_cycles = 0;
+            s->last_ns = now;
+            timer_del(s->timer);
+            stc8g_spi_complete(s);
+            return;
+        }
+        s->transfer_cycles -= cycles;
+    }
+    s->last_ns = now;
+}
+
+static void stc8g_spi_schedule(Stc8gSPIState *s)
+{
+    uint64_t numerator;
+    uint64_t delta;
+
+    timer_del(s->timer);
+    if (!s->transfer_active || !s->clock_frequency) {
         return;
     }
+    numerator = s->transfer_cycles * NANOSECONDS_PER_SECOND -
+                s->clock_remainder;
+    delta = DIV_ROUND_UP(numerator, s->clock_frequency);
+    timer_mod_ns(s->timer, s->last_ns + MAX(1ull, delta));
+}
+
+static void stc8g_spi_expire(void *opaque)
+{
+    Stc8gSPIState *s = opaque;
+
+    stc8g_spi_sync(s);
+    stc8g_spi_schedule(s);
+}
+
+static void stc8g_spi_start(Stc8gSPIState *s)
+{
     s->tx_data = s->regs[STC8G_SPI_REG_DATA];
+    s->transfer_cycles = stc8g_spi_transfer_cycles(s);
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->transfer_active = true;
-    timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                 stc8g_spi_transfer_ns(s));
-    trace_stc8g_spi_start(s->tx_data, stc8g_spi_transfer_ns(s));
+    stc8g_spi_schedule(s);
+    trace_stc8g_spi_start(s->tx_data, s->clock_frequency ?
+                          DIV_ROUND_UP(s->transfer_cycles *
+                                       NANOSECONDS_PER_SECOND,
+                                       s->clock_frequency) : 0);
 }
 
 static uint64_t stc8g_spi_data_pre_write(RegisterInfo *reg, uint64_t value)
@@ -160,6 +219,8 @@ static void stc8g_spi_ctl_post_write(RegisterInfo *reg, uint64_t value)
     if (!stc8g_spi_enabled(s)) {
         timer_del(s->timer);
         s->transfer_active = false;
+        s->transfer_cycles = 0;
+        s->clock_remainder = 0;
     } else if (!stc8g_spi_ss_ignored(s) && stc8g_spi_master(s) &&
                !s->ss_level) {
         s->regs[STC8G_SPI_REG_CTL] = FIELD_DP8(
@@ -233,6 +294,9 @@ static void stc8g_spi_reset(DeviceState *dev)
     timer_del(s->timer);
     s->transfer_active = false;
     s->tx_data = 0;
+    s->transfer_cycles = 0;
+    s->clock_remainder = 0;
+    s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     for (index = 0; index < ARRAY_SIZE(stc8g_spi_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }
@@ -253,6 +317,9 @@ static const VMStateDescription stc8g_spi_vmstate = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, Stc8gSPIState, STC8G_SPI_REGS),
         VMSTATE_UINT8(tx_data, Stc8gSPIState),
+        VMSTATE_UINT64(transfer_cycles, Stc8gSPIState),
+        VMSTATE_UINT32(clock_remainder, Stc8gSPIState),
+        VMSTATE_INT64(last_ns, Stc8gSPIState),
         VMSTATE_BOOL(transfer_active, Stc8gSPIState),
         VMSTATE_BOOL(ss_level, Stc8gSPIState),
         VMSTATE_TIMER_PTR(timer, Stc8gSPIState),
@@ -288,9 +355,10 @@ static void stc8g_spi_init(Object *obj)
             false, 1);
         sysbus_init_mmio(sbd, &s->reg_array[index]->mem);
     }
-    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_spi_complete, s);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, stc8g_spi_expire, s);
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk",
-                                   stc8g_spi_clock_update, s, ClockUpdate);
+                                   stc8g_spi_clock_update, s,
+                                   ClockPreUpdate | ClockUpdate);
     s->ssi = ssi_create_bus(DEVICE(obj), "ssi");
     s->ss_level = true;
     qdev_init_gpio_in_named(DEVICE(obj), stc8g_spi_set_ss, "ss-in", 1);

@@ -870,6 +870,30 @@ static void test_spi(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x80);
     g_assert_true(qtest_get_irq(qts, IRQ_SPI));
 
+    /* Transfers retain cycles across a sysclk frequency change or stop. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xce), 0xd0);
+    qtest_writeb(qts, SFR(0xcf), 0x5a);
+    qtest_clock_step(qts, 500);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 1666);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x80);
+
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xce), 0xd0);
+    qtest_writeb(qts, SFR(0xcf), 0xa5);
+    qtest_clock_step(qts, 500);
+    qtest_writeb(qts, XFR(0xfe00), 0x03);
+    qtest_clock_step(qts, 10000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    qtest_writeb(qts, XFR(0xfe00), 0x00);
+    qtest_clock_step(qts, 833);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x80);
+
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, SFR(0xcd)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xce)), ==, 0x04);
