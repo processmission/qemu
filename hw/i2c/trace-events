@@ -1,5 +1,10 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
+# stc8g_i2c.c
+stc8g_i2c_command(unsigned command, uint64_t delay_ns) "command=%u delay=%" PRIu64 "ns"
+stc8g_i2c_complete(unsigned command, uint8_t status) "command=%u status=0x%02x"
+stc8g_i2c_slave_event(int event, uint8_t status) "event=%d status=0x%02x"
+
 # bitbang_i2c.c
 bitbang_i2c_state(const char *old_state, const char *new_state) "state %s -> %s"
 bitbang_i2c_addr(uint8_t addr) "Address 0x%02x"

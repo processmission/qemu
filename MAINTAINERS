@@ -260,6 +260,7 @@ F: hw/adc/stc8g_adc.c
 F: hw/ssi/stc8g_spi.c
 F: hw/gpio/stc32g_gpio.c
 F: hw/gpio/stc8g_gpio.c
+F: hw/i2c/stc8g_i2c.c
 F: hw/intc/stc8g_intc.c
 F: hw/mcs51/
 F: hw/misc/stc8g_mdu.c
@@ -270,6 +271,7 @@ F: include/hw/adc/stc8g_adc.h
 F: include/hw/ssi/stc8g_spi.h
 F: include/hw/gpio/stc32g_gpio.h
 F: include/hw/gpio/stc8g_gpio.h
+F: include/hw/i2c/stc8g_i2c.h
 F: include/hw/intc/stc8g_intc.h
 F: include/hw/mcs51/
 F: include/hw/misc/stc8g_mdu.h

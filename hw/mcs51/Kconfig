@@ -10,6 +10,7 @@ config STC8G1K08A
     depends on MCS51 && !MCS251
     select STC8G_ADC
     select STC8G_GPIO
+    select STC8G_I2C
     select STC8G_INTC
     select STC8G_MDU
     select STC8G_SPI
