@@ -282,7 +282,9 @@ static void test_memory_regions(void)
     g_assert_cmphex(qtest_readb(qts, 0x800123), ==, 0x56);
     g_assert_cmphex(qtest_readb(qts, 0x030123), ==, 0x56);
 
-    g_assert_cmphex(qtest_readb(qts, 0xfc2800), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE + FLASH_SIZE - 1),
+                    ==, 0xff);
 
     qtest_quit(qts);
 }
@@ -311,6 +313,10 @@ static void test_hex_firmware_loading(void)
     g_assert_cmphex(qtest_readb(qts, 0xff0001), ==, 0x02);
     g_assert_cmphex(qtest_readb(qts, 0xff0002), ==, 0x03);
     g_assert_cmphex(qtest_readb(qts, 0xff0003), ==, 0x04);
+    g_assert_cmphex(qtest_readb(qts, 0xff0004), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE + FLASH_SIZE - 1),
+                    ==, 0xff);
     qtest_quit(qts);
 
     g_assert_cmpint(g_remove(filename), ==, 0);

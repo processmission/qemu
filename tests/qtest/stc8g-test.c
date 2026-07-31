@@ -293,11 +293,11 @@ static void test_reset_and_memory(void)
     g_assert_cmphex(qtest_readb(qts, XDATA_BASE + XDATA_SIZE - 1),
                     ==, 0x96);
 
-    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0x00);
-    qtest_writeb(qts, FLASH_BASE, 0xff);
-    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0xff);
+    qtest_writeb(qts, FLASH_BASE, 0x00);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, 0xff);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + FLASH_SIZE - 1),
-                    ==, 0x00);
+                    ==, 0xff);
 
     /* Sparse GPIO and UART containers must not hide CPU-owned SFRs. */
     qtest_writeb(qts, SFR(0xa8), 0xff);
@@ -332,6 +332,7 @@ static void test_raw_firmware_loading(void)
     qts = qtest_initf(MACHINE " -bios %s", filename);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE), ==, image[0]);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 3), ==, image[3]);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 4), ==, 0xff);
     qtest_quit(qts);
 
     g_assert_cmpint(g_remove(filename), ==, 0);
@@ -357,6 +358,9 @@ static void test_hex_firmware_loading(void)
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 1), ==, 0x5a);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 2), ==, 0x80);
     g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 3), ==, 0xfe);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE + 4), ==, 0xff);
+    g_assert_cmphex(qtest_readb(qts, FLASH_BASE + FLASH_SIZE - 1),
+                    ==, 0xff);
     qtest_quit(qts);
 
     g_assert_cmpint(g_remove(filename), ==, 0);
