@@ -1,5 +1,10 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
+# stc8g_mdu.c
+stc8g_mdu_start(unsigned mode, uint32_t operand, uint16_t divisor, uint64_t delay_ns) "mode=%u operand=0x%08x divisor=0x%04x delay=%" PRIu64 "ns"
+stc8g_mdu_complete(unsigned mode, uint32_t result, uint16_t remainder) "mode=%u result=0x%08x remainder=0x%04x"
+stc8g_mdu_reset(void) ""
+
 # k230_dewarp.c
 k230_dewarp_read(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"
 k230_dewarp_write(uint64_t offset, uint64_t data, unsigned size) "offset 0x%" PRIx64 " data 0x%" PRIx64 " size %u"

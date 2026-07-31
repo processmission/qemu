@@ -18,6 +18,7 @@
 #define ADC SOC "/adc"
 #define GPIO SOC "/gpio"
 #define INTC SOC "/intc"
+#define MDU SOC "/mdu"
 #define SPI SOC "/spi"
 
 #define FLASH_BASE 0x00000000
@@ -781,6 +782,87 @@ static void test_spi(void)
     qtest_quit(qts);
 }
 
+static void mdu_write32(QTestState *qts, uint32_t value)
+{
+    qtest_writeb(qts, XFR(0xfcf0), value >> 24);
+    qtest_writeb(qts, XFR(0xfcf1), value >> 16);
+    qtest_writeb(qts, XFR(0xfcf2), value >> 8);
+    qtest_writeb(qts, XFR(0xfcf3), value);
+}
+
+static uint32_t mdu_read32(QTestState *qts)
+{
+    return qtest_readb(qts, XFR(0xfcf0)) << 24 |
+           qtest_readb(qts, XFR(0xfcf1)) << 16 |
+           qtest_readb(qts, XFR(0xfcf2)) << 8 |
+           qtest_readb(qts, XFR(0xfcf3));
+}
+
+static void mdu_write16(QTestState *qts, uint16_t value)
+{
+    qtest_writeb(qts, XFR(0xfcf4), value >> 8);
+    qtest_writeb(qts, XFR(0xfcf5), value);
+}
+
+static uint16_t mdu_read16(QTestState *qts)
+{
+    return qtest_readb(qts, XFR(0xfcf4)) << 8 |
+           qtest_readb(qts, XFR(0xfcf5));
+}
+
+static void mdu_start(QTestState *qts, uint8_t arcon)
+{
+    qtest_writeb(qts, XFR(0xfcf6), arcon);
+    qtest_writeb(qts, XFR(0xfcf7), 0x01);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x01);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x01, ==, 0x00);
+}
+
+static void test_mdu(void)
+{
+    QTestState *qts = qtest_init(MACHINE);
+
+    mdu_write32(qts, 0x00001234);
+    mdu_write16(qts, 0x0010);
+    mdu_start(qts, 4 << 5);
+    g_assert_cmphex(mdu_read32(qts), ==, 0x00012340);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x40, ==, 0x40);
+
+    mdu_write32(qts, 0x0000f00d);
+    mdu_write16(qts, 0x0010);
+    mdu_start(qts, 5 << 5);
+    g_assert_cmphex(mdu_read32(qts) & 0xffff, ==, 0x0f00);
+    g_assert_cmphex(mdu_read16(qts), ==, 0x000d);
+
+    mdu_write32(qts, 0x12345678);
+    mdu_write16(qts, 0x0010);
+    mdu_start(qts, 6 << 5);
+    g_assert_cmphex(mdu_read32(qts), ==, 0x01234567);
+    g_assert_cmphex(mdu_read16(qts), ==, 0x0008);
+
+    mdu_write32(qts, 0x00100000);
+    mdu_start(qts, (2 << 5) | 4);
+    g_assert_cmphex(mdu_read32(qts), ==, 0x01000000);
+    mdu_write32(qts, 0x00001234);
+    mdu_start(qts, 3 << 5);
+    g_assert_cmphex(mdu_read32(qts), ==, 0x91a00000);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf6)) & 0x1f, ==, 19);
+
+    mdu_write32(qts, 0x01000000);
+    mdu_write16(qts, 0x0000);
+    mdu_start(qts, 6 << 5);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)) & 0x40, ==, 0x40);
+    qtest_writeb(qts, XFR(0xfcf7), 0x02);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf6)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, XFR(0xfcf7)), ==, 0x00);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(mdu_read32(qts), ==, 0x00000000);
+    g_assert_cmphex(mdu_read16(qts), ==, 0x0000);
+    qtest_quit(qts);
+}
+
 static void check_timer_mode(unsigned timer, unsigned mode)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1037,6 +1119,7 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
     qtest_add_func("/stc8g/adc", test_adc);
+    qtest_add_func("/stc8g/mdu", test_mdu);
     qtest_add_func("/stc8g/spi", test_spi);
     qtest_add_func("/stc8g/timer/modes", test_timer_modes);
     qtest_add_func("/stc8g/timer/reload-and-gates",
