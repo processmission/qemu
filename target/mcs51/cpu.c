@@ -8,6 +8,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "exec/log.h"
 #include "qemu/qemu-print.h"
 #include "internals.h"
 #include "disas/dis-asm.h"
@@ -18,6 +19,7 @@
 #include "system/address-spaces.h"
 #include "accel/tcg/cpu-ops.h"
 #include "tcg/debug-assert.h"
+#include "trace.h"
 
 static void mcs251_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -522,6 +524,12 @@ static void mcs251_cpu_reset_hold(Object *obj, ResetType type)
     env->irq_level = UINT32_MAX;
 
     cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_RESET);
+    trace_mcs51_cpu_reset(cs->cpu_index, env->pc,
+                          mcs251_cpu_get_reg8(env, MCS251_REG_SP));
+    qemu_log_mask(CPU_LOG_RESET,
+                  "%s: CPU %d reset PC=0x%06" PRIx32 " SP=0x%02x\n",
+                  object_get_typename(obj), cs->cpu_index, env->pc,
+                  mcs251_cpu_get_reg8(env, MCS251_REG_SP));
 }
 
 static ObjectClass *mcs251_cpu_class_by_name(const char *cpu_model)
@@ -577,6 +585,8 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
     MCS251CPU *cpu = opaque;
     CPUState *cs = CPU(cpu);
     uint32_t mask = BIT(irq);
+    bool changed = !!(cpu->env.irq_pending & mask) != !!level;
+    int active;
 
     if (level) {
         cpu->env.irq_pending |= mask;
@@ -587,6 +597,19 @@ static void mcs251_cpu_set_irq(void *opaque, int irq, int level)
             cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
         }
     }
+    if (!changed) {
+        return;
+    }
+
+    active = cpu->env.irq_level == UINT32_MAX ? -1 : cpu->env.irq_level;
+    trace_mcs51_irq_set(cs->cpu_index, irq, level, cpu->env.irq_pending,
+                        cpu->env.ie, cpu->env.ip, cpu->env.iph, active);
+    qemu_log_mask(CPU_LOG_INT,
+                  "%s: CPU %d IRQ %d input %s pending=0x%02" PRIx32
+                  " IE=0x%02x IP=0x%02x IPH=0x%02x active=%d\n",
+                  object_get_typename(OBJECT(cpu)), cs->cpu_index, irq,
+                  level ? "asserted" : "cleared", cpu->env.irq_pending,
+                  cpu->env.ie, cpu->env.ip, cpu->env.iph, active);
 }
 
 static void mcs251_cpu_init(Object *obj)

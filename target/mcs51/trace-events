@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# See docs/devel/tracing.rst for syntax documentation.
+
+# cpu.c
+mcs51_cpu_reset(int cpu, uint32_t pc, uint32_t sp) "cpu=%d pc=0x%06x sp=0x%02x"
+mcs51_irq_set(int cpu, unsigned irq, bool level, uint32_t pending, uint32_t ie, uint32_t ip, uint32_t iph, int active) "cpu=%d irq=%u level=%d pending=0x%02x ie=0x%02x ip=0x%02x iph=0x%02x active=%d"
+
+# helper.c
+mcs51_irq_take(int cpu, unsigned irq, unsigned level, uint32_t pc, uint32_t vector, unsigned depth) "cpu=%d irq=%u level=%u pc=0x%06x vector=0x%06x depth=%u"
+mcs51_irq_return(int cpu, uint32_t pc, int level, unsigned depth) "cpu=%d pc=0x%06x level=%d depth=%u"

@@ -1491,13 +1491,26 @@ class MCS251ISATest(QemuSystemTest):
 
     def test_timer_interrupt_entry_and_reti(self):
         firmware = self.build_interrupt_firmware()
+        log = Path(self.scratch_file('mcs251-interrupt.log'))
 
         self.set_machine('stc32g144k246-evb')
-        self.vm.add_args('-bios', str(firmware))
+        self.vm.add_args('-bios', str(firmware),
+                         '-d', 'int,cpu_reset,trace:mcs51_*',
+                         '-D', str(log))
         self.vm.set_console()
         self.vm.launch()
 
         wait_for_console_pattern(self, 'IRQ-PASS')
+        self.vm.shutdown()
+
+        contents = log.read_text()
+        self.assertIn('mcs251-cpu: CPU 0 reset', contents)
+        self.assertIn('mcs251-cpu: CPU 0 taking IRQ 1', contents)
+        self.assertIn('mcs251-cpu: CPU 0 RETI', contents)
+        self.assertIn('mcs51_cpu_reset', contents)
+        self.assertIn('mcs51_irq_set', contents)
+        self.assertIn('mcs51_irq_take', contents)
+        self.assertIn('mcs51_irq_return', contents)
 
     def test_timer0_mode3_interrupt_is_latched_nmi(self):
         firmware = self.build_interrupt_firmware(mode3=True)

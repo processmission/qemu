@@ -501,8 +501,27 @@ class MCS51ISATest(QemuSystemTest):
                           'MCS51-PASS', 'MCS51-FAIL')
 
     def test_timer_interrupt_entry_and_reti(self):
-        self.run_firmware(self.build_interrupt_firmware(), 'IRQ-PASS',
-                          'IRQ-FAIL')
+        firmware = self.build_interrupt_firmware()
+        log = Path(self.scratch_file('mcs51-interrupt.log'))
+
+        self.set_machine('stc8g1k08a-evb')
+        self.vm.add_args('-bios', str(firmware),
+                         '-d', 'int,cpu_reset,trace:mcs51_*',
+                         '-D', str(log))
+        self.vm.set_console()
+        self.vm.launch()
+        wait_for_console_pattern(self, 'IRQ-PASS',
+                                 failure_message='IRQ-FAIL')
+        self.vm.shutdown()
+
+        contents = log.read_text()
+        self.assertIn('mcs51-cpu: CPU 0 reset', contents)
+        self.assertIn('mcs51-cpu: CPU 0 taking IRQ 1', contents)
+        self.assertIn('mcs51-cpu: CPU 0 RETI', contents)
+        self.assertIn('mcs51_cpu_reset', contents)
+        self.assertIn('mcs51_irq_set', contents)
+        self.assertIn('mcs51_irq_take', contents)
+        self.assertIn('mcs51_irq_return', contents)
 
     def test_timer0_mode3_is_nmi(self):
         self.run_firmware(self.build_interrupt_firmware(mode3=True),
