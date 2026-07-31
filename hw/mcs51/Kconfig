@@ -9,6 +9,7 @@ config STC8G1K08A
     default y
     depends on MCS51 && !MCS251
     select STC8G_GPIO
+    select STC8G_INTC
     select STC32G_TIMER
     select STC8G_UART
 

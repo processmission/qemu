@@ -32,6 +32,7 @@ struct Stc8gSoCState {
     MemoryRegion idata;
     MemoryRegion xdata;
     DeviceState *gpio;
+    DeviceState *intc;
     DeviceState *timer;
     DeviceState *uart;
 };

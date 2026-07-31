@@ -95,6 +95,10 @@ config GOLDFISH_PIC
 config M68K_IRQC
     bool
 
+config STC8G_INTC
+    bool
+    select REGISTER
+
 config LOONGSON_IPI_COMMON
     bool
 
