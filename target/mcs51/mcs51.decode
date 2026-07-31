@@ -1,0 +1,128 @@
+#
+# MCS-51-compatible Binary opcode map
+#
+# Copyright (c) 2026 Process Mission
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+
+# Decodetree's minimum instruction width is 16 bits.  MCS-51 opcodes are
+# 8 bits, so the unused upper byte is padding supplied as zero by translate.c.
+&opcode padding !extern
+@opcode padding:8 ........ &opcode
+
+{
+  BIN_NOP       ........ 0000 0000 @opcode
+  BIN_AJMP      ........ ---0 0001 @opcode
+  BIN_LJMP      ........ 0000 0010 @opcode
+  BIN_RR        ........ 0000 0011 @opcode
+  BIN_INC       ........ 0000 0100 @opcode
+  BIN_INC       ........ 0000 0101 @opcode
+  BIN_INC       ........ 0000 011- @opcode
+  BIN_INC       ........ 0000 1--- @opcode
+  BIN_JBC       ........ 0001 0000 @opcode
+  BIN_ACALL     ........ ---1 0001 @opcode
+  BIN_LCALL     ........ 0001 0010 @opcode
+  BIN_RRC       ........ 0001 0011 @opcode
+  BIN_DEC       ........ 0001 0100 @opcode
+  BIN_DEC       ........ 0001 0101 @opcode
+  BIN_DEC       ........ 0001 011- @opcode
+  BIN_DEC       ........ 0001 1--- @opcode
+  BIN_JB        ........ 0010 0000 @opcode
+  BIN_RET       ........ 0010 0010 @opcode
+  BIN_RL        ........ 0010 0011 @opcode
+  BIN_ADD       ........ 0010 0100 @opcode
+  BIN_ADD       ........ 0010 0101 @opcode
+  BIN_ADD       ........ 0010 011- @opcode
+  BIN_ADD       ........ 0010 1--- @opcode
+  BIN_JNB       ........ 0011 0000 @opcode
+  BIN_RETI      ........ 0011 0010 @opcode
+  BIN_RLC       ........ 0011 0011 @opcode
+  BIN_ADDC      ........ 0011 0100 @opcode
+  BIN_ADDC      ........ 0011 0101 @opcode
+  BIN_ADDC      ........ 0011 011- @opcode
+  BIN_ADDC      ........ 0011 1--- @opcode
+  BIN_JC        ........ 0100 0000 @opcode
+  BIN_ORL       ........ 0100 0010 @opcode
+  BIN_ORL       ........ 0100 0011 @opcode
+  BIN_ORL       ........ 0100 0100 @opcode
+  BIN_ORL       ........ 0100 0101 @opcode
+  BIN_ORL       ........ 0100 011- @opcode
+  BIN_ORL       ........ 0100 1--- @opcode
+  BIN_JNC       ........ 0101 0000 @opcode
+  BIN_ANL       ........ 0101 0010 @opcode
+  BIN_ANL       ........ 0101 0011 @opcode
+  BIN_ANL       ........ 0101 0100 @opcode
+  BIN_ANL       ........ 0101 0101 @opcode
+  BIN_ANL       ........ 0101 011- @opcode
+  BIN_ANL       ........ 0101 1--- @opcode
+  BIN_JZ        ........ 0110 0000 @opcode
+  BIN_XRL       ........ 0110 0010 @opcode
+  BIN_XRL       ........ 0110 0011 @opcode
+  BIN_XRL       ........ 0110 0100 @opcode
+  BIN_XRL       ........ 0110 0101 @opcode
+  BIN_XRL       ........ 0110 011- @opcode
+  BIN_XRL       ........ 0110 1--- @opcode
+  BIN_JNZ       ........ 0111 0000 @opcode
+  BIN_ORL_C     ........ 0111 0010 @opcode
+  BIN_JMP       ........ 0111 0011 @opcode
+  BIN_MOV       ........ 0111 0100 @opcode
+  BIN_MOV       ........ 0111 0101 @opcode
+  BIN_MOV       ........ 0111 011- @opcode
+  BIN_MOV       ........ 0111 1--- @opcode
+  BIN_SJMP      ........ 1000 0000 @opcode
+  BIN_ANL_C     ........ 1000 0010 @opcode
+  BIN_MOVC      ........ 1000 0011 @opcode
+  BIN_DIV       ........ 1000 0100 @opcode
+  BIN_MOV       ........ 1000 0101 @opcode
+  BIN_MOV       ........ 1000 011- @opcode
+  BIN_MOV       ........ 1000 1--- @opcode
+  BIN_MOV       ........ 1001 0000 @opcode
+  BIN_MOV       ........ 1001 0010 @opcode
+  BIN_MOVC      ........ 1001 0011 @opcode
+  BIN_SUBB      ........ 1001 0100 @opcode
+  BIN_SUBB      ........ 1001 0101 @opcode
+  BIN_SUBB      ........ 1001 011- @opcode
+  BIN_SUBB      ........ 1001 1--- @opcode
+  BIN_ORL_C     ........ 1010 0000 @opcode
+  BIN_MOV       ........ 1010 0010 @opcode
+  BIN_INC       ........ 1010 0011 @opcode
+  BIN_MUL       ........ 1010 0100 @opcode
+  BIN_ESC       ........ 1010 0101 @opcode
+  BIN_MOV       ........ 1010 011- @opcode
+  BIN_MOV       ........ 1010 1--- @opcode
+  BIN_ANL_C     ........ 1011 0000 @opcode
+  BIN_CPL       ........ 1011 0010 @opcode
+  BIN_CPL       ........ 1011 0011 @opcode
+  BIN_CJNE      ........ 1011 0100 @opcode
+  BIN_CJNE      ........ 1011 0101 @opcode
+  BIN_CJNE      ........ 1011 011- @opcode
+  BIN_CJNE      ........ 1011 1--- @opcode
+  BIN_PUSH      ........ 1100 0000 @opcode
+  BIN_CLR       ........ 1100 0010 @opcode
+  BIN_CLR       ........ 1100 0011 @opcode
+  BIN_SWAP      ........ 1100 0100 @opcode
+  BIN_XCH       ........ 1100 0101 @opcode
+  BIN_XCH       ........ 1100 011- @opcode
+  BIN_XCH       ........ 1100 1--- @opcode
+  BIN_POP       ........ 1101 0000 @opcode
+  BIN_SETB      ........ 1101 0010 @opcode
+  BIN_SETB      ........ 1101 0011 @opcode
+  BIN_DA        ........ 1101 0100 @opcode
+  BIN_DJNZ      ........ 1101 0101 @opcode
+  BIN_XCHD      ........ 1101 011- @opcode
+  BIN_DJNZ      ........ 1101 1--- @opcode
+  BIN_MOVX      ........ 1110 0000 @opcode
+  BIN_MOVX      ........ 1110 001- @opcode
+  BIN_CLR       ........ 1110 0100 @opcode
+  BIN_MOV       ........ 1110 0101 @opcode
+  BIN_MOV       ........ 1110 011- @opcode
+  BIN_MOV       ........ 1110 1--- @opcode
+  BIN_MOVX      ........ 1111 0000 @opcode
+  BIN_MOVX      ........ 1111 001- @opcode
+  BIN_CPL       ........ 1111 0100 @opcode
+  BIN_MOV       ........ 1111 0101 @opcode
+  BIN_MOV       ........ 1111 011- @opcode
+  BIN_MOV       ........ 1111 1--- @opcode
+  BIN_RESERVED  ........ -------- @opcode
+}
