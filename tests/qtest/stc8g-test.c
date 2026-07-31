@@ -719,6 +719,12 @@ static void test_interrupt_controller(void)
     for (source = INTC_ADC; source <= INTC_I2C; source++) {
         qtest_set_irq_in(qts, INTC, "irq-in", source, 1);
         g_assert_true(qtest_get_irq(qts, IRQ_ADC + source));
+        if (source >= INTC_INT2 && source <= INTC_INT4) {
+            g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==,
+                            BIT(source));
+            qtest_writeb(qts, SFR(0xef), BIT(source));
+            g_assert_false(qtest_get_irq(qts, IRQ_ADC + source));
+        }
         qtest_set_irq_in(qts, INTC, "irq-in", source, 0);
         g_assert_false(qtest_get_irq(qts, IRQ_ADC + source));
     }
@@ -726,8 +732,11 @@ static void test_interrupt_controller(void)
     qtest_writeb(qts, SFR(0xef), 0x70);
     qtest_set_irq_in(qts, INTC, "irq-in", INTC_INT2, 1);
     g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x10);
+    qtest_set_irq_in(qts, INTC, "irq-in", INTC_INT2, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x10);
     qtest_writeb(qts, SFR(0xef), 0x10);
     g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x00);
+    g_assert_false(qtest_get_irq(qts, IRQ_INT2));
 
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, SFR(0xaf)), ==, 0x00);

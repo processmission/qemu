@@ -127,6 +127,24 @@ static bool stc8g_intc_source_auto_clear(unsigned source)
            source == STC8G_INTC_INT4;
 }
 
+static bool stc8g_intc_source_latched(unsigned source)
+{
+    return source >= STC8G_INTC_INT2 && source <= STC8G_INTC_INT4;
+}
+
+static bool stc8g_intc_source_pending(Stc8gIntcState *s, unsigned source)
+{
+    if (stc8g_intc_source_latched(source)) {
+        return extract8(s->regs[STC8G_INTC_REG_AUXINTIF], source, 1);
+    }
+    return s->source_level[source];
+}
+
+static void stc8g_intc_update_irq(Stc8gIntcState *s, unsigned source)
+{
+    qemu_set_irq(s->irq[source], stc8g_intc_source_pending(s, source));
+}
+
 static void stc8g_intc_update_configuration(Stc8gIntcState *s)
 {
     unsigned source;
@@ -147,6 +165,17 @@ static void stc8g_intc_sfr_post_write(RegisterInfo *reg, uint64_t value)
     stc8g_intc_update_configuration(s);
 }
 
+static void stc8g_intc_auxintif_post_write(RegisterInfo *reg,
+                                            uint64_t value)
+{
+    Stc8gIntcState *s = STC8G_INTC(reg->opaque);
+    unsigned source;
+
+    for (source = STC8G_INTC_INT2; source <= STC8G_INTC_INT4; source++) {
+        stc8g_intc_update_irq(s, source);
+    }
+}
+
 static const RegisterAccessInfo stc8g_intc_regs_info[] = {
     { .name = "IE2", .addr = 0, .rsvd = 0xfd,
       .post_write = stc8g_intc_sfr_post_write },
@@ -154,7 +183,8 @@ static const RegisterAccessInfo stc8g_intc_regs_info[] = {
       .post_write = stc8g_intc_sfr_post_write },
     { .name = "IP2H", .addr = 0, .rsvd = 0xad,
       .post_write = stc8g_intc_sfr_post_write },
-    { .name = "AUXINTIF", .addr = 0, .w1c = 0x70, .rsvd = 0x8f },
+    { .name = "AUXINTIF", .addr = 0, .w1c = 0x70, .rsvd = 0x8f,
+      .post_write = stc8g_intc_auxintif_post_write },
 };
 
 static const MemoryRegionOps stc8g_intc_sfr_ops = {
@@ -168,16 +198,16 @@ static const MemoryRegionOps stc8g_intc_sfr_ops = {
 static void stc8g_intc_set_input(void *opaque, int source, int level)
 {
     Stc8gIntcState *s = opaque;
+    bool old_level = s->source_level[source];
 
     s->source_level[source] = !!level;
-    if (level && source >= STC8G_INTC_INT2 &&
-        source <= STC8G_INTC_INT4) {
+    if (level && !old_level && stc8g_intc_source_latched(source)) {
         unsigned bit = source;
 
         s->regs[STC8G_INTC_REG_AUXINTIF] = deposit32(
             s->regs[STC8G_INTC_REG_AUXINTIF], bit, 1, 1);
     }
-    qemu_set_irq(s->irq[source], level);
+    stc8g_intc_update_irq(s, source);
 }
 
 static void stc8g_intc_cpu_sfr_write(void *opaque, uint8_t addr,
@@ -202,7 +232,7 @@ static void stc8g_intc_reset(DeviceState *dev)
     }
     stc8g_intc_update_configuration(s);
     for (source = 0; source < STC8G_INTC_NUM_SOURCES; source++) {
-        qemu_set_irq(s->irq[source], s->source_level[source]);
+        stc8g_intc_update_irq(s, source);
     }
 }
 
@@ -213,7 +243,7 @@ static int stc8g_intc_post_load(void *opaque, int version_id)
 
     stc8g_intc_update_configuration(s);
     for (source = 0; source < STC8G_INTC_NUM_SOURCES; source++) {
-        qemu_set_irq(s->irq[source], s->source_level[source]);
+        stc8g_intc_update_irq(s, source);
     }
     return 0;
 }
