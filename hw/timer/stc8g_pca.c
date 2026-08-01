@@ -543,7 +543,7 @@ static void stc8g_pca_timer0_overflow(void *opaque, int n, int level)
 
     if (level && stc8g_pca_running(s) &&
         stc8g_pca_clock_source(s) == 2) {
-        stc8g_pca_advance(s, 1);
+        stc8g_pca_advance(s, level);
         stc8g_pca_schedule(s);
     }
 }

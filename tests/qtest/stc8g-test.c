@@ -1308,6 +1308,19 @@ static void test_pca(void)
     qtest_clock_step(qts, 4000);
     g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x08);
 
+    /* A long run of one-tick Timer 0 periods preserves all PCA pulses. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x04);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_writeb(qts, SFR(0x89), 0x00);
+    timer_set_count(qts, 0, 0xff, 0xff);
+    qtest_writeb(qts, SFR(0x88), 0x10);
+    timer_set_count(qts, 0, 0xff, 0xff);
+    qtest_writeb(qts, SFR(0x8e), 0x81);
+    qtest_clock_step(qts, 1000000000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x00);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xf9)), ==, 0x36);
+
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x00);
     g_assert_cmphex(qtest_readb(qts, SFR(0xd9)), ==, 0x00);

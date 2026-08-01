@@ -184,8 +184,12 @@ static void stc32g_timer_update_irqs(Stc32gTimerState *s)
     }
 }
 
-static void stc32g_timer_overflow(Stc32gTimerState *s, unsigned n)
+static void stc32g_timer_overflows(Stc32gTimerState *s, unsigned n,
+                                   uint64_t count)
 {
+    uint64_t batch;
+
+    g_assert(count);
     if (n) {
         s->cpu->env.tcon =
             FIELD_DP8(s->cpu->env.tcon, TCON, TF1, 1);
@@ -196,8 +200,16 @@ static void stc32g_timer_overflow(Stc32gTimerState *s, unsigned n)
     stc32g_timer_update_irq(s, n ? MCS251_IRQ_TIMER1 :
                                   MCS251_IRQ_TIMER0);
     if (!n) {
-        qemu_set_irq(s->pca_clock, 1);
-        qemu_set_irq(s->pca_clock, 0);
+        /*
+         * The PCA clock input receives the number of Timer 0 overflow
+         * edges, so a long virtual-clock step does not require one qirq
+         * callback per edge.
+         */
+        while (count) {
+            batch = MIN(count, (uint64_t)INT_MAX);
+            qemu_set_irq(s->pca_clock, batch);
+            count -= batch;
+        }
     }
 }
 
@@ -226,9 +238,7 @@ static void stc32g_timer_advance(Stc32gTimerState *s, unsigned n,
     if (!reload_mode) {
         overflows = 1 + ticks / limit;
         ticks %= limit;
-        while (overflows--) {
-            stc32g_timer_overflow(s, n);
-        }
+        stc32g_timer_overflows(s, n, overflows);
         stc32g_timer_set_value(s, n, ticks % limit);
         return;
     }
@@ -237,9 +247,7 @@ static void stc32g_timer_advance(Stc32gTimerState *s, unsigned n,
     distance = limit - value;
     overflows = 1 + ticks / distance;
     ticks %= distance;
-    while (overflows--) {
-        stc32g_timer_overflow(s, n);
-    }
+    stc32g_timer_overflows(s, n, overflows);
     stc32g_timer_set_value(s, n, value + ticks);
 }
 
