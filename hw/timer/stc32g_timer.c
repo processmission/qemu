@@ -495,6 +495,7 @@ static void stc32g_timer_intclko_post_write(RegisterInfo *reg,
     Stc32gTimerState *s = STC32G_TIMER(reg->opaque);
 
     s->cpu->env.intclko = value;
+    mcs251_cpu_notify_sfr_write(s->cpu, MCS251_SFR_INTCLKO, value);
 }
 
 static uint64_t stc32g_timer_prescaler_pre_write(RegisterInfo *reg,

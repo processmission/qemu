@@ -747,6 +747,52 @@ static void test_interrupt_controller(void)
     qtest_quit(qts);
 }
 
+static void test_intclko_irq_enable(void)
+{
+    static const uint8_t reset[] = { 0x02, 0x01, 0x00 };
+    static const uint8_t int2_vector[] = { 0x02, 0x02, 0x00 };
+    static const uint8_t main[] = { 0x75, 0xa8, 0x80, 0x80, 0xfe };
+    static const uint8_t handler[] = { 0x05, 0x20, 0x75, 0xef, 0x10, 0x32 };
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory = NULL;
+    g_autofree char *filename = NULL;
+    g_autofree char *quoted = NULL;
+    g_autofree uint8_t *image = g_malloc0(FLASH_SIZE);
+    QTestState *qts;
+    gint64 deadline;
+
+    memset(image, 0xff, FLASH_SIZE);
+    memcpy(image, reset, sizeof(reset));
+    memcpy(image + 0x0053, int2_vector, sizeof(int2_vector));
+    memcpy(image + 0x0100, main, sizeof(main));
+    memcpy(image + 0x0200, handler, sizeof(handler));
+
+    directory = g_dir_make_tmp("stc8g-intclko-XXXXXX", &error);
+    g_assert_no_error(error);
+    filename = g_build_filename(directory, "firmware.bin", NULL);
+    g_assert_true(g_file_set_contents(filename, (char *)image,
+                                      FLASH_SIZE, &error));
+    g_assert_no_error(error);
+    quoted = quote_firmware_path(filename);
+
+    qts = qtest_initf(MACHINE " -accel tcg -bios %s", quoted);
+    qtest_set_irq_in(qts, INTC, "irq-in", INTC_INT2, 1);
+    g_usleep(1000);
+    g_assert_cmphex(qtest_readb(qts, IDATA_BASE + 0x20), ==, 0);
+
+    qtest_writeb(qts, SFR(0x8f), BIT(4));
+    deadline = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
+    while (qtest_readb(qts, IDATA_BASE + 0x20) == 0 &&
+           g_get_monotonic_time() < deadline) {
+        g_usleep(1000);
+    }
+    g_assert_cmphex(qtest_readb(qts, IDATA_BASE + 0x20), ==, 1);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_remove(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
 static void test_adc(void)
 {
     QTestState *qts = qtest_init(MACHINE);
@@ -1693,6 +1739,7 @@ int main(int argc, char **argv)
                    test_gpio_external_interrupts);
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
+    qtest_add_func("/stc8g/intc/intclko-enable", test_intclko_irq_enable);
     qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/sysctrl", test_sysctrl);
     qtest_add_func("/stc8g/power-modes", test_power_modes);

@@ -66,8 +66,8 @@ static void mcs251_cpu_update_classic_irq_configuration(MCS251CPU *cpu)
     mcs251_cpu_update_interrupt_request(cpu);
 }
 
-static void mcs251_cpu_notify_sfr_write(MCS251CPU *cpu, uint8_t addr,
-                                         uint8_t value)
+void mcs251_cpu_notify_sfr_write(MCS251CPU *cpu, uint8_t addr,
+                                 uint8_t value)
 {
     unsigned index;
 
