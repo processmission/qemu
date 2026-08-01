@@ -1592,6 +1592,17 @@ static void test_iap(void)
     iap_execute(qts, 2, 0x0234, 0xf0);
     qtest_clock_step(qts, 31000);
     g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0234), ==, 0x50);
+
+    /* PROGRAM remains on its fixed deadline across a system-clock change. */
+    iap_execute(qts, 2, 0x0235, 0x5a);
+    qtest_clock_step(qts, 15000);
+    qtest_writeb(qts, XFR(0xfe01), 0x02);
+    qtest_clock_step(qts, 15999);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0235), ==, 0xff);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, EEPROM_BASE + 0x0235), ==, 0x5a);
+    qtest_writeb(qts, XFR(0xfe01), 0x00);
+
     iap_execute(qts, 1, 0x0234, 0);
     qtest_clock_step(qts, 167);
     g_assert_cmphex(qtest_readb(qts, SFR(0xc2)), ==, 0x50);

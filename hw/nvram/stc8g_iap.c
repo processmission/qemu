@@ -348,7 +348,9 @@ static void stc8g_iap_clock_update(void *opaque, ClockEvent event)
     }
     s->clock_frequency = clock_get_hz(s->sysclk);
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    stc8g_iap_schedule(s);
+    if (!s->busy || s->pending_cmd == STC8G_IAP_CMD_READ) {
+        stc8g_iap_schedule(s);
+    }
 }
 
 static void stc8g_iap_reset(DeviceState *dev)
