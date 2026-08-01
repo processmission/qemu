@@ -7,7 +7,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/core/qdev-clock.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/core/register.h"
 #include "hw/core/registerfields.h"
 #include "hw/core/sysbus.h"
@@ -17,6 +19,7 @@
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "system/watchdog.h"
+#include "target/mcs51/cpu.h"
 #include "trace.h"
 
 REG8(WDT_CONTR, 0)
@@ -35,6 +38,7 @@ struct Stc8gWdtState {
     RegisterInfo regs_info[STC8G_WDT_MMIO_REGS];
     uint8_t regs[STC8G_WDT_MMIO_REGS];
     uint8_t old_wdt_contr;
+    MCS51CPU *cpu;
     Clock *sysclk;
     QEMUTimer *timer;
     uint64_t cycles_left;
@@ -42,11 +46,18 @@ struct Stc8gWdtState {
     uint64_t clock_remainder;
     int64_t last_ns;
     bool clear_requested;
+    bool idle_paused;
 };
 
 static bool stc8g_wdt_enabled(Stc8gWdtState *s)
 {
     return FIELD_EX8(s->regs[STC8G_WDT_MMIO_CONTR], WDT_CONTR, EN_WDT);
+}
+
+static bool stc8g_wdt_should_pause_for_idle(Stc8gWdtState *s)
+{
+    return FIELD_EX8(s->cpu->env.pcon, PCON, IDL) &&
+        !FIELD_EX8(s->regs[STC8G_WDT_MMIO_CONTR], WDT_CONTR, IDL_WDT);
 }
 
 static uint64_t stc8g_wdt_cycles(Stc8gWdtState *s)
@@ -62,8 +73,8 @@ static void stc8g_wdt_schedule(Stc8gWdtState *s)
     uint64_t timeout;
 
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    if (!stc8g_wdt_enabled(s) || !clock_is_enabled(s->sysclk) ||
-        !s->cycles_left) {
+    if (!stc8g_wdt_enabled(s) || s->idle_paused ||
+        !clock_is_enabled(s->sysclk) || !s->cycles_left) {
         timer_del(s->timer);
         return;
     }
@@ -98,8 +109,8 @@ static void stc8g_wdt_sync(Stc8gWdtState *s)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t elapsed;
 
-    if (!stc8g_wdt_enabled(s) || !clock_is_enabled(s->sysclk) ||
-        !s->cycles_left) {
+    if (!stc8g_wdt_enabled(s) || s->idle_paused ||
+        !clock_is_enabled(s->sysclk) || !s->cycles_left) {
         s->last_ns = now;
         return;
     }
@@ -131,6 +142,18 @@ static void stc8g_wdt_clock_update(void *opaque, ClockEvent event)
     }
 }
 
+static void stc8g_wdt_cpu_sfr_write(void *opaque, uint8_t addr,
+                                     uint8_t value)
+{
+    Stc8gWdtState *s = opaque;
+
+    if (addr == MCS251_SFR_PCON) {
+        stc8g_wdt_sync(s);
+        s->idle_paused = stc8g_wdt_should_pause_for_idle(s);
+        stc8g_wdt_schedule(s);
+    }
+}
+
 static uint64_t stc8g_wdt_contr_pre_write(RegisterInfo *reg,
                                            uint64_t value)
 {
@@ -157,6 +180,7 @@ static void stc8g_wdt_contr_post_write(RegisterInfo *reg, uint64_t value)
     uint8_t old = s->old_wdt_contr;
     uint8_t next = s->regs[STC8G_WDT_MMIO_CONTR];
 
+    s->idle_paused = stc8g_wdt_should_pause_for_idle(s);
     if ((!FIELD_EX8(old, WDT_CONTR, EN_WDT) &&
          FIELD_EX8(next, WDT_CONTR, EN_WDT)) ||
         (FIELD_EX8(old, WDT_CONTR, WDT_PS) !=
@@ -188,6 +212,7 @@ static void stc8g_wdt_reset(DeviceState *dev)
 
     /* EN_WDT can only be cleared by a power-on reset, not a warm reset. */
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->idle_paused = stc8g_wdt_should_pause_for_idle(s);
     if (stc8g_wdt_enabled(s)) {
         stc8g_wdt_reload(s);
     } else {
@@ -206,13 +231,16 @@ static int stc8g_wdt_post_load(void *opaque, int version_id)
     Stc8gWdtState *s = opaque;
 
     s->clock_frequency = clock_get_hz(s->sysclk);
+    if (version_id < 2) {
+        s->idle_paused = stc8g_wdt_should_pause_for_idle(s);
+    }
     stc8g_wdt_schedule(s);
     return 0;
 }
 
 static const VMStateDescription stc8g_wdt_vmstate = {
     .name = "stc8g.wdt",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .pre_save = stc8g_wdt_pre_save,
     .post_load = stc8g_wdt_post_load,
@@ -221,6 +249,7 @@ static const VMStateDescription stc8g_wdt_vmstate = {
         VMSTATE_UINT64(cycles_left, Stc8gWdtState),
         VMSTATE_UINT64(clock_remainder, Stc8gWdtState),
         VMSTATE_INT64(last_ns, Stc8gWdtState),
+        VMSTATE_BOOL_V(idle_paused, Stc8gWdtState, 2),
         VMSTATE_TIMER_PTR(timer, Stc8gWdtState),
         VMSTATE_END_OF_LIST()
     },
@@ -252,8 +281,18 @@ static void stc8g_wdt_realize(DeviceState *dev, Error **errp)
 {
     Stc8gWdtState *s = STC8G_WDT(dev);
 
+    if (!s->cpu) {
+        error_setg(errp, "stc8g-wdt requires a CPU link");
+        return;
+    }
+    mcs251_cpu_add_sfr_write_notifier(s->cpu, stc8g_wdt_cpu_sfr_write, s);
     s->clock_frequency = clock_get_hz(s->sysclk);
 }
+
+static const Property stc8g_wdt_properties[] = {
+    DEFINE_PROP_LINK("cpu", Stc8gWdtState, cpu, TYPE_MCS51_CPU,
+                     MCS51CPU *),
+};
 
 static void stc8g_wdt_class_init(ObjectClass *oc, const void *data)
 {
@@ -261,6 +300,7 @@ static void stc8g_wdt_class_init(ObjectClass *oc, const void *data)
 
     dc->realize = stc8g_wdt_realize;
     device_class_set_legacy_reset(dc, stc8g_wdt_reset);
+    device_class_set_props(dc, stc8g_wdt_properties);
     dc->vmsd = &stc8g_wdt_vmstate;
     set_bit(DEVICE_CATEGORY_WATCHDOG, dc->categories);
     dc->desc = "STC8G watchdog timer";
