@@ -18,6 +18,7 @@
 #include "hw/timer/stc8g_pca.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
+#include "target/mcs51/cpu.h"
 #include "trace.h"
 
 REG8(CCON, 0)
@@ -73,6 +74,7 @@ struct Stc8gPCAState {
     uint8_t regs[STC8G_PCA_MMIO_REGS];
     QEMUTimer *timer;
     Clock *sysclk;
+    MCS51CPU *cpu;
     qemu_irq irq;
     qemu_irq ccp_out[STC8G_PCA_CHANNELS];
     uint32_t clock_frequency;
@@ -82,6 +84,7 @@ struct Stc8gPCAState {
     bool ccp_input[STC8G_PCA_CHANNELS];
     bool ccp_output[STC8G_PCA_CHANNELS];
     bool eci_input;
+    bool idle_paused;
 };
 
 static uint16_t stc8g_pca_count(Stc8gPCAState *s)
@@ -104,6 +107,12 @@ static uint16_t stc8g_pca_compare(Stc8gPCAState *s, unsigned channel)
 static bool stc8g_pca_running(Stc8gPCAState *s)
 {
     return FIELD_EX8(s->regs[STC8G_PCA_CCON], CCON, CR);
+}
+
+static bool stc8g_pca_should_pause_for_idle(Stc8gPCAState *s)
+{
+    return FIELD_EX8(s->cpu->env.pcon, PCON, IDL) &&
+        FIELD_EX8(s->regs[STC8G_PCA_CMOD], CMOD, CIDL);
 }
 
 static unsigned stc8g_pca_clock_source(Stc8gPCAState *s)
@@ -312,8 +321,8 @@ static void stc8g_pca_sync(Stc8gPCAState *s)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (clock_is_enabled(s->sysclk) && stc8g_pca_running(s) &&
-        stc8g_pca_internal_clock(s)) {
+    if (!s->idle_paused && clock_is_enabled(s->sysclk) &&
+        stc8g_pca_running(s) && stc8g_pca_internal_clock(s)) {
         uint64_t cycles = mcs51_clock_elapsed_cycles(
             s->sysclk, now - s->last_ns, &s->clock_remainder);
         uint64_t prescaled;
@@ -337,8 +346,8 @@ static void stc8g_pca_schedule(Stc8gPCAState *s)
     unsigned divider;
 
     timer_del(s->timer);
-    if (!clock_is_enabled(s->sysclk) || !stc8g_pca_running(s) ||
-        !stc8g_pca_internal_clock(s)) {
+    if (s->idle_paused || !clock_is_enabled(s->sysclk) ||
+        !stc8g_pca_running(s) || !stc8g_pca_internal_clock(s)) {
         return;
     }
     divider = stc8g_pca_clock_divider(s);
@@ -374,6 +383,18 @@ static void stc8g_pca_clock_update(void *opaque, ClockEvent event)
     s->clock_frequency = clock_get_hz(s->sysclk);
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     stc8g_pca_schedule(s);
+}
+
+static void stc8g_pca_cpu_sfr_write(void *opaque, uint8_t addr,
+                                     uint8_t value)
+{
+    Stc8gPCAState *s = opaque;
+
+    if (addr == MCS251_SFR_PCON) {
+        stc8g_pca_sync(s);
+        s->idle_paused = stc8g_pca_should_pause_for_idle(s);
+        stc8g_pca_schedule(s);
+    }
 }
 
 static uint64_t stc8g_pca_counter_post_read(RegisterInfo *reg,
@@ -436,6 +457,7 @@ static void stc8g_pca_config_post_write(RegisterInfo *reg, uint64_t value)
     Stc8gPCAState *s = STC8G_PCA(reg->opaque);
 
     s->last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->idle_paused = stc8g_pca_should_pause_for_idle(s);
     stc8g_pca_update_outputs(s, false);
     stc8g_pca_update_irq(s);
     stc8g_pca_schedule(s);
@@ -530,7 +552,7 @@ static void stc8g_pca_set_eci(void *opaque, int n, int level)
     bool falling = s->eci_input && !level;
 
     s->eci_input = !!level;
-    if (falling && stc8g_pca_running(s) &&
+    if (falling && !s->idle_paused && stc8g_pca_running(s) &&
         stc8g_pca_clock_source(s) == 3) {
         stc8g_pca_advance(s, 1);
         stc8g_pca_schedule(s);
@@ -541,7 +563,7 @@ static void stc8g_pca_timer0_overflow(void *opaque, int n, int level)
 {
     Stc8gPCAState *s = opaque;
 
-    if (level && stc8g_pca_running(s) &&
+    if (level && !s->idle_paused && stc8g_pca_running(s) &&
         stc8g_pca_clock_source(s) == 2) {
         stc8g_pca_advance(s, level);
         stc8g_pca_schedule(s);
@@ -562,6 +584,7 @@ static void stc8g_pca_reset(DeviceState *dev)
     for (index = 0; index < ARRAY_SIZE(stc8g_pca_regs_info); index++) {
         register_reset(&s->regs_info[index]);
     }
+    s->idle_paused = stc8g_pca_should_pause_for_idle(s);
     qemu_set_irq(s->irq, 0);
     for (channel = 0; channel < STC8G_PCA_CHANNELS; channel++) {
         qemu_set_irq(s->ccp_out[channel], 0);
@@ -573,6 +596,9 @@ static int stc8g_pca_post_load(void *opaque, int version_id)
     Stc8gPCAState *s = opaque;
     unsigned channel;
 
+    if (version_id < 2) {
+        s->idle_paused = stc8g_pca_should_pause_for_idle(s);
+    }
     stc8g_pca_update_irq(s);
     for (channel = 0; channel < STC8G_PCA_CHANNELS; channel++) {
         qemu_set_irq(s->ccp_out[channel], s->ccp_output[channel]);
@@ -582,7 +608,7 @@ static int stc8g_pca_post_load(void *opaque, int version_id)
 
 static const VMStateDescription stc8g_pca_vmstate = {
     .name = "stc8g.pca",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = stc8g_pca_post_load,
     .fields = (const VMStateField[]) {
@@ -593,12 +619,15 @@ static const VMStateDescription stc8g_pca_vmstate = {
         VMSTATE_BOOL_ARRAY(ccp_input, Stc8gPCAState, STC8G_PCA_CHANNELS),
         VMSTATE_BOOL_ARRAY(ccp_output, Stc8gPCAState, STC8G_PCA_CHANNELS),
         VMSTATE_BOOL(eci_input, Stc8gPCAState),
+        VMSTATE_BOOL_V(idle_paused, Stc8gPCAState, 2),
         VMSTATE_TIMER_PTR(timer, Stc8gPCAState),
         VMSTATE_END_OF_LIST()
     },
 };
 
 static const Property stc8g_pca_properties[] = {
+    DEFINE_PROP_LINK("cpu", Stc8gPCAState, cpu, TYPE_MCS51_CPU,
+                     MCS51CPU *),
     DEFINE_PROP_UINT32("clock-frequency", Stc8gPCAState,
                        clock_frequency, 24000000),
 };
@@ -607,8 +636,13 @@ static void stc8g_pca_realize(DeviceState *dev, Error **errp)
 {
     Stc8gPCAState *s = STC8G_PCA(dev);
 
-    if (!s->clock_frequency) {
+    if (!s->cpu) {
+        error_setg(errp, "stc8g-pca requires a CPU link");
+    } else if (!s->clock_frequency) {
         error_setg(errp, "stc8g-pca clock-frequency must be nonzero");
+    } else {
+        mcs251_cpu_add_sfr_write_notifier(s->cpu,
+                                          stc8g_pca_cpu_sfr_write, s);
     }
 }
 

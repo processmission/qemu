@@ -1316,6 +1316,30 @@ static void test_pca(void)
     g_assert_false(qtest_get_irq(qts, 0));
     g_assert_cmphex(qtest_readb(qts, SFR(0xd8)), ==, 0x41);
 
+    /* CMOD.CIDL stops the PCA in idle mode; a clear bit keeps it running. */
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x02);
+    qtest_writeb(qts, SFR(0x87), 0x01);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x04);
+    qtest_writeb(qts, SFR(0x87), 0x00);
+    qtest_clock_step(qts, 500);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x05);
+
+    qtest_system_reset(qts);
+    qtest_writeb(qts, SFR(0xd9), 0x80);
+    qtest_writeb(qts, SFR(0xd8), 0x40);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x02);
+    qtest_writeb(qts, SFR(0x87), 0x01);
+    qtest_clock_step(qts, 1000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x02);
+    qtest_writeb(qts, SFR(0x87), 0x00);
+    qtest_clock_step(qts, 500);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xe9)), ==, 0x03);
+
     /* Reads retain incomplete /12 source-clock intervals. */
     qtest_system_reset(qts);
     qtest_writeb(qts, SFR(0xd8), 0x40);
