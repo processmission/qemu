@@ -158,13 +158,15 @@ static void stc32g_timer_update_irq(Stc32gTimerState *s, unsigned source)
 
     switch (source) {
     case MCS251_IRQ_INT0:
-        level = FIELD_EX8(env->tcon, TCON, IE0);
+        level = FIELD_EX8(env->tcon, TCON, IT0) ?
+            FIELD_EX8(env->tcon, TCON, IE0) : !s->gate[0];
         break;
     case MCS251_IRQ_TIMER0:
         level = FIELD_EX8(env->tcon, TCON, TF0);
         break;
     case MCS251_IRQ_INT1:
-        level = FIELD_EX8(env->tcon, TCON, IE1);
+        level = FIELD_EX8(env->tcon, TCON, IT1) ?
+            FIELD_EX8(env->tcon, TCON, IE1) : !s->gate[1];
         break;
     case MCS251_IRQ_TIMER1:
         level = FIELD_EX8(env->tcon, TCON, TF1);
@@ -434,6 +436,9 @@ static void stc32g_timer_tcon_post_write(RegisterInfo *reg, uint64_t value)
         stc32g_timer_resync(s);
     }
     env->tcon = value;
+    if (!s->resetting) {
+        mcs251_cpu_sync_irq_configuration(s->cpu);
+    }
     stc32g_timer_update_irqs(s);
     if (!s->resetting) {
         stc32g_timer_resync(s);
@@ -582,7 +587,6 @@ static void stc32g_timer_set_gate(void *opaque, int n, int level)
 {
     Stc32gTimerState *s = opaque;
     CPUMCS251State *env = &s->cpu->env;
-    bool changed = s->gate[n] != !!level;
     bool falling = s->gate[n] && !level;
     bool edge_triggered;
 
@@ -595,11 +599,19 @@ static void stc32g_timer_set_gate(void *opaque, int n, int level)
     s->gate[n] = level;
     edge_triggered = n ? FIELD_EX8(env->tcon, TCON, IT1) :
                          FIELD_EX8(env->tcon, TCON, IT0);
-    if (edge_triggered ? falling : changed) {
+    if (edge_triggered && falling) {
         if (n) {
             env->tcon = FIELD_DP8(env->tcon, TCON, IE1, 1);
         } else {
             env->tcon = FIELD_DP8(env->tcon, TCON, IE0, 1);
+        }
+        stc32g_timer_update_irq(s, n ? MCS251_IRQ_INT1 :
+                                      MCS251_IRQ_INT0);
+    } else if (!edge_triggered) {
+        if (n) {
+            env->tcon = FIELD_DP8(env->tcon, TCON, IE1, !level);
+        } else {
+            env->tcon = FIELD_DP8(env->tcon, TCON, IE0, !level);
         }
         stc32g_timer_update_irq(s, n ? MCS251_IRQ_INT1 :
                                       MCS251_IRQ_INT0);

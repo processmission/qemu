@@ -1492,15 +1492,15 @@ static void test_external_interrupts(void)
 
     qtest_irq_intercept_in(qts, CPU);
 
-    /* IT0=0: either edge latches IE0 and asserts the INT0 source. */
+    /* IT0=0: an active-low input holds IE0 and INT0 asserted. */
     qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 2, 0);
     g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x02, ==, 0x02);
     g_assert_true(qtest_get_irq(qts, IRQ_INT0));
     qtest_writeb(qts, SFR(0x88), 0x00);
-    g_assert_false(qtest_get_irq(qts, IRQ_INT0));
-    qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 2, 1);
-    g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x02, ==, 0x02);
     g_assert_true(qtest_get_irq(qts, IRQ_INT0));
+    qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 2, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x02, ==, 0x00);
+    g_assert_false(qtest_get_irq(qts, IRQ_INT0));
 
     /* IT0=1: rising is ignored and falling latches IE0. */
     qtest_writeb(qts, SFR(0x88), 0x01);
@@ -1515,7 +1515,17 @@ static void test_external_interrupts(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x02, ==, 0x00);
     g_assert_false(qtest_get_irq(qts, IRQ_INT0));
 
-    /* INT1 has the same edge-selection behavior on P3.3. */
+    /* INT1 follows the same level and edge selection on P3.3. */
+    qtest_writeb(qts, SFR(0x88), 0x00);
+    qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 3, 0);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x08, ==, 0x08);
+    g_assert_true(qtest_get_irq(qts, IRQ_INT1));
+    qtest_writeb(qts, SFR(0x88), 0x00);
+    g_assert_true(qtest_get_irq(qts, IRQ_INT1));
+    qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 3, 1);
+    g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x08, ==, 0x00);
+    g_assert_false(qtest_get_irq(qts, IRQ_INT1));
+
     qtest_writeb(qts, SFR(0x88), 0x04);
     qtest_set_irq_in(qts, GPIO, "gpio-in", 3 * 8 + 3, 0);
     g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & 0x08, ==, 0x08);
