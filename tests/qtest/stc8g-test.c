@@ -1628,6 +1628,22 @@ static void test_wdt(void)
 
     qts = qtest_init(MACHINE " -watchdog-action none");
     qtest_writeb(qts, SFR(0xc1), 0x20);
+    qtest_clock_step(qts, 10000000);
+    qtest_writeb(qts, SFR(0x87), 0x01);
+    qtest_clock_step(qts, 32768000);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_writeb(qts, SFR(0x87), 0x00);
+    qtest_clock_step(qts, 22767999);
+    g_assert_cmphex(qtest_readb(qts, SFR(0xc1)), ==, 0x20);
+    qtest_clock_step(qts, 1);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    g_assert_cmpstr(qdict_get_str(qdict_get_qdict(event, "data"), "action"),
+                    ==, "none");
+    qobject_unref(event);
+    qtest_quit(qts);
+
+    qts = qtest_init(MACHINE " -watchdog-action none");
+    qtest_writeb(qts, SFR(0xc1), 0x20);
     for (unsigned i = 0; i < 10; i++) {
         qtest_clock_step(qts, 1);
         qtest_writeb(qts, SFR(0xc1), 0x20);
