@@ -63,6 +63,10 @@ static void mcs251_cpu_update_classic_irq_configuration(MCS251CPU *cpu)
         cpu->irq_priority[irq] = extract8(env->iph, irq, 1) * 2 +
                                  extract8(env->ip, irq, 1);
     }
+    cpu->irq_auto_clear[MCS251_IRQ_INT0] =
+        FIELD_EX8(env->tcon, TCON, IT0);
+    cpu->irq_auto_clear[MCS251_IRQ_INT1] =
+        FIELD_EX8(env->tcon, TCON, IT1);
     mcs251_cpu_update_interrupt_request(cpu);
 }
 

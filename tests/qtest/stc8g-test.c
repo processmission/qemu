@@ -676,14 +676,16 @@ static void test_gpio_external_interrupts(void)
         uint8_t flag = BIT(interrupt * 2 + 1);
         unsigned irq = interrupt ? IRQ_INT1 : IRQ_INT0;
 
-        /* ITx=0 requests on either edge. */
+        /* ITx=0 requests while the input is held low. */
         qtest_writeb(qts, SFR(0x88), 0x00);
         qtest_set_irq_in(qts, GPIO, "gpio-in", pin, 0);
         g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & flag, ==, flag);
         g_assert_true(qtest_get_irq(qts, irq));
         qtest_writeb(qts, SFR(0x88), 0x00);
+        g_assert_true(qtest_get_irq(qts, irq));
         qtest_set_irq_in(qts, GPIO, "gpio-in", pin, 1);
-        g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & flag, ==, flag);
+        g_assert_cmphex(qtest_readb(qts, SFR(0x88)) & flag, ==, 0);
+        g_assert_false(qtest_get_irq(qts, irq));
 
         /* ITx=1 ignores rising edges and requests on falling edges. */
         qtest_writeb(qts, SFR(0x88), trigger);
@@ -787,6 +789,51 @@ static void test_intclko_irq_enable(void)
         g_usleep(1000);
     }
     g_assert_cmphex(qtest_readb(qts, IDATA_BASE + 0x20), ==, 1);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_remove(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
+static void test_level_interrupt_reasserts(void)
+{
+    static const uint8_t reset[] = { 0x02, 0x01, 0x00 };
+    static const uint8_t int0_vector[] = { 0x02, 0x02, 0x00 };
+    static const uint8_t main[] = { 0x75, 0xa8, 0x81, 0x80, 0xfe };
+    static const uint8_t handler[] = {
+        0x05, 0x20, 0xe5, 0x20, 0xb4, 0x02, 0x03, 0x75, 0xa8, 0x00,
+        0x32,
+    };
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory = NULL;
+    g_autofree char *filename = NULL;
+    g_autofree char *quoted = NULL;
+    g_autofree uint8_t *image = g_malloc0(FLASH_SIZE);
+    QTestState *qts;
+    gint64 deadline;
+
+    memset(image, 0xff, FLASH_SIZE);
+    memcpy(image, reset, sizeof(reset));
+    memcpy(image + 0x0003, int0_vector, sizeof(int0_vector));
+    memcpy(image + 0x0100, main, sizeof(main));
+    memcpy(image + 0x0200, handler, sizeof(handler));
+
+    directory = g_dir_make_tmp("stc8g-level-int-XXXXXX", &error);
+    g_assert_no_error(error);
+    filename = g_build_filename(directory, "firmware.bin", NULL);
+    g_assert_true(g_file_set_contents(filename, (char *)image,
+                                      FLASH_SIZE, &error));
+    g_assert_no_error(error);
+    quoted = quote_firmware_path(filename);
+
+    qts = qtest_initf(MACHINE " -accel tcg -bios %s", quoted);
+    qtest_set_irq_in(qts, GPIO, "gpio-in", 2, 0);
+    deadline = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
+    while (qtest_readb(qts, IDATA_BASE + 0x20) != 2 &&
+           g_get_monotonic_time() < deadline) {
+        g_usleep(1000);
+    }
+    g_assert_cmphex(qtest_readb(qts, IDATA_BASE + 0x20), ==, 2);
 
     qtest_quit(qts);
     g_assert_cmpint(g_remove(filename), ==, 0);
@@ -1753,6 +1800,8 @@ int main(int argc, char **argv)
     qtest_add_func("/stc8g/intc/registers-and-sources",
                    test_interrupt_controller);
     qtest_add_func("/stc8g/intc/intclko-enable", test_intclko_irq_enable);
+    qtest_add_func("/stc8g/intc/level-interrupt-reasserts",
+                   test_level_interrupt_reasserts);
     qtest_add_func("/stc8g/adc", test_adc);
     qtest_add_func("/stc8g/sysctrl", test_sysctrl);
     qtest_add_func("/stc8g/power-modes", test_power_modes);
