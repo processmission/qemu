@@ -121,12 +121,6 @@ static unsigned stc8g_intc_source_priority(Stc8gIntcState *s,
            extract8(s->regs[STC8G_INTC_REG_IP2], bit, 1);
 }
 
-static bool stc8g_intc_source_auto_clear(unsigned source)
-{
-    return source == STC8G_INTC_INT2 || source == STC8G_INTC_INT3 ||
-           source == STC8G_INTC_INT4;
-}
-
 static bool stc8g_intc_source_latched(unsigned source)
 {
     return source >= STC8G_INTC_INT2 && source <= STC8G_INTC_INT4;
@@ -154,7 +148,7 @@ static void stc8g_intc_update_configuration(Stc8gIntcState *s)
                                  stc8g_intc_vector[source],
                                  stc8g_intc_source_priority(s, source),
                                  stc8g_intc_source_enabled(s, source),
-                                 stc8g_intc_source_auto_clear(source));
+                                 false);
     }
 }
 

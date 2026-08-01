@@ -734,6 +734,7 @@ static void test_interrupt_controller(void)
     g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x10);
     qtest_set_irq_in(qts, INTC, "irq-in", INTC_INT2, 0);
     g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x10);
+    g_assert_true(qtest_get_irq(qts, IRQ_INT2));
     qtest_writeb(qts, SFR(0xef), 0x10);
     g_assert_cmphex(qtest_readb(qts, SFR(0xef)), ==, 0x00);
     g_assert_false(qtest_get_irq(qts, IRQ_INT2));
