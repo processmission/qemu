@@ -9,7 +9,7 @@ MCS-251 extensions.  They share the MCS-51 family implementation, while the
 separate executables retain each architecture's address width and instruction
 mode at build time.  Build both with::
 
-  ../configure --target-list=mcs51-softmmu,mcs251-softmmu
+  ./configure --target-list=mcs51-softmmu,mcs251-softmmu
   ninja
 
 The resulting executables and models are:
