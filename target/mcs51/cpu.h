@@ -366,6 +366,8 @@ void mcs251_cpu_set_sfr_immediate_write(MCS251CPU *cpu,
 void mcs251_cpu_add_sfr_write_notifier(MCS251CPU *cpu,
                                        MCS251SFRWriteNotifier callback,
                                        void *opaque);
+void mcs251_cpu_notify_sfr_write(MCS251CPU *cpu, uint8_t addr,
+                                 uint8_t value);
 void mcs251_cpu_configure_irq(MCS251CPU *cpu, unsigned irq,
                               uint32_t vector, unsigned priority,
                               bool enabled, bool auto_clear);
