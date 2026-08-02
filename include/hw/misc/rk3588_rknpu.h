@@ -35,6 +35,7 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX (0x1000 / 4)
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
 #define ROCKCHIP_RKNN_PRESENT_R_MAX 32
+#define ROCKCHIP_RKNN_CORE_COUNT 3
 #define ROCKCHIP_RKNN_PENDING_WRITE_R_MAX \
     (ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT * 2 * \
      ROCKCHIP_RKNN_PRESENT_R_MAX)
@@ -147,9 +148,12 @@ struct RockchipRKNNCoreState {
     bool busy;
     bool reset_asserted;
     bool irq_level;
+    bool execution_queued;
     bool execution_result_ready;
     bool execution_discard;
     bool execution_worker_done;
+    uint64_t execution_sequence;
+    uint64_t execution_next_sequence;
     int execution_mode;
     int execution_result;
     uint64_t functional_max_host_bytes;

@@ -5627,13 +5627,9 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
     g_autofree uint8_t *output = NULL;
     size_t input_storage_channels;
     size_t output_storage_channels;
-    size_t input_height = output_view->height / 2 +
-        output_view->height % 2;
-    size_t surfaces;
+    size_t output_height;
     size_t input_bytes;
-    size_t input_surface_bytes;
     size_t output_bytes;
-    size_t output_surface_bytes;
     uint64_t work_items;
     uint64_t host_bytes = 0;
 
@@ -5643,27 +5639,17 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
                                      &output_storage_channels)) {
         return ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR;
     }
-    surfaces = input_storage_channels &&
-        output_storage_channels % input_storage_channels == 0 ?
-        output_storage_channels / input_storage_channels : 0;
-    if (!rockchip_rknn_u64_mul3(
-            output_view->width, output_view->height,
+    if (!rockchip_rknn_size_mul(output_view->height, 2, &output_height) ||
+        !rockchip_rknn_u64_mul3(
+            output_view->width, output_height,
             task->dpu.output_channels_valid, &work_items) ||
-        !rockchip_rknn_u64_mul(work_items, surfaces, &work_items) ||
         work_items > s->functional_max_mac_operations ||
-        !surfaces ||
         input_storage_channels > SIZE_MAX / 2 ||
         output_storage_channels != input_storage_channels * 2 ||
-        !rockchip_rknn_size_mul3(rdma->width, input_height,
-                                 input_storage_channels * 2,
-                                 &input_surface_bytes) ||
-        !rockchip_rknn_size_mul(input_surface_bytes, surfaces,
-                                &input_bytes) ||
-        !rockchip_rknn_size_mul3(output_view->width, output_view->height,
-                                 output_storage_channels,
-                                 &output_surface_bytes) ||
-        !rockchip_rknn_size_mul(output_surface_bytes, surfaces,
-                                &output_bytes) ||
+        !rockchip_rknn_size_mul3(rdma->width, rdma->height,
+                                 input_storage_channels * 2, &input_bytes) ||
+        !rockchip_rknn_size_mul3(output_view->width, output_height,
+                                 output_storage_channels, &output_bytes) ||
         output_bytes != task->dpu.surface_add ||
         !rockchip_rknn_iova_length_valid(rdma->src_iova, input_bytes) ||
         !rockchip_rknn_iova_length_valid(output_view->iova, output_bytes) ||
@@ -5690,23 +5676,18 @@ rockchip_rknn_execute_dpu_rdma_int16_unpool(
         return ROCKCHIP_RKNN_EXECUTION_DMA_READ_FAULT;
     }
 
-    for (unsigned int surface = 0; surface < surfaces; surface++) {
-        for (unsigned int row = 0; row < output_view->height; row++) {
-            for (unsigned int column = 0; column < output_view->width;
-                 column++) {
-                for (unsigned int channel = 0;
-                     channel < output_view->channels; channel++) {
-                    size_t input_index = surface * input_surface_bytes +
-                        rockchip_rknn_feature_index(
-                            rdma->width, input_height, 8, channel / 2,
-                            row / 2, column / 2) * 2 + channel % 2;
-                    size_t output_index = surface * output_surface_bytes +
-                        rockchip_rknn_feature_index(
-                            output_view->width, output_view->height, 16,
-                            channel, row, column);
+    for (unsigned int row = 0; row < output_height; row++) {
+        for (unsigned int column = 0; column < output_view->width; column++) {
+            for (unsigned int channel = 0;
+                 channel < output_view->channels; channel++) {
+                size_t input_index = rockchip_rknn_feature_index(
+                    rdma->width, rdma->height, 8, channel / 2,
+                    row / 2, column / 2) * 2 + channel % 2;
+                size_t output_index = rockchip_rknn_feature_index(
+                    output_view->width, output_height, 16,
+                    channel, row, column);
 
-                    output[output_index] = input[input_index];
-                }
+                output[output_index] = input[input_index];
             }
         }
     }
@@ -7486,6 +7467,26 @@ static void rockchip_rknn_update_irq(RockchipRKNNCoreState *s)
 
 static void rockchip_rknn_complete(void *opaque);
 
+static RockchipRKNNCoreState *rockchip_rknn_get_peer(
+    RockchipRKNNCoreState *s, unsigned int core_index)
+{
+    Object *parent = OBJECT(s)->parent;
+    g_autofree char *name = g_strdup_printf("rknn%u", core_index);
+    Object *peer;
+
+    if (!parent) {
+        return NULL;
+    }
+    peer = object_resolve_path_component(parent, name);
+    if (!peer || !object_dynamic_cast(peer, TYPE_ROCKCHIP_RKNN_CORE)) {
+        return NULL;
+    }
+
+    return ROCKCHIP_RKNN_CORE(peer);
+}
+
+static void rockchip_rknn_dispatch_execution(RockchipRKNNCoreState *s);
+
 static int rockchip_rknn_execution_worker(void *opaque)
 {
     RockchipRKNNCoreState *s = opaque;
@@ -7503,6 +7504,7 @@ static int rockchip_rknn_execution_worker(void *opaque)
 static void rockchip_rknn_execution_done(void *opaque, int ret)
 {
     RockchipRKNNCoreState *s = opaque;
+    RockchipRKNNCoreState *coordinator = rockchip_rknn_get_peer(s, 0);
 
     s->execution_aiocb = NULL;
     if (s->execution_discard) {
@@ -7511,6 +7513,48 @@ static void rockchip_rknn_execution_done(void *opaque, int ret)
     s->execution_result = ret < 0 ? ROCKCHIP_RKNN_EXECUTION_MODEL_ERROR : ret;
     s->execution_result_ready = true;
     rockchip_rknn_complete(s);
+    rockchip_rknn_dispatch_execution(coordinator ? coordinator : s);
+}
+
+static void rockchip_rknn_dispatch_execution(RockchipRKNNCoreState *s)
+{
+    RockchipRKNNCoreState *next = NULL;
+
+    for (unsigned int i = 0; i < ROCKCHIP_RKNN_CORE_COUNT; i++) {
+        RockchipRKNNCoreState *peer = rockchip_rknn_get_peer(s, i);
+
+        if (peer && peer->execution_aiocb) {
+            return;
+        }
+        if (peer && peer->execution_queued &&
+            (!next || peer->execution_sequence < next->execution_sequence)) {
+            next = peer;
+        }
+    }
+    if (!next) {
+        return;
+    }
+
+    next->execution_queued = false;
+    qemu_mutex_lock(&next->execution_lock);
+    next->execution_worker_done = false;
+    qemu_mutex_unlock(&next->execution_lock);
+    next->execution_aiocb = thread_pool_submit_aio(
+        rockchip_rknn_execution_worker, next,
+        rockchip_rknn_execution_done, next);
+}
+
+static void rockchip_rknn_queue_execution(RockchipRKNNCoreState *s)
+{
+    RockchipRKNNCoreState *coordinator = rockchip_rknn_get_peer(s, 0);
+
+    if (!coordinator) {
+        coordinator = s;
+    }
+    assert(!s->execution_queued && !s->execution_aiocb);
+    s->execution_sequence = coordinator->execution_next_sequence++;
+    s->execution_queued = true;
+    rockchip_rknn_dispatch_execution(coordinator);
 }
 
 static void rockchip_rknn_drain_execution(RockchipRKNNCoreState *s,
@@ -7518,6 +7562,13 @@ static void rockchip_rknn_drain_execution(RockchipRKNNCoreState *s,
 {
     bool waited;
 
+    if (s->execution_queued) {
+        if (discard) {
+            s->execution_queued = false;
+            s->execution_result_ready = false;
+        }
+        return;
+    }
     if (!s->execution_aiocb) {
         return;
     }
@@ -7540,6 +7591,32 @@ static void rockchip_rknn_drain_execution(RockchipRKNNCoreState *s,
     s->execution_discard = false;
     if (discard) {
         s->execution_result_ready = false;
+    }
+}
+
+static void rockchip_rknn_drain_execution_queue(RockchipRKNNCoreState *s)
+{
+    while (true) {
+        RockchipRKNNCoreState *active = NULL;
+        bool queued = false;
+
+        for (unsigned int i = 0; i < ROCKCHIP_RKNN_CORE_COUNT; i++) {
+            RockchipRKNNCoreState *peer = rockchip_rknn_get_peer(s, i);
+
+            if (peer && peer->execution_aiocb) {
+                active = peer;
+                break;
+            }
+            queued |= peer && peer->execution_queued;
+        }
+        if (active) {
+            rockchip_rknn_drain_execution(active, false);
+            continue;
+        }
+        if (!queued) {
+            return;
+        }
+        rockchip_rknn_dispatch_execution(s);
     }
 }
 
@@ -7602,12 +7679,7 @@ static void rockchip_rknn_complete(void *opaque)
                     memcpy(s->execution_lut, s->lut,
                            sizeof(s->execution_lut));
                     s->execution_mode = mode;
-                    qemu_mutex_lock(&s->execution_lock);
-                    s->execution_worker_done = false;
-                    qemu_mutex_unlock(&s->execution_lock);
-                    s->execution_aiocb = thread_pool_submit_aio(
-                        rockchip_rknn_execution_worker, s,
-                        rockchip_rknn_execution_done, s);
+                    rockchip_rknn_queue_execution(s);
                     return;
                 }
                 result = s->execution_result;
@@ -8558,6 +8630,7 @@ static const MemoryRegionOps rockchip_rknn_global_ops = {
 static void rockchip_rknn_reset(DeviceState *dev)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
+    RockchipRKNNCoreState *coordinator = rockchip_rknn_get_peer(s, 0);
 
     rockchip_rknn_drain_execution(s, true);
     timer_del(&s->complete_timer);
@@ -8579,6 +8652,7 @@ static void rockchip_rknn_reset(DeviceState *dev)
     s->pending_dma_error_bits = 0;
     s->pending_slave = false;
     s->busy = false;
+    s->execution_queued = false;
     s->execution_mode = ROCKCHIP_RKNN_EXECUTION_UNSUPPORTED;
     s->execution_result = ROCKCHIP_RKNN_EXECUTION_OK;
     s->execution_result_ready = false;
@@ -8621,6 +8695,8 @@ static void rockchip_rknn_reset(DeviceState *dev)
     }
 
     rockchip_rknn_update_irq(s);
+
+    rockchip_rknn_dispatch_execution(coordinator ? coordinator : s);
 }
 
 static int rockchip_rknn_post_load(void *opaque, int version_id)
@@ -8644,14 +8720,15 @@ static bool rockchip_rknn_execution_active(Object *obj, Error **errp)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
 
-    return s->execution_aiocb != NULL;
+    return s->execution_queued || s->execution_aiocb;
 }
 
 static int rockchip_rknn_pre_save(void *opaque)
 {
     RockchipRKNNCoreState *s = opaque;
 
-    return s->execution_aiocb ? -EBUSY : 0;
+    return s->execution_queued || s->execution_aiocb ||
+        s->execution_result_ready ? -EBUSY : 0;
 }
 
 static void rockchip_rknn_vm_state_change(void *opaque, bool running,
@@ -8659,8 +8736,9 @@ static void rockchip_rknn_vm_state_change(void *opaque, bool running,
 {
     RockchipRKNNCoreState *s = opaque;
 
-    if (!running && state == RUN_STATE_FINISH_MIGRATE) {
-        rockchip_rknn_drain_execution(s, false);
+    if (!running && state == RUN_STATE_FINISH_MIGRATE &&
+        s->core_index == 0) {
+        rockchip_rknn_drain_execution_queue(s);
     }
 }
 
@@ -8753,6 +8831,11 @@ static void rockchip_rknn_realize(DeviceState *dev, Error **errp)
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
     IOMMUMemoryRegion *iommu;
 
+    if (s->core_index >= ROCKCHIP_RKNN_CORE_COUNT) {
+        error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
+                   " invalid core-index %u", s->core_index);
+        return;
+    }
     if (!s->dma_mr) {
         error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE " 'dma' link not set");
         return;
