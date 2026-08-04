@@ -148,12 +148,9 @@ struct RockchipRKNNCoreState {
     bool busy;
     bool reset_asserted;
     bool irq_level;
-    bool execution_queued;
     bool execution_result_ready;
     bool execution_discard;
     bool execution_worker_done;
-    uint64_t execution_sequence;
-    uint64_t execution_next_sequence;
     int execution_mode;
     int execution_result;
     uint64_t functional_max_host_bytes;
