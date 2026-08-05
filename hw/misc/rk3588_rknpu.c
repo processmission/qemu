@@ -8786,10 +8786,23 @@ static void rockchip_rknn_reset(DeviceState *dev)
 static int rockchip_rknn_post_load(void *opaque, int version_id)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(opaque);
+    uint32_t cna_conv2;
 
-    (void)version_id;
     if (s->pending_task_index > s->pending_task_count) {
         return -EINVAL;
+    }
+    if (version_id < 2) {
+        s->execution_result_ready = false;
+        s->execution_result = ROCKCHIP_RKNN_EXECUTION_OK;
+    }
+    /* co_work_mode is derived from the migrated register file. */
+    if (s->pending_pipeline_decoded && s->pending_pipeline &&
+        (s->pending_pipeline->enabled_blocks & ROCKCHIP_RKNN_BLOCK_CNA)) {
+        rockchip_rknn_register_read(&s->pending_file,
+                                    ROCKCHIP_RKNN_DOMAIN_CNA,
+                                    ROCKCHIP_RKNN_CNA_CONV_CON2,
+                                    &cna_conv2);
+        s->pending_pipeline->cna.co_work_mode = extract32(cna_conv2, 28, 3);
     }
     s->ppu_regs[R_PPU_S_POINTER] = rockchip_rknn_encode_pointer_state(
         &s->domain_runtime[ROCKCHIP_RKNN_DOMAIN_PPU]);
@@ -9008,7 +9021,6 @@ static const VMStateDescription vmstate_rockchip_rknn_cna = {
         VMSTATE_UINT8(kernel_width, RockchipRKNNCNAConfig),
         VMSTATE_UINT8(kernel_height, RockchipRKNNCNAConfig),
         VMSTATE_UINT8(conv_mode, RockchipRKNNCNAConfig),
-        VMSTATE_UINT8(co_work_mode, RockchipRKNNCNAConfig),
         VMSTATE_UINT8(argb_in, RockchipRKNNCNAConfig),
         VMSTATE_UINT8(input_precision, RockchipRKNNCNAConfig),
         VMSTATE_UINT8(process_precision, RockchipRKNNCNAConfig),
@@ -9255,7 +9267,7 @@ static const VMStateDescription vmstate_rockchip_rknn_register_file = {
 
 static const VMStateDescription vmstate_rockchip_rknn = {
     .name = TYPE_ROCKCHIP_RKNN_CORE,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .pre_save = rockchip_rknn_pre_save,
     .post_load = rockchip_rknn_post_load,
@@ -9309,8 +9321,8 @@ static const VMStateDescription vmstate_rockchip_rknn = {
                              RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_PENDING_WRITE_R_MAX),
         VMSTATE_BOOL(pending_slave, RockchipRKNNCoreState),
-        VMSTATE_BOOL(execution_result_ready, RockchipRKNNCoreState),
-        VMSTATE_INT32(execution_result, RockchipRKNNCoreState),
+        VMSTATE_BOOL_V(execution_result_ready, RockchipRKNNCoreState, 2),
+        VMSTATE_INT32_V(execution_result, RockchipRKNNCoreState, 2),
         VMSTATE_UINT16_2DARRAY(lut, RockchipRKNNCoreState, 2,
                                ROCKCHIP_RKNN_LUT_ENTRIES),
         VMSTATE_UINT32(lut_access_cfg, RockchipRKNNCoreState),
