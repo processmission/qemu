@@ -20,7 +20,6 @@
 
 #define K230_CLINT_CPU_INDEX_AUTO UINT32_MAX
 #define K230_CLINT_SMODE_SIZE     0x2000
-#define K230_CLINT_SSIP_BASE      0x0000
 #define K230_CLINT_STIMECMP_BASE  0x1000
 
 static CPUState *k230_clint_cpu(K230ClintSModeState *s, uint32_t hart_offset)
@@ -148,8 +147,7 @@ static uint64_t k230_clint_read(void *opaque, hwaddr addr, unsigned size)
 {
     K230ClintSModeState *s = K230_CLINT_SMODE(opaque);
 
-    if (addr >= K230_CLINT_SSIP_BASE &&
-        addr < K230_CLINT_STIMECMP_BASE) {
+    if (addr < K230_CLINT_STIMECMP_BASE) {
         return k230_clint_read_ssip(s, addr);
     }
 
@@ -168,8 +166,7 @@ static void k230_clint_write(void *opaque, hwaddr addr, uint64_t value,
 {
     K230ClintSModeState *s = K230_CLINT_SMODE(opaque);
 
-    if (addr >= K230_CLINT_SSIP_BASE &&
-        addr < K230_CLINT_STIMECMP_BASE) {
+    if (addr < K230_CLINT_STIMECMP_BASE) {
         k230_clint_write_ssip(s, addr, value);
         return;
     }
