@@ -2165,8 +2165,6 @@ static bool k230_gnne_dma_read_bytes(uint64_t addr, void *buf,
                            MEMTXATTRS_UNSPECIFIED) == MEMTX_OK;
 }
 
-static uint64_t k230_gnne_head_le_p(const void *buf, uint64_t size);
-
 static void k230_gnne_trace_dma_write(uint64_t addr, const void *buf,
                                       unsigned int size, uint32_t flags)
 {
@@ -5204,8 +5202,8 @@ static void k230_gnne_pdp0_compute(K230KpuState *s, K230GnneFrontend *fe,
     unsigned int raddr_s = extract32(word, 10, 5);
     unsigned int dest_size;
     uint32_t input_encoded;
-    uint32_t weight_encoded;
-    uint32_t weight_zp_encoded;
+    uint32_t weight_encoded = 0;
+    uint32_t weight_zp_encoded = 0;
     uint32_t act0_encoded;
     uint32_t dest_encoded;
     int32_t input_zp;
