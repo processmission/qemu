@@ -46,6 +46,7 @@
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
 #include "hw/timer/rockchip_stimer.h"
+#include "hw/usb/rk3588_dwc3_udc.h"
 #include "hw/usb/rk3588_usb2_host.h"
 #include "net/net.h"
 #include "system/block-backend.h"
@@ -205,6 +206,7 @@ struct RK3588MachineState {
     DeviceState *secure_otp;
     DeviceState *atf_ddr;
     RK3588DDRState *ddr;
+    RK3588DWC3UDCState *dwc3_udc;
     RK3588USB2HostState *usb2_host;
 
     MemoryRegion sram;
@@ -253,6 +255,7 @@ enum {
     RK3588_RAM,
     RK3588_FIRMWARE_SCRATCH,
     RK3588_SCMI_SHMEM,
+    RK3588_USB3OTG0,
     RK3588_PMU0_GRF,
     RK3588_PMU1_GRF,
     RK3588_USB_GRF,
@@ -319,6 +322,8 @@ static const MemMapEntry rk3588_memmap[] = {
      * rk3588-scmi SysBusDevice (RAM-backed MMIO + the SCMI responder).
      */
     [RK3588_SCMI_SHMEM] =   { 0x0010f000, 0x00000100 },
+    [RK3588_USB3OTG0] =     { 0xfc000000,
+                              RK3588_DWC3_UDC_MMIO_SIZE },
     [RK3588_PMU0_GRF] =     { 0xfd588000, 0x00001000 },
     [RK3588_PMU1_GRF] =     { 0xfd58a000, 0x00001000 },
     [RK3588_USB_GRF] =      { 0xfd5ac000, 0x00001000 },
@@ -391,6 +396,7 @@ static hwaddr rk3588_ram_base(const RK3588MachineState *s)
 
 enum {
     RK3588_GIC_MAINT_PPI = 9,
+    RK3588_USB3OTG0_SPI = 220,
     RK3588_SDMMC_SPI = 203,
     RK3588_SDHCI_SPI = 205,
     RK3588_RKNN0_SPI = 110,
@@ -2501,7 +2507,8 @@ static void rk3588_create_uart(RK3588MachineState *s)
      */
     serial_mm_init(get_system_memory(), rk3588_memmap[RK3588_UART2].base, 2,
                    qdev_get_gpio_in(s->gic, RK3588_UART2_SPI),
-                   RK3588_UART_BAUDBASE, serial_hd(0), DEVICE_LITTLE_ENDIAN);
+                   RK3588_UART_BAUDBASE,
+                   serial_hd(s->zephyr_ram ? 1 : 0), DEVICE_LITTLE_ENDIAN);
 
     vendor = qdev_new(TYPE_DW_APB_UART_VENDOR);
     vendor_sbd = SYS_BUS_DEVICE(vendor);
@@ -2918,6 +2925,24 @@ static void rk3588_create_usb2_host(RK3588MachineState *s)
     object_unref(OBJECT(dev));
 }
 
+static void rk3588_create_usb3_device(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_DWC3_UDC);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (s->zephyr_ram) {
+        qdev_prop_set_chr(dev, "chardev", serial_hd(0));
+    }
+    object_property_add_child(OBJECT(s), "usb3otg0", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_USB3OTG0].base);
+    sysbus_connect_irq(sbd, 0,
+                       qdev_get_gpio_in(s->gic, RK3588_USB3OTG0_SPI));
+
+    s->dwc3_udc = RK3588_DWC3_UDC(dev);
+    object_unref(OBJECT(dev));
+}
+
 /*
  * Per-machine SMC handler entry. Registered with
  * arm_register_psci_smc_handler() so accelerator SMC exception paths can run it
@@ -3130,6 +3155,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_cru(s);
     rk3588_create_stimer(s);
     rk3588_create_ddr(s);
+    rk3588_create_usb3_device(s);
     rk3588_create_usb2_host(s);
     rk3588_create_scmi(s);
     rk3588_create_secure_otp(s);

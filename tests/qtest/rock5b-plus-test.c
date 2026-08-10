@@ -19,6 +19,7 @@
 #define RK3588_ATAGS_BASE 0x001fe000ULL
 #define RK3588_RAM_BASE 0x00200000ULL
 #define RK3588_ZEPHYR_RAM_BASE 0x10000000ULL
+#define RK3588_DWC3_BASE 0xfc000000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
 #define RK3588_CRYPTO_BASE 0xfe370000ULL
 #define RK3588_PCIE3X4_APB_BASE 0xfe150000ULL
@@ -88,6 +89,27 @@
 #define CRYPTO_HASH_SHA256_PAD_ENABLE 0x25
 #define CRYPTO_LLI_USER_HASH_START_LAST 0x7
 #define CRYPTO_LLI_DMA_LAST_SRC_DONE 0x401
+#define DWC3_GCOREID 0xc120
+#define DWC3_GEVNTADR_LO 0xc400
+#define DWC3_GEVNTADR_HI 0xc404
+#define DWC3_GEVNTSIZ 0xc408
+#define DWC3_GEVNTCOUNT 0xc40c
+#define DWC3_DCTL 0xc704
+#define DWC3_DCTL_RUNSTOP BIT(31)
+#define DWC3_DCTL_CSFTRST BIT(30)
+#define DWC3_DEPCMDPAR1(ep) (0xc804 + 16 * (ep))
+#define DWC3_DEPCMDPAR0(ep) (0xc808 + 16 * (ep))
+#define DWC3_DEPCMD(ep) (0xc80c + 16 * (ep))
+#define DWC3_DEPCMD_CMDACT BIT(10)
+#define DWC3_DEPCMD_DEPSTRTXFER 6
+#define DWC3_TRB_CTRL_HWO BIT(0)
+#define DWC3_TRB_CTRL_LST BIT(1)
+#define DWC3_TRBCTL_CONTROL_SETUP (2 << 4)
+#define DWC3_TRBCTL_CONTROL_STATUS_2 (3 << 4)
+#define DWC3_DEVT_USBRST 0x101
+#define DWC3_DEVT_CONNECTDONE 0x201
+#define DWC3_DEPEVT_XFERCOMPLETE(ep) (((ep) << 1) | (1 << 6))
+#define DWC3_ENUM_SETUP_DELAY_NS 1000000
 
 static QTestState *rock_5b_plus_qtest_start(unsigned int cpus)
 {
@@ -438,6 +460,121 @@ static void test_rock_5b_plus_zephyr_uimage(void)
     g_assert_cmpint(g_unlink(kernel_path), ==, 0);
 }
 
+static void test_rock_5b_plus_dwc3_device(void)
+{
+    const uint64_t event_buffer = RK3588_ZEPHYR_RAM_BASE + 0x1000;
+    const uint64_t setup_trb = RK3588_ZEPHYR_RAM_BASE + 0x2000;
+    const uint64_t setup_packet = RK3588_ZEPHYR_RAM_BASE + 0x2100;
+    const uint64_t status_trb = RK3588_ZEPHYR_RAM_BASE + 0x2200;
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  ",zephyr-ram=on -smp 1 -m 128M");
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GCOREID) >> 16,
+                    ==, 0x5533);
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DCTL, DWC3_DCTL_CSFTRST);
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_DCTL) &
+                    DWC3_DCTL_CSFTRST, ==, 0);
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTADR_LO,
+                 event_buffer);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTADR_HI, 0);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTSIZ, 64);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DCTL,
+                 DWC3_DCTL_RUNSTOP);
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT),
+                    ==, 2 * sizeof(uint32_t));
+    g_assert_cmphex(qtest_readl(qts, event_buffer), ==, DWC3_DEVT_USBRST);
+    g_assert_cmphex(qtest_readl(qts, event_buffer + sizeof(uint32_t)), ==,
+                    DWC3_DEVT_CONNECTDONE);
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT,
+                 2 * sizeof(uint32_t));
+    qtest_writel(qts, setup_trb, setup_packet);
+    qtest_writel(qts, setup_trb + 4, 0);
+    qtest_writel(qts, setup_trb + 8, 8);
+    qtest_writel(qts, setup_trb + 12,
+                 DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+                 DWC3_TRBCTL_CONTROL_SETUP);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR1(0), setup_trb);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR0(0), 0);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMD(0),
+                 DWC3_DEPCMD_CMDACT | DWC3_DEPCMD_DEPSTRTXFER);
+
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT),
+                    ==, 0);
+    qtest_clock_step(qts, DWC3_ENUM_SETUP_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, setup_packet), ==, 0x00010500);
+    g_assert_cmphex(qtest_readl(qts, setup_packet + 4), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, setup_trb + 12) & DWC3_TRB_CTRL_HWO,
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, event_buffer + 8), ==,
+                    DWC3_DEPEVT_XFERCOMPLETE(0));
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT,
+                 sizeof(uint32_t));
+    qtest_writel(qts, status_trb, 0);
+    qtest_writel(qts, status_trb + 4, 0);
+    qtest_writel(qts, status_trb + 8, 0);
+    qtest_writel(qts, status_trb + 12,
+                 DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+                 DWC3_TRBCTL_CONTROL_STATUS_2);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR1(1), status_trb);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR0(1), 0);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMD(1),
+                 DWC3_DEPCMD_CMDACT | DWC3_DEPCMD_DEPSTRTXFER);
+    g_assert_cmphex(qtest_readl(qts, event_buffer + 12), ==,
+                    DWC3_DEPEVT_XFERCOMPLETE(1));
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT,
+                 sizeof(uint32_t));
+    qtest_writel(qts, setup_trb + 8, 8);
+    qtest_writel(qts, setup_trb + 12,
+                 DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+                 DWC3_TRBCTL_CONTROL_SETUP);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMD(0),
+                 DWC3_DEPCMD_CMDACT | DWC3_DEPCMD_DEPSTRTXFER);
+    qtest_clock_step(qts, DWC3_ENUM_SETUP_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, setup_packet), ==, 0x00010900);
+    g_assert_cmphex(qtest_readl(qts, event_buffer + 16), ==,
+                    DWC3_DEPEVT_XFERCOMPLETE(0));
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DCTL,
+                 DWC3_DCTL_CSFTRST);
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_DCTL), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GEVNTADR_LO),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GEVNTSIZ),
+                    ==, 0);
+
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTADR_LO,
+                 event_buffer);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTADR_HI, 0);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTSIZ, 64);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DCTL,
+                 DWC3_DCTL_RUNSTOP);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_GEVNTCOUNT,
+                 2 * sizeof(uint32_t));
+
+    qtest_writel(qts, setup_trb + 8, 8);
+    qtest_writel(qts, setup_trb + 12,
+                 DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+                 DWC3_TRBCTL_CONTROL_SETUP);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR1(0), setup_trb);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMDPAR0(0), 0);
+    qtest_writel(qts, RK3588_DWC3_BASE + DWC3_DEPCMD(0),
+                 DWC3_DEPCMD_CMDACT | DWC3_DEPCMD_DEPSTRTXFER);
+    qtest_clock_step(qts, DWC3_ENUM_SETUP_DELAY_NS);
+    g_assert_cmphex(qtest_readl(qts, setup_packet), ==, 0x00010500);
+    g_assert_cmphex(qtest_readl(qts, event_buffer + 8), ==,
+                    DWC3_DEPEVT_XFERCOMPLETE(0));
+
+    qtest_quit(qts);
+}
+
 static void test_rock_5b_plus_unfused_secure_otp(void)
 {
     QTestState *qts = rock_5b_plus_qtest_start(1);
@@ -600,6 +737,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_zephyr_ram);
     qtest_add_func("/rock-5b-plus/zephyr-uimage",
                    test_rock_5b_plus_zephyr_uimage);
+    qtest_add_func("/rock-5b-plus/dwc3-device",
+                   test_rock_5b_plus_dwc3_device);
     qtest_add_func("/rock-5b-plus/pcie3x2-fdt",
                    test_rock_5b_plus_pcie3x2_fdt);
     qtest_add_func("/rock-5b-plus/pcie3x2-bus-number",
