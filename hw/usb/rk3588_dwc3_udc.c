@@ -607,6 +607,7 @@ static void rk3588_dwc3_reset_state(RK3588DWC3UDCState *s)
     s->control_input_request = false;
     timer_del(s->setup_timer);
     qemu_set_irq(s->irq, 0);
+    qemu_chr_fe_accept_input(&s->chr);
 }
 
 static void rk3588_dwc3_reset(DeviceState *dev)
