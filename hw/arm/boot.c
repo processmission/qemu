@@ -286,10 +286,8 @@ static inline bool have_dtb(const struct arm_boot_info *info)
 static void set_kernel_args(const struct arm_boot_info *info, AddressSpace *as)
 {
     int initrd_size = info->initrd_size;
-    hwaddr base = info->loader_start;
-    hwaddr p;
+    hwaddr p = info->primary_loader_start + KERNEL_ARGS_ADDR;
 
-    p = base + KERNEL_ARGS_ADDR;
     /* ATAG_CORE */
     WRITE_WORD(p, 5);
     WRITE_WORD(p, 0x54410001);
@@ -1102,9 +1100,9 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
             fixupcontext[FIXUP_ARGPTR_HI] = info->dtb_start >> 32;
         } else {
             fixupcontext[FIXUP_ARGPTR_LO] =
-                info->loader_start + KERNEL_ARGS_ADDR;
+                info->primary_loader_start + KERNEL_ARGS_ADDR;
             fixupcontext[FIXUP_ARGPTR_HI] =
-                (info->loader_start + KERNEL_ARGS_ADDR) >> 32;
+                (info->primary_loader_start + KERNEL_ARGS_ADDR) >> 32;
             if (info->ram_size >= 4 * GiB) {
                 error_report("RAM size must be less than 4GB to boot"
                              " Linux kernel using ATAGS (try passing a device tree"
