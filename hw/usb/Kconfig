@@ -42,6 +42,9 @@ config RK3588_USB2_HOST
     bool
     select REGISTER
 
+config RK3588_DWC3_UDC
+    bool
+
 config USB_XHCI
     bool
     select USB
