@@ -167,7 +167,7 @@ static void rk3588_dwc3_push_event(RK3588DWC3UDCState *s, uint32_t event)
 {
     uint32_t value = cpu_to_le32(event);
 
-    if (!s->event_addr || s->event_size < sizeof(value)) {
+    if (s->event_size < sizeof(value)) {
         return;
     }
 
