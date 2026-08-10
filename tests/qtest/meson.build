@@ -269,6 +269,7 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') and
    config_all_devices.has_key('CONFIG_DM163')? ['dm163-test'] : []) + \
   ['arm-cpu-features',
@@ -294,6 +295,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-rknpu-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588S_ROC_PC') ? ['rk3588s-roc-pc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   (config_all_devices.has_key('CONFIG_PHYTIUMPI') ? ['phytiumpi-test'] : []) + \
   qtests_cxl +                                                                                  \
   ['arm-cpu-features',
