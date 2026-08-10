@@ -1,13 +1,14 @@
 /*
  * QTest for the Radxa ROCK 5B+ machine
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
 #include <libfdt.h>
+#include "hw/core/uboot_image.h"
 #include "qemu/bitops.h"
 #include "qobject/qdict.h"
 #include "qobject/qlist.h"
@@ -17,6 +18,7 @@
 
 #define RK3588_ATAGS_BASE 0x001fe000ULL
 #define RK3588_RAM_BASE 0x00200000ULL
+#define RK3588_ZEPHYR_RAM_BASE 0x10000000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
 #define RK3588_CRYPTO_BASE 0xfe370000ULL
 #define RK3588_PCIE3X4_APB_BASE 0xfe150000ULL
@@ -379,6 +381,63 @@ static void test_rock_5b_plus_smp_creation(void)
     qtest_quit(qts);
 }
 
+static void test_rock_5b_plus_zephyr_ram(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  ",zephyr-ram=on -smp 1 -m 128M");
+    const uint32_t value = 0x5b3585b3;
+
+    qtest_writel(qts, RK3588_ZEPHYR_RAM_BASE, value);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ZEPHYR_RAM_BASE), ==, value);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RAM_BASE), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_rock_5b_plus_zephyr_uimage(void)
+{
+    static const uint32_t kernel_insn = GUINT32_TO_LE(0x14000000);
+    uboot_image_header_t header = {
+        .ih_magic = GUINT32_TO_BE(IH_MAGIC),
+        .ih_size = GUINT32_TO_BE(sizeof(kernel_insn)),
+        .ih_load = GUINT32_TO_BE(RK3588_ZEPHYR_RAM_BASE),
+        .ih_ep = GUINT32_TO_BE(RK3588_ZEPHYR_RAM_BASE),
+        .ih_os = IH_OS_LINUX,
+        .ih_arch = IH_ARCH_ARM64,
+        .ih_type = IH_TYPE_KERNEL,
+        .ih_comp = IH_COMP_NONE,
+        .ih_name = "Zephyr ROCK 5B+",
+    };
+    g_autofree uint8_t *image = g_malloc(sizeof(header) +
+                                         sizeof(kernel_insn));
+    g_autofree char *kernel_path = NULL;
+    g_autoptr(GError) error = NULL;
+    QTestState *qts;
+    int kernel_fd;
+
+    memcpy(image, &header, sizeof(header));
+    memcpy(image + sizeof(header), &kernel_insn, sizeof(kernel_insn));
+
+    kernel_fd = g_file_open_tmp("rock5b-plus-zephyr-XXXXXX", &kernel_path,
+                                &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(kernel_fd, >=, 0);
+    g_assert_cmpint(close(kernel_fd), ==, 0);
+    g_assert_true(g_file_set_contents(kernel_path, (const char *)image,
+                                      sizeof(header) + sizeof(kernel_insn),
+                                      &error));
+    g_assert_no_error(error);
+
+    qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                      ",zephyr-ram=on -smp 1 -m 128M -kernel %s",
+                      kernel_path);
+    g_assert_cmphex(qtest_readl(qts, RK3588_ZEPHYR_RAM_BASE), ==,
+                    GUINT32_FROM_LE(kernel_insn));
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(kernel_path), ==, 0);
+}
+
 static void test_rock_5b_plus_unfused_secure_otp(void)
 {
     QTestState *qts = rock_5b_plus_qtest_start(1);
@@ -537,6 +596,10 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_machine_creation);
     qtest_add_func("/rock-5b-plus/smp-creation",
                    test_rock_5b_plus_smp_creation);
+    qtest_add_func("/rock-5b-plus/zephyr-ram",
+                   test_rock_5b_plus_zephyr_ram);
+    qtest_add_func("/rock-5b-plus/zephyr-uimage",
+                   test_rock_5b_plus_zephyr_uimage);
     qtest_add_func("/rock-5b-plus/pcie3x2-fdt",
                    test_rock_5b_plus_pcie3x2_fdt);
     qtest_add_func("/rock-5b-plus/pcie3x2-bus-number",
