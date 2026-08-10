@@ -30,6 +30,7 @@
 #include "system/device_tree.h"
 #include "qemu/config-file.h"
 #include "qemu/option.h"
+#include "qemu/range.h"
 #include "qemu/units.h"
 #include "qemu/bswap.h"
 
@@ -724,7 +725,7 @@ static void do_cpu_reset(void *opaque)
             if (cpu == info->primary_cpu) {
                 AddressSpace *as = arm_boot_address_space(cpu, info);
 
-                cpu_set_pc(cs, info->loader_start);
+                cpu_set_pc(cs, info->primary_loader_start);
 
                 if (!have_dtb(info)) {
                     set_kernel_args(info, as);
@@ -982,6 +983,24 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
 
     info->entry = entry;
 
+    if (is_linux) {
+        info->primary_loader_start = info->loader_start;
+        if (image_high_addr > image_low_addr &&
+            ranges_overlap(info->primary_loader_start,
+                           BOOTLOADER_MAX_SIZE,
+                           image_low_addr,
+                           image_high_addr - image_low_addr)) {
+            info->primary_loader_start =
+                QEMU_ALIGN_UP(image_high_addr, BOOTLOADER_MAX_SIZE);
+        }
+        if (info->primary_loader_start < info->loader_start ||
+            info->primary_loader_start > ram_end ||
+            ram_end - info->primary_loader_start < BOOTLOADER_MAX_SIZE) {
+            error_report("not enough space for the ARM boot trampoline");
+            exit(1);
+        }
+    }
+
     /*
      * We want to put the initrd far enough into RAM that when the
      * kernel is uncompressed it will not clobber the initrd. However
@@ -1001,6 +1020,11 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
         MIN(info->ram_size / 2, 128 * MiB);
     if (image_high_addr) {
         info->initrd_start = MAX(info->initrd_start, image_high_addr);
+    }
+    if (is_linux) {
+        info->initrd_start = MAX(info->initrd_start,
+                                 info->primary_loader_start +
+                                 BOOTLOADER_MAX_SIZE);
     }
     info->initrd_start = TARGET_PAGE_ALIGN(info->initrd_start);
 
@@ -1091,7 +1115,7 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
         fixupcontext[FIXUP_ENTRYPOINT_LO] = entry;
         fixupcontext[FIXUP_ENTRYPOINT_HI] = entry >> 32;
 
-        arm_write_bootloader("bootloader", as, info->loader_start,
+        arm_write_bootloader("bootloader", as, info->primary_loader_start,
                              primary_loader, fixupcontext);
 
         if (info->write_board_setup) {
