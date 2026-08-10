@@ -237,7 +237,7 @@ jobs:
       - run: ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} && ninja -C build
       - run: ./build/qemu-system-x86_64-unsigned -nographic -plugin ./build/contrib/plugins/libstoptrigger,icount=1000000 -plugin ./build/tests/tcg/plugins/libinsn -plugin ./build/contrib/plugins/libcpp -d plugin
 
-  build-mcs51-family-linux:
+  build-mcs51-linux:
     needs: checkapply
     strategy:
       fail-fast: false
@@ -251,14 +251,14 @@ jobs:
     steps:
       - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
-      - name: Build MCS-51 family targets
+      - name: Build MCS-51 targets
         run: >
           podman run --pull newer --init --rm -it
           -v "$(pwd):$(pwd)" -w "$(pwd)"
           docker.io/pboqemu/qemu-ci:debian
           bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
           --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build'
-      - name: Run MCS-51 family tests
+      - name: Run MCS-51 tests
         run: >
           podman run --pull newer --init --rm -i
           -v "$(pwd):$(pwd)" -w "$(pwd)"
@@ -268,7 +268,7 @@ jobs:
           qemu:qtest-mcs251/stc32-test qemu:func-mcs51-isa
           qemu:func-mcs251-isa'
 
-  build-mcs51-family-macos:
+  build-mcs51-macos:
     needs: checkapply
     strategy:
       fail-fast: false
@@ -290,18 +290,18 @@ jobs:
       - run: |
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
-      - name: Build MCS-51 family targets
+      - name: Build MCS-51 targets
         run: >
           ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
           --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build
-      - name: Run MCS-51 family tests
+      - name: Run MCS-51 tests
         run: >
           ./build/pyvenv/bin/meson test -C build --no-rebuild
           --print-errorlogs qemu:qtest-mcs51/stc8g-test
           qemu:qtest-mcs251/stc32-test qemu:func-mcs51-isa
           qemu:func-mcs251-isa
 
-  build-mcs51-family-mingw:
+  build-mcs51-mingw:
     needs: checkapply
     runs-on: windows-2025
     defaults:
@@ -321,11 +321,11 @@ jobs:
           ${MINGW_PACKAGE_PREFIX}-ninja ${MINGW_PACKAGE_PREFIX}-pixman
           ${MINGW_PACKAGE_PREFIX}-pkgconf ${MINGW_PACKAGE_PREFIX}-python
           ${MINGW_PACKAGE_PREFIX}-SDL2 ${MINGW_PACKAGE_PREFIX}-zstd
-      - name: Build MCS-51 family targets
+      - name: Build MCS-51 targets
         run: >
           ./configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }}
           --target-list=mcs51-softmmu,mcs251-softmmu && ninja -C build
-      - name: Run MCS-51 family qtests
+      - name: Run MCS-51 qtests
         run: >
           ./build/pyvenv/bin/meson test -C build --no-rebuild
           --print-errorlogs qemu:qtest-mcs51/stc8g-test
