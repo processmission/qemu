@@ -462,7 +462,7 @@ static void test_rock_5b_plus_zephyr_uimage(void)
 
 static void test_rock_5b_plus_dwc3_device(void)
 {
-    const uint64_t event_buffer = RK3588_ZEPHYR_RAM_BASE + 0x1000;
+    const uint64_t event_buffer = 0;
     const uint64_t setup_trb = RK3588_ZEPHYR_RAM_BASE + 0x2000;
     const uint64_t setup_packet = RK3588_ZEPHYR_RAM_BASE + 0x2100;
     const uint64_t status_trb = RK3588_ZEPHYR_RAM_BASE + 0x2200;
