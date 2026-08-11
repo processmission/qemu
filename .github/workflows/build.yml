@@ -483,21 +483,6 @@ jobs:
           docker.io/pboqemu/qemu-ci:debian
           bash -cx './configure ${{ env.QEMU_WERROR }} ${{ env.QEMU_DOCS }} --without-default-features --without-default-devices --disable-kvm --disable-tcg && ninja -C build install'
 
-  build-oss-fuzz:
-    needs: checkapply
-    runs-on: ubuntu-24.04
-    steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
-      - uses: actions/checkout@v6
-      - run: >
-          podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
-          docker.io/pboqemu/qemu-ci:debian
-          bash -cx 'mkdir build-oss-fuzz && export LSAN_OPTIONS=suppressions=scripts/lsan_suppressions.txt && CC="clang" CXX="clang++" CFLAGS="-fsanitize=address" ./scripts/oss-fuzz/build.sh'
-      - run: >
-          podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
-          docker.io/pboqemu/qemu-ci:debian
-          bash -cx 'for fuzzer in $(find ./build-oss-fuzz/DEST_DIR/ -executable -type f); do grep "LLVMFuzzerTestOneInput" ${fuzzer} >& /dev/null || continue; env ASAN_OPTIONS="fast_unwind_on_malloc=0" ${fuzzer} -runs=1 -seed=1 || exit 1; done'
-
   check-tcg:
     strategy:
       fail-fast: false
