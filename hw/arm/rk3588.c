@@ -45,6 +45,7 @@
 #include "hw/sd/rockchip_dwcmshc.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
+#include "hw/ssi/rockchip_sfc.h"
 #include "hw/timer/rockchip_stimer.h"
 #include "hw/usb/rk3588_dwc3_udc.h"
 #include "hw/usb/rk3588_usb2_host.h"
@@ -192,6 +193,7 @@ struct RK3588MachineState {
     DeviceState *its[2];
     DeviceState *sdhci;
     DeviceState *sdmmc;     /* dw_mmc - SD card controller */
+    DeviceState *sfc;       /* rockchip-sfc - SPI NOR flash controller */
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
     DeviceState *pcie3x4;
     DeviceState *pcie3x2;
@@ -285,6 +287,7 @@ enum {
     RK3588_RKNN2_MMU,
     RK3588_SDMMC,
     RK3588_SDHCI,
+    RK3588_SFC,
     RK3588_GIC_DIST,
     RK3588_GIC_REDIST,
     RK3588_GIC_ITS0,
@@ -354,6 +357,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_RKNN2_MMU] =    { 0xfdada000, ROCKCHIP_IOMMU_WINDOW_SIZE },
     [RK3588_SDMMC] =        { 0xfe2c0000, 0x00004000 },
     [RK3588_SDHCI] =        { 0xfe2e0000, 0x00010000 },
+    [RK3588_SFC] =          { 0xfe2b0000, ROCKCHIP_SFC_MMIO_SIZE },
     [RK3588_GIC_DIST] =     { 0xfe600000, 0x00010000 },
     [RK3588_GIC_ITS0] =     { 0xfe640000, 0x00020000 },
     [RK3588_GIC_ITS1] =     { 0xfe660000, 0x00020000 },
@@ -401,6 +405,7 @@ enum {
     RK3588_USB3OTG0_SPI = 220,
     RK3588_SDMMC_SPI = 203,
     RK3588_SDHCI_SPI = 205,
+    RK3588_SFC_SPI = 206,
     RK3588_RKNN0_SPI = 110,
     RK3588_RKNN1_SPI = 111,
     RK3588_RKNN2_SPI = 112,
@@ -1341,6 +1346,40 @@ static void rk3588_fdt_add_rknpu_vendor_node(void *fdt,
     qemu_fdt_setprop_string(fdt, npu, "status", "okay");
 }
 
+static void rk3588_fdt_add_sfc_node(void *fdt, uint32_t clk_phandle)
+{
+    const char *sfc = "/spi@fe2b0000";
+    const char *flash = "/spi@fe2b0000/spi-flash@0";
+    static const char * const clock_names[] = {
+        "clk_sfc", "hclk_sfc",
+    };
+
+    qemu_fdt_add_subnode(fdt, sfc);
+    qemu_fdt_setprop_string(fdt, sfc, "compatible", "rockchip,sfc");
+    qemu_fdt_setprop_sized_cells(fdt, sfc, "reg",
+                                 2, rk3588_memmap[RK3588_SFC].base,
+                                 2, rk3588_memmap[RK3588_SFC].size);
+    qemu_fdt_setprop_cells(fdt, sfc, "interrupts",
+                           FDT_GIC_SPI, RK3588_SFC_SPI,
+                           FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+    qemu_fdt_setprop_cells(fdt, sfc, "clocks",
+                           clk_phandle, clk_phandle);
+    qemu_fdt_setprop_string_array(fdt, sfc, "clock-names",
+                                  (char **)&clock_names,
+                                  ARRAY_SIZE(clock_names));
+    qemu_fdt_setprop_cell(fdt, sfc, "#address-cells", 1);
+    qemu_fdt_setprop_cell(fdt, sfc, "#size-cells", 0);
+    qemu_fdt_setprop_string(fdt, sfc, "status", "okay");
+
+    qemu_fdt_add_subnode(fdt, flash);
+    qemu_fdt_setprop_string(fdt, flash, "compatible", "jedec,spi-nor");
+    qemu_fdt_setprop_cell(fdt, flash, "reg", 0);
+    qemu_fdt_setprop_cell(fdt, flash, "spi-max-frequency", 104000000);
+    qemu_fdt_setprop_cell(fdt, flash, "spi-tx-bus-width", 1);
+    qemu_fdt_setprop_cell(fdt, flash, "spi-rx-bus-width", 4);
+    qemu_fdt_setprop_string(fdt, flash, "status", "okay");
+}
+
 static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 {
     RK3588MachineState *s = container_of(binfo, RK3588MachineState, bootinfo);
@@ -1373,6 +1412,7 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_timer_node(fdt);
     rk3588_fdt_add_uart_node(fdt);
     rk3588_fdt_add_storage_nodes(fdt, clk_phandle, scmi_clk_phandle);
+    rk3588_fdt_add_sfc_node(fdt, clk_phandle);
     rk3588_fdt_add_gpio_nodes(fdt, clk_phandle);
     rk3588_fdt_add_gmac_nodes(s, fdt, clk_phandle, sys_grf_ph, php_grf_ph);
     rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
@@ -3086,6 +3126,36 @@ static void rk3588_create_sdmmc(RK3588MachineState *s)
     rk3588_attach_sd_card(s, dev);
 }
 
+/*
+ * Rockchip SFC with the board SPI NOR flash.  The flash is the 16 MiB
+ * part used by the Radxa ROCK 5B+ (jedec,spi-nor class); a backing store
+ * can be supplied with -drive if=mtd,index=0,file=...,format=raw.
+ */
+static void rk3588_create_sfc(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SFC);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    DeviceState *flash;
+    DriveInfo *di = drive_get(IF_MTD, 0, 0);
+    qemu_irq flash_cs;
+
+    object_property_add_child(OBJECT(s), "sfc", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SFC].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SFC_SPI));
+
+    flash = qdev_new("w25q128");
+    if (di) {
+        qdev_prop_set_drive(flash, "drive", blk_by_legacy_dinfo(di));
+    }
+    qdev_realize_and_unref(flash, BUS(ROCKCHIP_SFC(dev)->spi), &error_fatal);
+    flash_cs = qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0);
+    qdev_connect_gpio_out_named(dev, "cs", 0, flash_cs);
+
+    s->sfc = dev;
+    object_unref(OBJECT(dev));
+}
+
 static void rk3588_create_syscon_devices(RK3588MachineState *s)
 {
     DeviceState *grf = qdev_new(TYPE_RK3588_GRF);
@@ -3190,6 +3260,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_uart(s);
     rk3588_create_sdhci(s);
     rk3588_create_sdmmc(s);
+    rk3588_create_sfc(s);
     rk3588_create_gpio(s);
     rk3588_create_gmac(s);
     rk3588_create_rknpu(s);
