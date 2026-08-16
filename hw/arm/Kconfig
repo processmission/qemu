@@ -232,6 +232,7 @@ config RK3588
     select SDHCI
     select SERIAL_MM
     select RK3588_USB2_HOST
+    select ROCKCHIP_SFC
 
 config RK3588_EVB
     bool
