@@ -2204,25 +2204,28 @@ static void rk3588_boot_state_reset(void *opaque)
 {
     RK3588MachineState *s = opaque;
 
-    /*
-     * The firmware path needs every PCIe link down: U-Boot's dw-pcie
-     * scan skips hosts whose LTSSM is not up (it does not program the
-     * outbound iATU before touching the config window).  The kernel
-     * flips the links up on its first PSCI call, so restore the
-     * firmware-path state here on every reset.
-     */
-    s->pcie_links_up = false;
-    if (s->pcie3x4) {
-        rockchip_pcie_host_set_link_up(s->pcie3x4, false);
-    }
-    if (s->pcie3x2) {
-        rockchip_pcie_host_set_link_up(s->pcie3x2, false);
-    }
-    if (s->pcie2x1l0) {
-        rockchip_pcie_host_set_link_up(s->pcie2x1l0, false);
-    }
-    if (s->pcie2x1l2) {
-        rockchip_pcie_host_set_link_up(s->pcie2x1l2, false);
+    if (s->firmware_boot) {
+        /*
+         * The firmware path needs every PCIe link down: U-Boot's
+         * dw-pcie scan skips hosts whose LTSSM is not up (it does not
+         * program the outbound iATU before touching the config window).
+         * The kernel flips the links up on its first PSCI call, so
+         * restore the firmware-path state here on every reset.  Direct
+         * -kernel boots and qtests keep the links up.
+         */
+        s->pcie_links_up = false;
+        if (s->pcie3x4) {
+            rockchip_pcie_host_set_link_up(s->pcie3x4, false);
+        }
+        if (s->pcie3x2) {
+            rockchip_pcie_host_set_link_up(s->pcie3x2, false);
+        }
+        if (s->pcie2x1l0) {
+            rockchip_pcie_host_set_link_up(s->pcie2x1l0, false);
+        }
+        if (s->pcie2x1l2) {
+            rockchip_pcie_host_set_link_up(s->pcie2x1l2, false);
+        }
     }
 
     rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
@@ -3341,7 +3344,7 @@ static void rk3588_create_pcie2x1(RK3588MachineState *s)
         [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE2X1L2_SYS_SPI,
     };
 
-    bool firmware_path = !MACHINE(s)->kernel_filename;
+    bool firmware_path = !MACHINE(s)->kernel_filename && !qtest_enabled();
 
     if (s->board->pcie2x1_mask & BIT(0)) {
         s->pcie2x1l0 = rk3588_create_pcie_host(
@@ -3406,9 +3409,10 @@ static void rk3588_create_pcie(RK3588MachineState *s)
     /*
      * During firmware boot the links start down so U-Boot skips the
      * hosts without touching the unprogrammed config windows; the kernel
-     * sees the links up (see rk3588_pcie_set_links_up).
+     * sees the links up (see rk3588_pcie_set_links_up).  qtests never
+     * run the firmware path, so they keep the default link-up state.
      */
-    bool firmware_path = !MACHINE(s)->kernel_filename;
+    bool firmware_path = !MACHINE(s)->kernel_filename && !qtest_enabled();
 
     s->pcie3x4 = rk3588_create_pcie_host(
         s, "pcie3x4", "pcie3x4",
