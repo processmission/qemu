@@ -31,6 +31,7 @@
 #include "hw/rtc/hym8563.h"
 #include "migration/vmstate.h"
 #include "qemu/bcd.h"
+#include "qemu/timer.h"
 #include "qom/object.h"
 #include "system/rtc.h"
 
@@ -57,6 +58,7 @@ struct Hym8563State {
     uint8_t ptr;
     bool addr_byte;
     qemu_irq irq;
+    QEMUTimer *tick_timer;
 };
 
 static void hym8563_update_irq(Hym8563State *s)
@@ -71,6 +73,44 @@ static void hym8563_update_irq(Hym8563State *s)
     }
     /* Open-drain output, active low. */
     qemu_set_irq(s->irq, !pending);
+}
+
+/*
+ * One-second tick: expire the countdown timer and compare the alarm
+ * registers with the current time.  Alarm fields whose disable bit (7)
+ * is clear take part in the comparison.
+ */
+static void hym8563_tick(void *opaque)
+{
+    Hym8563State *s = opaque;
+    uint8_t ctl2 = s->regs[HYM8563_CTL2];
+    uint8_t *alarm = &s->regs[0x09];
+    bool match = true;
+    unsigned int i;
+
+    if ((s->regs[0x0e] & BIT(7)) && s->regs[0x0f] > 0) {
+        s->regs[0x0f]--;
+        if (s->regs[0x0f] == 0) {
+            ctl2 |= HYM8563_CTL2_TF;
+        }
+    }
+
+    /* SEC..DAY alarm fields. */
+    for (i = 0; i < 4; i++) {
+        uint8_t mask = i == 0 ? 0x7f : 0x3f;
+
+        if (!(alarm[i] & BIT(7)) &&
+            (s->regs[HYM8563_SEC + i] & mask) != (alarm[i] & mask)) {
+            match = false;
+            break;
+        }
+    }
+    if (match) {
+        ctl2 |= HYM8563_CTL2_AF;
+    }
+
+    s->regs[HYM8563_CTL2] = ctl2;
+    hym8563_update_irq(s);
 }
 
 static void hym8563_capture_current_time(Hym8563State *s)
@@ -170,6 +210,9 @@ static void hym8563_reset(DeviceState *dev)
     s->addr_byte = true;
     hym8563_capture_current_time(s);
     hym8563_update_irq(s);
+    timer_mod(s->tick_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              NANOSECONDS_PER_SECOND);
 }
 
 static void hym8563_init(Object *obj)
@@ -177,17 +220,19 @@ static void hym8563_init(Object *obj)
     Hym8563State *s = HYM8563(obj);
 
     qdev_init_gpio_out_named(DEVICE(obj), &s->irq, "irq", 1);
+    s->tick_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, hym8563_tick, s);
 }
 
 static const VMStateDescription vmstate_hym8563 = {
     .name = "hym8563",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_I2C_SLAVE(parent_obj, Hym8563State),
         VMSTATE_INT64(offset, Hym8563State),
         VMSTATE_UINT8_ARRAY(regs, Hym8563State, HYM8563_NUM_REGS),
         VMSTATE_UINT8(ptr, Hym8563State),
+        VMSTATE_TIMER_PTR_V(tick_timer, Hym8563State, 2),
         VMSTATE_END_OF_LIST()
     }
 };
