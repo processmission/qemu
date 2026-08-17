@@ -7,6 +7,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/bswap.h"
 #include <libfdt.h>
 #include "hw/core/uboot_image.h"
 #include "qemu/bitops.h"
@@ -88,6 +89,7 @@
 #define DWC_PCIE_ATU_LIMIT 0x0914
 #define DWC_PCIE_ATU_LOWER_TARGET 0x0918
 #define DWC_PCIE_ATU_UPPER_TARGET 0x091c
+#define DWC_PCIE_ATU_TYPE_MEM 0x0
 #define DWC_PCIE_ATU_TYPE_CFG0 0x4
 #define DWC_PCIE_ATU_ENABLE BIT(31)
 #define DWMAC4_MAC_VERSION 0x0110
@@ -914,6 +916,397 @@ static void test_rock_5b_plus_sfc_flash(void)
     qtest_quit(qts);
 }
 
+/* ---------------- pcie2x1l0 virtio-net ---------------- */
+
+#define RK3588_PCIE2X1L0_DBI_BASE 0xa40800000ULL
+#define RK3588_PCIE2X1L0_CFG_BASE 0xf2000000ULL
+#define PCIE2X1L0_NET_BDF (0x21 << 24)
+#define PCIE2X1L0_MEM_WIN 0xf3000000ULL
+#define PCIE2X1L0_BAR_BASE 0x10000000ULL
+#define NET_RING_BASE 0x01000000ULL
+#define NET_BUF_BASE 0x01100000ULL
+#define VIRTIO_NET_HDR_SIZE 10
+#define VRING_DESC_F_WRITE BIT(1)
+#define VIRTIO_PCI_CAP_COMMON_CFG 1
+#define VIRTIO_PCI_CAP_NOTIFY_CFG 2
+#define VIRTIO_PCI_CAP_ISR_CFG 3
+#define VPC_COMMON_DEVICE_STATUS 0x14
+#define VPC_COMMON_DEVICE_FEATURE_SELECT 0x00
+#define VPC_COMMON_DEVICE_FEATURE 0x04
+#define VPC_COMMON_GUEST_FEATURE_SELECT 0x08
+#define VPC_COMMON_GUEST_FEATURE 0x0c
+#define VPC_COMMON_QUEUE_SELECT 0x16
+#define VPC_COMMON_QUEUE_SIZE 0x18
+#define VPC_COMMON_QUEUE_ENABLE 0x1c
+#define VPC_COMMON_QUEUE_NOTIFY_OFF 0x1e
+#define VPC_COMMON_QUEUE_DESC_LO 0x20
+#define VPC_COMMON_QUEUE_AVL_LO 0x28
+#define VPC_COMMON_QUEUE_USED_LO 0x30
+
+static void pcie2x1l0_atu_cfg0(QTestState *qts, uint32_t target_bdf)
+{
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_VIEWPORT, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR1,
+                 DWC_PCIE_ATU_TYPE_CFG0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_BASE,
+                 RK3588_PCIE2X1L0_CFG_BASE);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_BASE, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LIMIT,
+                 RK3588_PCIE2X1L0_CFG_BASE + 0xfffff);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_TARGET,
+                 target_bdf);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_TARGET, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR2,
+                 DWC_PCIE_ATU_ENABLE);
+}
+
+static void pcie2x1l0_atu_mem(QTestState *qts, uint32_t win_base,
+                              uint32_t target)
+{
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_VIEWPORT, 1);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR1,
+                 DWC_PCIE_ATU_TYPE_MEM);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_BASE,
+                 win_base);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_BASE, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LIMIT,
+                 win_base + 0xfffff);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_TARGET,
+                 target);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_TARGET, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR2,
+                 DWC_PCIE_ATU_ENABLE);
+}
+
+/* Program an inbound (PCI -> system memory) ATU viewport for DMA. */
+static void pcie2x1l0_atu_inbound(QTestState *qts, uint32_t pci_base,
+                                  uint32_t pci_limit, uint32_t target)
+{
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_VIEWPORT,
+                 0x80000000U);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR1,
+                 DWC_PCIE_ATU_TYPE_MEM);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_BASE,
+                 pci_base);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_BASE, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LIMIT,
+                 pci_limit);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_LOWER_TARGET,
+                 target);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_UPPER_TARGET, 0);
+    qtest_writel(qts, RK3588_PCIE2X1L0_DBI_BASE + DWC_PCIE_ATU_CR2,
+                 DWC_PCIE_ATU_ENABLE);
+}
+
+static void pcie2x1l0_write_cfg(QTestState *qts, uint32_t offset,
+                                uint32_t value, unsigned size)
+{
+    if (size == 4) {
+        qtest_writel(qts, RK3588_PCIE2X1L0_CFG_BASE + offset, value);
+    } else if (size == 2) {
+        qtest_writew(qts, RK3588_PCIE2X1L0_CFG_BASE + offset, value);
+    } else {
+        qtest_writeb(qts, RK3588_PCIE2X1L0_CFG_BASE + offset, value);
+    }
+}
+
+static uint32_t pcie2x1l0_read_cfg(QTestState *qts, uint32_t offset,
+                                   unsigned size)
+{
+    if (size == 4) {
+        return qtest_readl(qts, RK3588_PCIE2X1L0_CFG_BASE + offset);
+    } else if (size == 2) {
+        return qtest_readw(qts, RK3588_PCIE2X1L0_CFG_BASE + offset);
+    }
+    return qtest_readb(qts, RK3588_PCIE2X1L0_CFG_BASE + offset);
+}
+
+/* BAR-relative access through the outbound MEM viewport. */
+static uint32_t win_addr(uint32_t bar_addr, uint32_t offset)
+{
+    return PCIE2X1L0_MEM_WIN + (bar_addr - PCIE2X1L0_BAR_BASE) + offset;
+}
+
+static void socket_send_all(int fd, const void *buf, size_t len)
+{
+    const uint8_t *p = buf;
+
+    while (len) {
+        ssize_t n = send(fd, p, len, 0);
+
+        g_assert_cmpint(n, >, 0);
+        p += n;
+        len -= n;
+    }
+}
+
+static ssize_t socket_recv_some(int fd, void *buf, size_t len)
+{
+    struct timeval tv = { .tv_sec = 30, .tv_usec = 0 };
+    fd_set rfds;
+
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) {
+        return -1;
+    }
+    return recv(fd, buf, len, 0);
+}
+
+static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
+{
+    static const uint8_t tx_frame[60] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56, /* dst: device MAC */
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, /* src */
+        0x08, 0x00,                         /* ethertype */
+        'R', 'O', 'C', 'K', '5', 'B', '+', ' ', 'n', 'e', 't', 't',
+        'e', 's', 't', ' ', 'f', 'r', 'a', 'm', 'e', ' ', '0', '0',
+        '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
+        '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
+    };
+    uint8_t tx_buf[VIRTIO_NET_HDR_SIZE + sizeof(tx_frame)];
+    uint8_t recv_buf[2048];
+    uint32_t bar_addr[6] = {
+        0x10000000, 0x10001000, 0x10002000, 0x10003000, 0x10004000, 0x10005000,
+    };
+    uint32_t common_cfg = 0, notify_cfg = 0, isr_cfg = 0;
+    uint32_t notify_mult = 4, notify_off = 0;
+    uint32_t msix_table_bar = 0, msix_table_off = 0;
+    uint32_t net_frame_len = sizeof(tx_frame);
+    uint32_t wire_len;
+    uint64_t used_ring, avail_ring, desc_ring;
+    QTestState *qts;
+    int sv[2];
+    int i, cap;
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, sv), ==, 0);
+
+    qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                      " -smp 1 -m 512M"
+                      " -netdev socket,fd=%d,id=hs0"
+                      " -device virtio-net-pci,bus=/pcie2x1l0/pcie/"
+                      "designware-pcie-root/dw-pcie,netdev=hs0",
+                      sv[1]);
+    close(sv[1]);
+
+    /* Put the VM in the running state so the virtio RX path is live. */
+    {
+        QDict *rsp = qtest_qmp(qts, "{ 'execute': 'cont' }");
+
+        qobject_unref(rsp);
+    }
+
+    /* Program the CFG0 ATU and configure the root bridge: secondary
+     * bus number and memory window for the endpoint BARs (a guest
+     * kernel does the same during enumeration).  PCI_COMMAND was
+     * cleared by the machine reset; re-enable MEM|MASTER. */
+    pcie2x1l0_atu_cfg0(qts, 0x20 << 24);
+    pcie2x1l0_write_cfg(qts, 0x19, 0x21, 1); /* PCI_SECONDARY_BUS */
+    pcie2x1l0_write_cfg(qts, 0x1a, 0x21, 1); /* PCI_SUBORDINATE_BUS */
+    pcie2x1l0_write_cfg(qts, 0x04, 0x6, 2);  /* PCI_COMMAND */
+    pcie2x1l0_write_cfg(qts, 0x20, 0x1000, 2); /* PCI_MEMORY_BASE */
+    pcie2x1l0_write_cfg(qts, 0x22, 0x100f, 2); /* PCI_MEMORY_LIMIT */
+
+    /* Read the endpoint config space through the ATU data window. */
+    pcie2x1l0_atu_cfg0(qts, PCIE2X1L0_NET_BDF);
+    g_assert_cmphex(pcie2x1l0_read_cfg(qts, 0x00, 2), ==, 0x1af4);
+    g_assert_cmphex(pcie2x1l0_read_cfg(qts, 0x02, 2), ==, 0x1041);
+    g_assert_cmphex(pcie2x1l0_read_cfg(qts, 0x0b, 1), ==, 0x02);
+
+    /* Walk the capabilities: virtio transport + MSI-X. */
+    cap = pcie2x1l0_read_cfg(qts, 0x34, 1);
+    while (cap) {
+        uint8_t id = pcie2x1l0_read_cfg(qts, cap, 1);
+
+        if (id == 0x09) { /* vendor: virtio */
+            uint8_t cfg_type = pcie2x1l0_read_cfg(qts, cap + 3, 1);
+            uint8_t bar = pcie2x1l0_read_cfg(qts, cap + 4, 1);
+            uint32_t offset = pcie2x1l0_read_cfg(qts, cap + 8, 4);
+
+            switch (cfg_type) {
+            case VIRTIO_PCI_CAP_COMMON_CFG:
+                common_cfg = bar_addr[bar] + offset;
+                break;
+            case VIRTIO_PCI_CAP_NOTIFY_CFG:
+                notify_cfg = bar_addr[bar] + offset;
+                notify_mult = pcie2x1l0_read_cfg(qts, cap + 16, 4);
+                break;
+            case VIRTIO_PCI_CAP_ISR_CFG:
+                isr_cfg = bar_addr[bar] + offset;
+                break;
+            default:
+                break;
+            }
+        } else if (id == 0x11) { /* MSI-X */
+            uint32_t table = pcie2x1l0_read_cfg(qts, cap + 4, 4);
+
+            msix_table_bar = table & 0x7;
+            msix_table_off = table & ~0x7;
+        }
+        cap = pcie2x1l0_read_cfg(qts, cap + 1, 1);
+    }
+    g_assert_cmpuint(common_cfg, !=, 0);
+    g_assert_cmpuint(notify_cfg, !=, 0);
+    g_assert_cmpuint(isr_cfg, !=, 0);
+    g_assert_cmpuint(msix_table_bar, !=, 0);
+
+    /* Assign BAR addresses (BAR4/5 is the 64-bit modern memory bar). */
+    for (i = 0; i < 6; i++) {
+        pcie2x1l0_write_cfg(qts, 0x10 + 4 * i, 0xffffffff, 4);
+        pcie2x1l0_write_cfg(qts, 0x10 + 4 * i, bar_addr[i], 4);
+    }
+    pcie2x1l0_write_cfg(qts, 0x10 + 4 * 5, 0, 4); /* 64-bit high dword */
+
+    /* Enable memory space + bus mastering so the BARs get mapped. */
+    pcie2x1l0_write_cfg(qts, 0x04, 0x6, 2);
+
+    /* Map the BARs through the outbound MEM viewport. */
+    pcie2x1l0_atu_mem(qts, PCIE2X1L0_MEM_WIN, PCIE2X1L0_BAR_BASE);
+
+    /* DMA (vrings + buffers) lives in guest RAM: map the PCI-side
+     * range to system memory through inbound ATU viewport 0. */
+    pcie2x1l0_atu_inbound(qts, NET_RING_BASE, NET_BUF_BASE + 0x3000 - 1,
+                          NET_RING_BASE);
+
+    /* ---- virtio driver: reset, features, DRIVER_OK ---- */
+    qtest_writeb(qts, win_addr(common_cfg, VPC_COMMON_DEVICE_STATUS), 0);
+    qtest_writeb(qts, win_addr(common_cfg, VPC_COMMON_DEVICE_STATUS), 0x3);
+    g_assert_cmphex(qtest_readb(qts, win_addr(common_cfg,
+                                              VPC_COMMON_DEVICE_STATUS)),
+                    ==, 0x3);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_DEVICE_FEATURE_SELECT), 0);
+    g_assert_cmphex(qtest_readl(qts, win_addr(common_cfg,
+                                              VPC_COMMON_DEVICE_FEATURE)),
+                    !=, 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_GUEST_FEATURE_SELECT), 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_GUEST_FEATURE), 0);
+    qtest_writeb(qts, win_addr(common_cfg, VPC_COMMON_DEVICE_STATUS), 0xb);
+    g_assert_cmphex(qtest_readb(qts, win_addr(common_cfg,
+                                              VPC_COMMON_DEVICE_STATUS)),
+                    ==, 0xb);
+    qtest_writeb(qts, win_addr(common_cfg, VPC_COMMON_DEVICE_STATUS), 0xf);
+
+    /* ---- RX queue 0 ---- */
+    desc_ring = NET_RING_BASE;
+    avail_ring = NET_RING_BASE + 0x1000;
+    used_ring = NET_RING_BASE + 0x2000;
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_SELECT), 0);
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_SIZE), 64);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_DESC_LO),
+                 desc_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_DESC_LO) + 4, 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_AVL_LO),
+                 avail_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_AVL_LO) + 4, 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_USED_LO),
+                 used_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_USED_LO) + 4, 0);
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_ENABLE), 1);
+
+    /* One RX buffer: desc 0 -> NET_BUF_BASE, 2048 bytes, WRITE. */
+    qtest_writeq(qts, desc_ring, NET_BUF_BASE);
+    qtest_writel(qts, desc_ring + 8, 2048);
+    qtest_writew(qts, desc_ring + 12, VRING_DESC_F_WRITE);
+    qtest_writew(qts, desc_ring + 14, 0);
+    qtest_writew(qts, avail_ring, 0);      /* flags */
+    qtest_writew(qts, avail_ring + 2, 1);  /* idx */
+    qtest_writew(qts, avail_ring + 4, 0);  /* ring[0] */
+
+    /* Kick queue 0. */
+    qtest_writel(qts, win_addr(notify_cfg, 0), 0);
+
+    /* Inject a frame from the host side. */
+    wire_len = GUINT32_TO_BE(net_frame_len);
+    socket_send_all(sv[0], &wire_len, sizeof(wire_len));
+    socket_send_all(sv[0], tx_frame, sizeof(tx_frame));
+
+    /* Wait for the used ring. */
+    for (i = 0; i < 30000 && qtest_readw(qts, used_ring + 2) == 0; i++) {
+        g_usleep(1000);
+    }
+    g_assert_cmpuint(qtest_readw(qts, used_ring + 2), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, used_ring + 4), ==, 0); /* id */
+    g_assert_cmpuint(qtest_readl(qts, used_ring + 8),
+                     ==, net_frame_len + VIRTIO_NET_HDR_SIZE);
+
+    /* The frame follows the virtio header in the RX buffer. */
+    for (i = 0; i < (int)net_frame_len; i++) {
+        g_assert_cmphex(qtest_readb(qts, NET_BUF_BASE + VIRTIO_NET_HDR_SIZE + i),
+                        ==, tx_frame[i]);
+    }
+
+    /* ---- TX queue 1 ---- */
+    desc_ring = NET_RING_BASE + 0x3000;
+    avail_ring = NET_RING_BASE + 0x4000;
+    used_ring = NET_RING_BASE + 0x5000;
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_SELECT), 1);
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_SIZE), 64);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_DESC_LO),
+                 desc_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_DESC_LO) + 4, 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_AVL_LO),
+                 avail_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_AVL_LO) + 4, 0);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_USED_LO),
+                 used_ring);
+    qtest_writel(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_USED_LO) + 4, 0);
+    qtest_writew(qts, win_addr(common_cfg, VPC_COMMON_QUEUE_ENABLE), 1);
+    notify_off = qtest_readw(qts, win_addr(common_cfg,
+                                           VPC_COMMON_QUEUE_NOTIFY_OFF));
+
+    /* TX buffer: virtio header + frame. */
+    memset(tx_buf, 0, sizeof(tx_buf));
+    memcpy(tx_buf + VIRTIO_NET_HDR_SIZE, tx_frame, sizeof(tx_frame));
+    for (i = 0; i < (int)sizeof(tx_buf); i += 4) {
+        qtest_writel(qts, NET_BUF_BASE + 0x1000 + i, ldl_he_p(&tx_buf[i]));
+    }
+    qtest_writeq(qts, desc_ring, NET_BUF_BASE + 0x1000);
+    qtest_writel(qts, desc_ring + 8, sizeof(tx_buf));
+    qtest_writew(qts, desc_ring + 12, 0);  /* flags: read-only */
+    qtest_writew(qts, desc_ring + 14, 0);
+    qtest_writew(qts, avail_ring, 0);
+    qtest_writew(qts, avail_ring + 2, 1);
+    qtest_writew(qts, avail_ring + 4, 0);
+
+    /* Kick queue 1 (notify offset from the common config). */
+    qtest_writel(qts, win_addr(notify_cfg, notify_off * notify_mult), 0);
+
+    /* The frame arrives on the host socket as [len][payload]. */
+    {
+        ssize_t n = socket_recv_some(sv[0], recv_buf, sizeof(recv_buf));
+
+        g_assert_cmpint(n, >, 0);
+        g_assert_cmpuint(GUINT32_FROM_BE(ldl_he_p(recv_buf)),
+                         ==, net_frame_len);
+        g_assert_cmpint(n, ==, 4 + (ssize_t)net_frame_len);
+        g_assert_cmpmem(recv_buf + 4, net_frame_len, tx_frame,
+                        sizeof(tx_frame));
+    }
+
+    /* The used ring for TX advances too. */
+    for (i = 0; i < 30000 && qtest_readw(qts, used_ring + 2) == 0; i++) {
+        g_usleep(1000);
+    }
+    g_assert_cmpuint(qtest_readw(qts, used_ring + 2), ==, 1);
+
+    /* MSI-X table is reachable and writable (msg addr + mask control). */
+    {
+        uint32_t t = win_addr(bar_addr[msix_table_bar], msix_table_off);
+
+        qtest_writel(qts, t, 0x12345678); /* vector 0 message address */
+        g_assert_cmphex(qtest_readl(qts, t), ==, 0x12345678);
+        qtest_writel(qts, t + 8, 1);      /* vector 0 control: masked */
+        g_assert_cmphex(qtest_readl(qts, t + 8) & 1, ==, 1);
+        qtest_writel(qts, t + 8, 0);
+        g_assert_cmphex(qtest_readl(qts, t + 8) & 1, ==, 0);
+    }
+
+    close(sv[0]);
+    qtest_quit(qts);
+}
+
+
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -943,6 +1336,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_crypto_sha256);
     qtest_add_func("/rock-5b-plus/sfc-flash",
                    test_rock_5b_plus_sfc_flash);
+    qtest_add_func("/rock-5b-plus/pcie2x1l0-virtio-net",
+                   test_rock_5b_plus_pcie2x1l0_virtio_net);
 
     return g_test_run();
 }

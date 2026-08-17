@@ -162,6 +162,13 @@ static void rockchip_pcie_host_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->dbi_tail);
 }
 
+void rockchip_pcie_host_set_link_up(DeviceState *dev, bool up)
+{
+    RockchipPCIEHost *s = ROCKCHIP_PCIE_HOST(dev);
+
+    s->link_up = up;
+}
+
 static const char *rockchip_pcie_host_root_bus_path(
     PCIHostState *host_bridge, PCIBus *rootbus)
 {

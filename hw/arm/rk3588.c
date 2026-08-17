@@ -205,6 +205,8 @@ struct RK3588MachineState {
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
     DeviceState *pcie3x4;
     DeviceState *pcie3x2;
+    DeviceState *pcie2x1l0;
+    DeviceState *pcie2x1l2;
     DeviceState *gmac0;
     DeviceState *gmac1;
     DeviceState *cru;
@@ -235,6 +237,8 @@ struct RK3588MachineState {
     bool zvm_ram;
     bool rknpu;
     bool zephyr_ram;
+    bool pcie_links_up;
+    bool kernel_started;
     RK3588BootROM bootrom_state;
 };
 
@@ -279,6 +283,12 @@ enum {
     RK3588_PCIE3X2_APB,
     RK3588_PCIE3X2_CFG,
     RK3588_PCIE3X2_DBI,
+    RK3588_PCIE2X1L0_APB,
+    RK3588_PCIE2X1L0_CFG,
+    RK3588_PCIE2X1L0_DBI,
+    RK3588_PCIE2X1L2_APB,
+    RK3588_PCIE2X1L2_CFG,
+    RK3588_PCIE2X1L2_DBI,
     RK3588_GMAC0,
     RK3588_GMAC1,
     RK3588_RKNN0_PC,
@@ -319,6 +329,13 @@ enum {
     RK3588_UART3,
     RK3588_TSADC_MMIO,
     RK3588_SARADC,
+    RK3588_COMBPHY0,
+    RK3588_COMBPHY1,
+    RK3588_COMBPHY2,
+    RK3588_PCIE30PHY,
+    RK3588_PIPE_PHY_GRF0,
+    RK3588_PIPE_PHY_GRF1,
+    RK3588_PIPE_PHY_GRF2,
     RK3588_SPI2,
     RK3588_DMAC1,
     RK3588_RNG_MMIO,
@@ -354,6 +371,12 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_PCIE3X2_APB] =  { 0xfe160000, 0x00010000 },
     [RK3588_PCIE3X2_CFG] =  { 0xf1000000, 0x00100000 },
     [RK3588_PCIE3X2_DBI] =  { 0xa40400000ULL, 0x00400000 },
+    [RK3588_PCIE2X1L0_APB] = { 0xfe170000, 0x00010000 },
+    [RK3588_PCIE2X1L0_CFG] = { 0xf2000000, 0x00100000 },
+    [RK3588_PCIE2X1L0_DBI] = { 0xa40800000ULL, 0x00400000 },
+    [RK3588_PCIE2X1L2_APB] = { 0xfe190000, 0x00010000 },
+    [RK3588_PCIE2X1L2_CFG] = { 0xf4000000, 0x00100000 },
+    [RK3588_PCIE2X1L2_DBI] = { 0xa41000000ULL, 0x00400000 },
     [RK3588_GMAC0] =        { 0xfe1b0000, 0x00010000 },
     [RK3588_GMAC1] =        { 0xfe1c0000, 0x00010000 },
     [RK3588_RKNN0_PC] =     { 0xfdab0000, ROCKCHIP_RKNN_WINDOW_SIZE },
@@ -408,6 +431,18 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_UART3] =        { 0xfeb60000, 0x00000100 },
     [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
     [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
+    /*
+     * Serial PHYs: naneng-combphy0/1/2 (PCIe2/USB3/SATA), the
+     * snps-pcie3 PHY, and the pipe-phy GRF syscons the drivers regmap.
+     * RAM-backed so the vendor phy drivers probe and power on cleanly.
+     */
+    [RK3588_COMBPHY0] =     { 0xfee00000, 0x00000100 },
+    [RK3588_COMBPHY1] =     { 0xfee10000, 0x00000100 },
+    [RK3588_COMBPHY2] =     { 0xfee20000, 0x00000100 },
+    [RK3588_PCIE30PHY] =    { 0xfee80000, 0x00020000 },
+    [RK3588_PIPE_PHY_GRF0] = { 0xfd5bc000, 0x00001000 },
+    [RK3588_PIPE_PHY_GRF1] = { 0xfd5c0000, 0x00001000 },
+    [RK3588_PIPE_PHY_GRF2] = { 0xfd5c4000, 0x00001000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
     [RK3588_DMAC1] =        { 0xfea10000, RK3588_PL330_MMIO_SIZE },
     [RK3588_RNG_MMIO] =     { 0xfe378000, RK3588_RNG_MMIO_SIZE },
@@ -440,6 +475,16 @@ enum {
     RK3588_PCIE3X4_MSG_SPI = 261,
     RK3588_PCIE3X4_PMC_SPI = 262,
     RK3588_PCIE3X4_SYS_SPI = 263,
+    RK3588_PCIE2X1L0_ERR_SPI = 239,
+    RK3588_PCIE2X1L0_LEGACY_SPI = 240,
+    RK3588_PCIE2X1L0_MSG_SPI = 241,
+    RK3588_PCIE2X1L0_PMC_SPI = 242,
+    RK3588_PCIE2X1L0_SYS_SPI = 243,
+    RK3588_PCIE2X1L2_ERR_SPI = 249,
+    RK3588_PCIE2X1L2_LEGACY_SPI = 250,
+    RK3588_PCIE2X1L2_MSG_SPI = 251,
+    RK3588_PCIE2X1L2_PMC_SPI = 252,
+    RK3588_PCIE2X1L2_SYS_SPI = 253,
     RK3588_GPIO0_SPI = 277,
     RK3588_UART2_SPI = 333,
     RK3588_UART3_SPI = 334,
@@ -995,12 +1040,56 @@ static const RK3588PCIEFDTConfig rk3588_pcie3x2_fdt = {
     .prefetch_lo = 0x40000000,
 };
 
+/*
+ * PCIe 2.0 x1 controllers.  ROCK 5B+ wires pcie2x1l0 to the RTL8125BG
+ * 2.5G NIC and pcie2x1l2 to the M.2 E-Key WiFi 6 module.  The reset IDs
+ * follow the vendor CRU header (SRST_PCIE2/4_POWER_UP, SRST_P_PCIE2/4).
+ */
+static const RK3588PCIEFDTConfig rk3588_pcie2x1l0_fdt = {
+    .node = "/pcie@fe170000",
+    .dbi_map = RK3588_PCIE2X1L0_DBI,
+    .apb_map = RK3588_PCIE2X1L0_APB,
+    .cfg_map = RK3588_PCIE2X1L0_CFG,
+    .sys_spi = RK3588_PCIE2X1L0_SYS_SPI,
+    .pmc_spi = RK3588_PCIE2X1L0_PMC_SPI,
+    .msg_spi = RK3588_PCIE2X1L0_MSG_SPI,
+    .legacy_spi = RK3588_PCIE2X1L0_LEGACY_SPI,
+    .err_spi = RK3588_PCIE2X1L0_ERR_SPI,
+    .power_up_reset = 0x20f,
+    .pipe_reset = 0x21e,
+    .domain = 2,
+    .bus_start = 0x20,
+    .requester_id = 0x2000,
+    .prefetch_hi = 0x9,
+    .prefetch_lo = 0x80000000,
+};
+
+static const RK3588PCIEFDTConfig rk3588_pcie2x1l2_fdt = {
+    .node = "/pcie@fe190000",
+    .dbi_map = RK3588_PCIE2X1L2_DBI,
+    .apb_map = RK3588_PCIE2X1L2_APB,
+    .cfg_map = RK3588_PCIE2X1L2_CFG,
+    .sys_spi = RK3588_PCIE2X1L2_SYS_SPI,
+    .pmc_spi = RK3588_PCIE2X1L2_PMC_SPI,
+    .msg_spi = RK3588_PCIE2X1L2_MSG_SPI,
+    .legacy_spi = RK3588_PCIE2X1L2_LEGACY_SPI,
+    .err_spi = RK3588_PCIE2X1L2_ERR_SPI,
+    .power_up_reset = 0x211,
+    .pipe_reset = 0x220,
+    .domain = 4,
+    .bus_start = 0x40,
+    .requester_id = 0x4000,
+    .prefetch_hi = 0x9,
+    .prefetch_lo = 0x80000000,
+};
+
 static void rk3588_fdt_add_pcie_node(void *fdt,
                                       const RK3588PCIEFDTConfig *config,
                                       unsigned int num_lanes,
+                                      unsigned int max_link_speed,
                                       uint32_t cru_phandle,
                                       uint32_t clk_phandle,
-                                      uint32_t its1_phandle)
+                                      uint32_t its_phandle)
 {
     const char *pcie = config->node;
     uint32_t io_base = rk3588_memmap[config->cfg_map].base +
@@ -1076,14 +1165,16 @@ static void rk3588_fdt_add_pcie_node(void *fdt,
     qemu_fdt_setprop_cells(fdt, pcie, "bus-range", config->bus_start,
                            config->bus_start + 0x0f);
     qemu_fdt_setprop_cell(fdt, pcie, "num-lanes", num_lanes);
-    qemu_fdt_setprop_cell(fdt, pcie, "max-link-speed", 3);
+    qemu_fdt_setprop_cell(fdt, pcie, "max-link-speed", max_link_speed);
     /*
-     * Each host owns a disjoint 0x1000 Requester ID range routed to ITS1.
-     * PCIe MSI writes then target the ITS1 GITS_TRANSLATER doorbell directly;
-     * the host bridge line IRQs above remain separate.
+     * Each host owns a disjoint 0x1000 Requester ID range routed to an
+     * ITS (pcie3x hosts use ITS1, pcie2x1 hosts use ITS0, matching the
+     * vendor device trees).  PCIe MSI writes then target the ITS
+     * GITS_TRANSLATER doorbell directly; the host bridge line IRQs
+     * above remain separate.
      */
     qemu_fdt_setprop_cells(fdt, pcie, "msi-map",
-                           config->requester_id, its1_phandle,
+                           config->requester_id, its_phandle,
                            config->requester_id, 0x1000);
     /*
      * Bus ranges - IO/MEM/prefetch. The 1 MiB CFG window is the reg
@@ -1108,16 +1199,26 @@ static void rk3588_fdt_add_pcie_node(void *fdt,
 static void rk3588_fdt_add_pcie_nodes(RK3588MachineState *s, void *fdt,
                                        uint32_t cru_phandle,
                                        uint32_t clk_phandle,
+                                       uint32_t its0_phandle,
                                        uint32_t its1_phandle)
 {
     rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie3x4_fdt,
-                             s->board->pcie3x4_num_lanes,
+                             s->board->pcie3x4_num_lanes, 3,
                              cru_phandle, clk_phandle, its1_phandle);
 
     if (s->board->pcie3x2_num_lanes) {
         rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie3x2_fdt,
-                                 s->board->pcie3x2_num_lanes,
+                                 s->board->pcie3x2_num_lanes, 3,
                                  cru_phandle, clk_phandle, its1_phandle);
+    }
+
+    if (s->board->pcie2x1_mask & BIT(0)) {
+        rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie2x1l0_fdt, 1, 2,
+                                 cru_phandle, clk_phandle, its0_phandle);
+    }
+    if (s->board->pcie2x1_mask & BIT(2)) {
+        rk3588_fdt_add_pcie_node(fdt, &rk3588_pcie2x1l2_fdt, 1, 2,
+                                 cru_phandle, clk_phandle, its0_phandle);
     }
 }
 
@@ -1439,7 +1540,7 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_gpio_nodes(fdt, clk_phandle);
     rk3588_fdt_add_gmac_nodes(s, fdt, clk_phandle, sys_grf_ph, php_grf_ph);
     rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
-                              its1_phandle);
+                              its0_phandle, its1_phandle);
     if (s->rknpu) {
         if (s->board->rknpu_fdt_topology == RK3588_RKNPU_FDT_AGGREGATE) {
             rk3588_fdt_add_rknpu_vendor_node(fdt, cru_phandle, clk_phandle);
@@ -1821,6 +1922,7 @@ static void rk3588_boot_state_reset(void *opaque)
     s->firmware_patch_done = false;
     s->firmware_handoff_done = false;
     s->firmware_atf_entered = false;
+    s->kernel_started = false;
     s->bootrom_state.spl_loaded = false;
     rk3588_schedule_firmware_patch(s);
 }
@@ -2901,6 +3003,68 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
     }
 }
 
+static void rk3588_create_pcie2x1(RK3588MachineState *s)
+{
+    static const int pcie2x1l0_spis[] = {
+        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE2X1L0_ERR_SPI,
+        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE2X1L0_LEGACY_SPI,
+        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE2X1L0_MSG_SPI,
+        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE2X1L0_PMC_SPI,
+        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE2X1L0_SYS_SPI,
+    };
+    static const int pcie2x1l2_spis[] = {
+        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE2X1L2_ERR_SPI,
+        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE2X1L2_LEGACY_SPI,
+        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE2X1L2_MSG_SPI,
+        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE2X1L2_PMC_SPI,
+        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE2X1L2_SYS_SPI,
+    };
+
+    bool firmware_path = !MACHINE(s)->kernel_filename;
+
+    if (s->board->pcie2x1_mask & BIT(0)) {
+        s->pcie2x1l0 = rk3588_create_pcie_host(
+            s, "pcie2x1l0", "pcie2x1l0",
+            rk3588_memmap[RK3588_PCIE2X1L0_DBI].base,
+            rk3588_memmap[RK3588_PCIE2X1L0_APB].base,
+            2, 0x20, firmware_path, pcie2x1l0_spis);
+    }
+    if (s->board->pcie2x1_mask & BIT(2)) {
+        s->pcie2x1l2 = rk3588_create_pcie_host(
+            s, "pcie2x1l2", "pcie2x1l2",
+            rk3588_memmap[RK3588_PCIE2X1L2_DBI].base,
+            rk3588_memmap[RK3588_PCIE2X1L2_APB].base,
+            4, 0x40, firmware_path, pcie2x1l2_spis);
+    }
+}
+
+/*
+ * Bring all modeled PCIe links up.  During the firmware path the hosts
+ * start with the links down so U-Boot's dw-pcie scan (which does not
+ * program the outbound iATU before touching the config window) skips
+ * them cleanly; the first kernel PSCI call flips the links up before the
+ * kernel's dw-rockchip probe runs.
+ */
+static void rk3588_pcie_set_links_up(RK3588MachineState *s)
+{
+    if (s->pcie_links_up) {
+        return;
+    }
+    if (s->pcie3x4) {
+        rockchip_pcie_host_set_link_up(s->pcie3x4, true);
+    }
+    if (s->pcie3x2) {
+        rockchip_pcie_host_set_link_up(s->pcie3x2, true);
+    }
+    if (s->pcie2x1l0) {
+        rockchip_pcie_host_set_link_up(s->pcie2x1l0, true);
+    }
+    if (s->pcie2x1l2) {
+        rockchip_pcie_host_set_link_up(s->pcie2x1l2, true);
+    }
+    s->pcie_links_up = true;
+}
+
 static void rk3588_create_pcie(RK3588MachineState *s)
 {
     static const int pcie3x4_spis[] = {
@@ -2918,18 +3082,26 @@ static void rk3588_create_pcie(RK3588MachineState *s)
         [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE3X2_SYS_SPI,
     };
 
+    /*
+     * During firmware boot the links start down so U-Boot skips the
+     * hosts without touching the unprogrammed config windows; the kernel
+     * sees the links up (see rk3588_pcie_set_links_up).
+     */
+    bool firmware_path = !MACHINE(s)->kernel_filename;
+
     s->pcie3x4 = rk3588_create_pcie_host(
         s, "pcie3x4", "pcie3x4",
         rk3588_memmap[RK3588_PCIE3X4_DBI].base,
         rk3588_memmap[RK3588_PCIE3X4_APB].base,
-        0, 0, s->board->pcie3x4_link_down, pcie3x4_spis);
+        0, 0, s->board->pcie3x4_link_down || firmware_path, pcie3x4_spis);
 
     if (s->board->pcie3x2_num_lanes) {
         s->pcie3x2 = rk3588_create_pcie_host(
             s, "pcie3x2", "pcie3x2",
             rk3588_memmap[RK3588_PCIE3X2_DBI].base,
             rk3588_memmap[RK3588_PCIE3X2_APB].base,
-            1, 0x10, s->board->pcie3x2_link_down, pcie3x2_spis);
+            1, 0x10, s->board->pcie3x2_link_down || firmware_path,
+            pcie3x2_spis);
     }
 }
 
@@ -3091,6 +3263,26 @@ static bool rk3588_smc_handler(ARMCPU *cpu)
         return true;
     }
 
+    /*
+     * First kernel PSCI probe: bring the PCIe links up now that U-Boot
+     * has handed off (U-Boot itself never issues PSCI_VERSION).
+     */
+    if ((uint32_t)fn == 0x84000000) { /* PSCI_VERSION */
+        rk3588_pcie_set_links_up(s);
+        s->kernel_started = true;
+        return false;
+    }
+
+    /*
+     * First kernel PSCI probe: bring the PCIe links up now that U-Boot
+     * has handed off (U-Boot itself never issues PSCI_VERSION).
+     */
+    if ((uint32_t)fn == 0x84000000) { /* PSCI_VERSION */
+        rk3588_pcie_set_links_up(s);
+        s->kernel_started = true;
+        return false;
+    }
+
     if ((uint32_t)fn != RK3588_SCMI_SMC_ID) {
         return false;
     }
@@ -3203,6 +3395,14 @@ static void rk3588_create_syscon_devices(RK3588MachineState *s)
     rk3588_create_syscon(s, "bus-ioc", RK3588_BUS_IOC);
     rk3588_create_syscon(s, "firewall-ddr", RK3588_FIREWALL_DDR);
     rk3588_create_syscon(s, "firewall-sysmem", RK3588_FIREWALL_SYSMEM);
+
+    rk3588_create_syscon(s, "combphy0", RK3588_COMBPHY0);
+    rk3588_create_syscon(s, "combphy1", RK3588_COMBPHY1);
+    rk3588_create_syscon(s, "combphy2", RK3588_COMBPHY2);
+    rk3588_create_syscon(s, "pcie30phy", RK3588_PCIE30PHY);
+    rk3588_create_syscon(s, "pipe-phy-grf0", RK3588_PIPE_PHY_GRF0);
+    rk3588_create_syscon(s, "pipe-phy-grf1", RK3588_PIPE_PHY_GRF1);
+    rk3588_create_syscon(s, "pipe-phy-grf2", RK3588_PIPE_PHY_GRF2);
 }
 
 static void rk3588_create_crypto(RK3588MachineState *s)
@@ -3366,6 +3566,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_gmac(s);
     rk3588_create_rknpu(s);
     rk3588_create_pcie(s);
+    rk3588_create_pcie2x1(s);
 
     s->bootinfo = (struct arm_boot_info) {
         .loader_start = ram_base,
@@ -3512,6 +3713,7 @@ void rk3588_machine_instance_configure(Object *obj,
     assert(board->pcie3x2_num_lanes == 0 ||
            board->pcie3x2_num_lanes == 1 ||
            board->pcie3x2_num_lanes == 2);
+    assert(!(board->pcie2x1_mask & ~(BIT(0) | BIT(2))));
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
     s->rknpu = false;
