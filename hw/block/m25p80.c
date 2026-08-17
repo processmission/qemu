@@ -1094,6 +1094,10 @@ static void decode_fast_read_cmd(Flash *s)
     case MAN_WINBOND:
         s->needed_bytes += 1;
         break;
+    case MAN_XTX:
+        /* XT25F128 0x0b/0x3b/0x6b reads use eight dummy clocks. */
+        s->needed_bytes += 1;
+        break;
     case MAN_NUMONYX:
         s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
@@ -1131,6 +1135,10 @@ static void decode_dio_read_cmd(Flash *s)
     switch (get_man(s)) {
     case MAN_WINBOND:
         s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
+        break;
+    case MAN_XTX:
+        /* XT25F128 0xbb Dual I/O Read: 3 dummy clocks at dual width. */
+        s->needed_bytes += 1;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;
@@ -1178,6 +1186,13 @@ static void decode_qio_read_cmd(Flash *s)
         break;
     case MAN_MACRONIX:
         s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 4);
+        break;
+    case MAN_XTX:
+        /*
+         * XT25F128 0xeb Quad I/O Read: 2 mode plus 4 wait clocks at
+         * quad width, matching the SFDP read settings.
+         */
+        s->needed_bytes += 3;
         break;
     case MAN_ISSI:
         /*
