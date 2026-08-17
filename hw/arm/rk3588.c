@@ -50,6 +50,7 @@
 #include "hw/ssi/rk806.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/ssi/rockchip_spi.h"
+#include "hw/misc/rk3588_pl330.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/timer/rockchip_stimer.h"
 #include "hw/usb/rk3588_dwc3_udc.h"
@@ -200,6 +201,7 @@ struct RK3588MachineState {
     DeviceState *sdmmc;     /* dw_mmc - SD card controller */
     DeviceState *sfc;       /* rockchip-sfc - SPI NOR flash controller */
     DeviceState *spi2;      /* rockchip-spi - SPI2 (RK806 PMIC) */
+    DeviceState *dmac1;     /* rk3588-pl330 - DMAC1 stub */
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
     DeviceState *pcie3x4;
     DeviceState *pcie3x2;
@@ -318,6 +320,7 @@ enum {
     RK3588_TSADC_MMIO,
     RK3588_SARADC,
     RK3588_SPI2,
+    RK3588_DMAC1,
     RK3588_RNG_MMIO,
 };
 
@@ -406,6 +409,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
     [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
+    [RK3588_DMAC1] =        { 0xfea10000, RK3588_PL330_MMIO_SIZE },
     [RK3588_RNG_MMIO] =     { 0xfe378000, RK3588_RNG_MMIO_SIZE },
 };
 
@@ -441,6 +445,7 @@ enum {
     RK3588_UART3_SPI = 334,
     RK3588_TSADC_SPI = 397,
     RK3588_SPI2_SPI = 328,
+    RK3588_DMAC1_SPI = 86,
     RK3588_RNG_SPI = 400,
 };
 
@@ -3271,6 +3276,25 @@ static void rk3588_create_rng(RK3588MachineState *s)
     object_unref(OBJECT(dev));
 }
 
+/*
+ * DMAC1 stub: lets the kernel's pl330 driver bind and register the DT
+ * DMA provider so spi-rockchip's dma_request_chan() does not defer.
+ */
+static void rk3588_create_dmac1(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_PL330);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "dmac1", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_DMAC1].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_DMAC1_SPI));
+    sysbus_connect_irq(sbd, 1,
+                       qdev_get_gpio_in(s->gic, RK3588_DMAC1_SPI + 1));
+    s->dmac1 = dev;
+    object_unref(OBJECT(dev));
+}
+
 static void rk3588_create_secure_otp(RK3588MachineState *s)
 {
     const RK3588FirmwareProfile *profile = s->board->firmware_profile;
@@ -3336,6 +3360,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_sdmmc(s);
     rk3588_create_sfc(s);
     rk3588_create_gpio(s);
+    rk3588_create_dmac1(s);
     rk3588_create_spi2(s);
     rk3588_create_rng(s);
     rk3588_create_gmac(s);
