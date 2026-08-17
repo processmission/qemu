@@ -236,6 +236,7 @@ config RK3588
     select ROCKCHIP_SFC
     select ROCKCHIP_SPI
     select RK806
+    select RK3588_PL330
     select RK3588_RNG
 
 config RK3588_EVB
