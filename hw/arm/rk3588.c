@@ -31,6 +31,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_iommu.h"
+#include "hw/misc/rk3588_tsadc.h"
 #include "hw/misc/rk3588_rknpu.h"
 #include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_atf_ddr.h"
@@ -210,6 +211,7 @@ struct RK3588MachineState {
     DeviceState *gpio[5];
     DeviceState *crypto;
     DeviceState *secure_otp;
+    DeviceState *tsadc;
     DeviceState *atf_ddr;
     RK3588DDRState *ddr;
     RK3588DWC3UDCState *dwc3_udc;
@@ -312,6 +314,8 @@ enum {
     RK3588_BROM,
     RK3588_UART2,
     RK3588_UART3,
+    RK3588_TSADC_MMIO,
+    RK3588_SARADC,
     RK3588_SPI2,
 };
 
@@ -397,6 +401,8 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
     [RK3588_UART2] =        { 0xfeb50000, 0x00000100 },
     [RK3588_UART3] =        { 0xfeb60000, 0x00000100 },
+    [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
+    [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
 };
 
@@ -430,6 +436,7 @@ enum {
     RK3588_GPIO0_SPI = 277,
     RK3588_UART2_SPI = 333,
     RK3588_UART3_SPI = 334,
+    RK3588_TSADC_SPI = 397,
     RK3588_SPI2_SPI = 328,
 };
 
@@ -3206,6 +3213,24 @@ static void rk3588_create_crypto(RK3588MachineState *s)
 }
 
 /*
+ * TSADC thermal sensor: fixed room-temperature ADC codes so the Linux
+ * thermal framework boots normally (the critical-trip shutdown path is
+ * only reachable when the sensor reports an out-of-range code).
+ */
+static void rk3588_create_tsadc(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_TSADC);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "tsadc", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_TSADC_MMIO].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_TSADC_SPI));
+    s->tsadc = dev;
+    object_unref(OBJECT(dev));
+}
+
+/*
  * SPI2 with the RK806 PMIC on chip-select 0.  The PMIC supplies the
  * board regulators (vcc_3v3_s3 for the SD controller, etc.); the model
  * exposes them enabled at their nominal voltages so the MMC and PCIe
@@ -3288,6 +3313,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_scmi(s);
     rk3588_create_secure_otp(s);
     rk3588_create_crypto(s);
+    rk3588_create_tsadc(s);
     rk3588_create_uart(s);
     rk3588_create_sdhci(s);
     rk3588_create_sdmmc(s);
