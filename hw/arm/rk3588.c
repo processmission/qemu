@@ -3842,7 +3842,7 @@ static void rk3588_create_i2c6(RK3588MachineState *s)
     sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_I2C6_SPI));
 
     bus = I2C_BUS(qdev_get_child_bus(dev, "i2c-bus"));
-    rtc = i2c_slave_create_simple(bus, TYPE_HYM8563, 0x51);
+    rtc = DEVICE(i2c_slave_create_simple(bus, TYPE_HYM8563, 0x51));
     /*
      * The RTC INT output is open-drain active-low, wired to GPIO0
      * bank B pin 0 (RK_PB0).  The driver keeps the alarm and timer
