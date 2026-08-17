@@ -335,29 +335,22 @@ static uint64_t rockchip_sfc_read(void *opaque, hwaddr offset, unsigned size)
         break;
     case ROCKCHIP_SFC_FSR:
     {
-        uint32_t tx_free, rx_level;
-        uint32_t tx_words = (s->tx_len + 3) / 4;
+        uint32_t rx_level;
         uint32_t rx_words = (s->rx_len - s->rx_pos + 3) / 4;
 
         /*
          * TX data drains synchronously: every SFC_DATA write hands its
          * words straight to the flash, so the FIFO is always empty when
          * the guest reads FSR and the PIO write loop can keep filling it.
+         * tx_len is only the cumulative operation length, so it must not
+         * feed the occupancy report.
          */
         /* The level fields are five bits wide: 31 is the full value. */
-        tx_free = tx_words >= ROCKCHIP_SFC_FIFO_DEPTH ?
-            0 : MIN(ROCKCHIP_SFC_FIFO_DEPTH - tx_words,
-                    ROCKCHIP_SFC_FIFO_DEPTH - 1);
         rx_level = MIN(rx_words, ROCKCHIP_SFC_FIFO_DEPTH - 1);
 
-        value = (tx_free << ROCKCHIP_SFC_FSR_TXLV_SHIFT) |
+        value = (ROCKCHIP_SFC_FIFO_DEPTH << ROCKCHIP_SFC_FSR_TXLV_SHIFT) |
                 (rx_level << ROCKCHIP_SFC_FSR_RXLV_SHIFT);
-        if (tx_words == 0) {
-            value |= ROCKCHIP_SFC_FSR_TX_IS_EMPTY;
-        }
-        if (tx_words >= ROCKCHIP_SFC_FIFO_DEPTH) {
-            value |= ROCKCHIP_SFC_FSR_TX_IS_FULL;
-        }
+        value |= ROCKCHIP_SFC_FSR_TX_IS_EMPTY;
         if (s->rx_pos >= s->rx_len) {
             value |= ROCKCHIP_SFC_FSR_RX_IS_EMPTY;
         }
