@@ -52,6 +52,7 @@ typedef struct RK3588BoardConfig {
     unsigned int pcie2x1_mask; /* BIT(0) = pcie2x1l0, BIT(2) = pcie2x1l2 */
     bool swap_gmac_aliases;
     bool default_zvm_ram;
+    uint64_t default_ram_size;
     RK3588RknpuFdtTopology rknpu_fdt_topology;
     const RK3588FirmwareProfile *firmware_profile;
 } RK3588BoardConfig;

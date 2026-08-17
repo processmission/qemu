@@ -8,6 +8,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
+#include "qemu/units.h"
 #include "rk3588-internal.h"
 
 #define TYPE_ROCK_5B_PLUS_MACHINE MACHINE_TYPE_NAME("rock-5b-plus")
@@ -34,6 +35,7 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .fdt_compatible = rock_5b_plus_compatible,
     .fdt_compatible_count = ARRAY_SIZE(rock_5b_plus_compatible),
     .firmware_sd_unit = 0,
+    .default_ram_size = 8 * GiB,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,
     .dram_type = RK3588_DRAM_TYPE_LPDDR5,
     .gmac_mask = 0,

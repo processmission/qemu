@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QEMU="${QEMU_BIN:-$ROOT/build/rock5b-plus/qemu-system-aarch64}"
 IMAGE="${IMAGE:-$ROOT/build/rock5b-plus/rock-5b-plus_bookworm_kde_r7.output_512.img}"
 SMP=1
-MEM=2G
+MEM=8G
 NET=0
 
 while [ $# -gt 0 ]; do

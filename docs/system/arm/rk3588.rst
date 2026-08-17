@@ -237,7 +237,7 @@ the Radxa RK3588 SDK.  No extraction or repackaging is required:
        -accel tcg \
        -machine rock-5b-plus \
        -smp 1 \
-       -m 2G \
+       -m 8G \
        -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_b2.output.img,format=raw \
        -snapshot \
        -serial mon:stdio \
@@ -275,7 +275,7 @@ RX/TX over a socket ``-netdev``.  In the real Linux guest, attaching a NIC on
 the same bus works end to end::
 
    $ qemu-system-aarch64 -machine rock-5b-plus,firmware-bootargs='cpuidle.off=1 systemd.unit=multi-user.target' \
-       -smp 1 -m 2G -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_r7.output_512.img,format=raw -snapshot \
+       -smp 1 -m 8G -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_r7.output_512.img,format=raw -snapshot \
        -netdev user,id=n0 -device e1000e,bus=/pcie2x1l0/pcie/designware-pcie-root/dw-pcie,netdev=n0 \
        -serial mon:stdio -display none
 

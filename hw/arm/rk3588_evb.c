@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
 #include "qemu/module.h"
+#include "qemu/units.h"
 #include "rk3588-internal.h"
 
 #define TYPE_RK3588_EVB_MACHINE MACHINE_TYPE_NAME("rk3588-evb")
@@ -27,6 +28,7 @@ static const RK3588BoardConfig rk3588_evb_board = {
     .fdt_compatible = rk3588_evb_compatible,
     .fdt_compatible_count = ARRAY_SIZE(rk3588_evb_compatible),
     .firmware_sd_unit = 0,
+    .default_ram_size = 2 * GiB,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,
     .dram_type = RK3588_DRAM_TYPE_LPDDR4X,
     .gmac_mask = BIT(0) | BIT(1),

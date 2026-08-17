@@ -87,6 +87,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_GTIMER_HZ 24000000
 #define RK3588_UART_BAUDBASE 1500000
 #define RK3588_DEFAULT_RAM_BASE 0x00200000ULL
+/*
+ * The low RAM window ends where the first PCIe config window starts
+ * (0xf0000000); RAM above it lives in the high window at 4 GiB.
+ */
+#define RK3588_LOW_RAM_END 0xf0000000ULL
+#define RK3588_HIGH_RAM_BASE 0x100000000ULL
+#define RK3588_MAX_RAM_SIZE (16 * GiB)
 #define RK3588_ZEPHYR_RAM_BASE 0x10000000ULL
 #define RK3588_SRAM_SIZE MiB
 #define RK3588_IRAM_SIZE 0x00ff0000
@@ -285,6 +292,8 @@ struct RK3588MachineState {
     MemoryRegion sram;
     MemoryRegion iram;
     MemoryRegion atags;
+    MemoryRegion ram_low;
+    MemoryRegion ram_high;
     MemoryRegion ramoops;
     MemoryRegion zvm_low_ram;
     MemoryRegion zvm_high_ram;
@@ -1732,17 +1741,33 @@ static void rk3588_write_atags(RK3588MachineState *s)
     uint8_t *ddr_tag = base + 8 + 12;
     uint32_t core_size_words = (8 + 12) / sizeof(uint32_t);
     uint32_t ddr_size_words = (8 + 184) / sizeof(uint32_t);
-    uint64_t ddr_size = rk3588_ram_base(s) + ms->ram_size;
+    hwaddr ram_base = rk3588_ram_base(s);
+    hwaddr low_ram_size = RK3588_LOW_RAM_END - ram_base;
+    uint32_t bank_count = ms->ram_size > low_ram_size ? 2 : 1;
+    uint64_t low_size = ram_base + MIN(ms->ram_size, low_ram_size);
+    uint64_t high_size = ms->ram_size > low_ram_size ?
+                         ms->ram_size - low_ram_size : 0;
 
     memset(base, 0, RK3588_ATAGS_SIZE);
 
+    /*
+     * DDR ATAG banks: the low window runs from 0 to the end of the
+     * first 4 GiB window (the base address is folded into the size, as
+     * the firmware expects); RAM above it is described as a second bank
+     * at 4 GiB.  The firmware (TPL) hands these banks to U-Boot, which
+     * adds one bank per entry.
+     */
     if (!profile || !profile->atags_core) {
         stl_le_p(base, ddr_size_words);
         stl_le_p(base + 4, 0x54410052);   /* ATAG_DDR_MEM */
-        stl_le_p(base + 8, 1);            /* one DRAM bank */
+        stl_le_p(base + 8, bank_count);
         stl_le_p(base + 12, 0);           /* tag version */
         stq_le_p(base + 16, 0);           /* bank[0] start */
-        stq_le_p(base + 24, ddr_size);     /* bank[0] size */
+        stq_le_p(base + 24, low_size);     /* bank[0] size */
+        if (bank_count == 2) {
+            stq_le_p(base + 32, RK3588_HIGH_RAM_BASE);
+            stq_le_p(base + 40, high_size);
+        }
         stl_le_p(base + ddr_size_words * sizeof(uint32_t), 0);
         return;
     }
@@ -1752,10 +1777,14 @@ static void rk3588_write_atags(RK3588MachineState *s)
 
     stl_le_p(ddr_tag, ddr_size_words);
     stl_le_p(ddr_tag + 4, 0x54410052);     /* ATAG_DDR_MEM */
-    stl_le_p(ddr_tag + 8, 1);              /* one DRAM bank */
+    stl_le_p(ddr_tag + 8, bank_count);
     stl_le_p(ddr_tag + 12, 0);             /* tag version */
     stq_le_p(ddr_tag + 16, 0);             /* bank[0] start */
-    stq_le_p(ddr_tag + 24, ddr_size);       /* bank[0] size */
+    stq_le_p(ddr_tag + 24, low_size);       /* bank[0] size */
+    if (bank_count == 2) {
+        stq_le_p(ddr_tag + 32, RK3588_HIGH_RAM_BASE);
+        stq_le_p(ddr_tag + 40, high_size);
+    }
     stl_le_p(ddr_tag + ddr_size_words * sizeof(uint32_t), 0);
 }
 
@@ -3909,8 +3938,9 @@ static void rk3588_init(MachineState *machine)
 {
     RK3588MachineState *s = RK3588_MACHINE(machine);
     const RK3588BoardConfig *board = s->board;
+    MemoryRegion *sysmem = get_system_memory();
     hwaddr ram_base = rk3588_ram_base(s);
-    hwaddr max_ram_size = rk3588_memmap[RK3588_GIC_DIST].base - ram_base;
+    hwaddr low_ram_size = RK3588_LOW_RAM_END - ram_base;
 
     if (machine->smp.cpus > RK3588_MAX_CPUS ||
         machine->smp.max_cpus > RK3588_MAX_CPUS) {
@@ -3919,9 +3949,23 @@ static void rk3588_init(MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
-    if (machine->ram_size > max_ram_size) {
-        g_autofree char *sz = size_to_str(max_ram_size);
+    if (machine->ram_size > RK3588_MAX_RAM_SIZE) {
+        g_autofree char *sz = size_to_str(RK3588_MAX_RAM_SIZE);
         error_report("%s: RAM size must not exceed %s",
+                     board->machine_name, sz);
+        exit(EXIT_FAILURE);
+    }
+    /*
+     * The first 4 GiB window is shared with the peripheral MMIO, so
+     * RAM above the low window is mapped in the high window starting
+     * at 4 GiB (as on real RK3588).  The generic -kernel loader can
+     * only describe a single memory bank, so direct kernel boots stay
+     * within the low window; the firmware path describes both banks
+     * through the DDR ATAGS.
+     */
+    if (machine->kernel_filename && machine->ram_size > low_ram_size) {
+        g_autofree char *sz = size_to_str(low_ram_size);
+        error_report("%s: -kernel boot supports at most %s of RAM",
                      board->machine_name, sz);
         exit(EXIT_FAILURE);
     }
@@ -3930,9 +3974,16 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_low_memory(s);
     rk3588_create_atf_ddr(s);
     rk3588_create_firmware_mmio(s);
-    memory_region_add_subregion(get_system_memory(),
-                                ram_base,
-                                machine->ram);
+    memory_region_init_alias(&s->ram_low, OBJECT(s), "rk3588.ram-low",
+                             machine->ram, 0, low_ram_size);
+    memory_region_add_subregion(sysmem, ram_base, &s->ram_low);
+    if (machine->ram_size > low_ram_size) {
+        memory_region_init_alias(&s->ram_high, OBJECT(s), "rk3588.ram-high",
+                                 machine->ram, low_ram_size,
+                                 machine->ram_size - low_ram_size);
+        memory_region_add_subregion(sysmem, RK3588_HIGH_RAM_BASE,
+                                    &s->ram_high);
+    }
     rk3588_create_zvm_ram(s);
 
     rk3588_create_gic(s);
@@ -4136,7 +4187,8 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     mc->reset = rk3588_machine_reset;
     mc->max_cpus = RK3588_MAX_CPUS;
     mc->default_cpus = RK3588_MAX_CPUS;
-    mc->default_ram_size = 2 * GiB;
+    mc->default_ram_size = board->default_ram_size ?
+                        board->default_ram_size : 2 * GiB;
     mc->default_ram_id = board->ram_id;
     mc->possible_cpu_arch_ids = rk3588_possible_cpu_arch_ids;
     mc->cpu_index_to_instance_props = rk3588_cpu_index_to_props;
