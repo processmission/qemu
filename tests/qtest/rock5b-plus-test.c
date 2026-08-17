@@ -797,13 +797,13 @@ static void test_rock_5b_plus_sfc_flash(void)
     qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_CTRL, 1);
     qtest_writel(qts, RK3588_SFC_BASE + SFC_ICLR, 0xffffffff);
 
-    /* JEDEC ID through the PIO FIFO: XT25F128 = 40 18 18. */
+    /* JEDEC ID through the PIO FIFO: XT25F128B = 0b 40 18. */
     qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 3);
     qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD, SFC_OP_JEDEC_ID);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_FSR) &
                     SFC_FSR_RXLV_MASK, !=, 0);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_DATA) &
-                    0xffffff, ==, 0x181840);
+                    0xffffff, ==, 0x18400b);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_SR), ==, 0);
 
     /* PIO read of the flash contents at 0x100. */
@@ -817,6 +817,32 @@ static void test_rock_5b_plus_sfc_flash(void)
                     ((uint32_t)sfc_pattern_byte(0x102) << 16) |
                     ((uint32_t)sfc_pattern_byte(0x103) << 24));
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_SR), ==, 0);
+
+    /* SFDP read (0x5a, 3-byte address, 1 dummy byte). */
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 8);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD,
+                 0x5a | SFC_CMD_ADDR_24 | (8u << 8));
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_ADDR, 0);
+    g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_DATA),
+                    ==, 0x50444653);  /* "SFDP" */
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_SR, 0);
+
+    /* Status register write/read-back (spi-nor quad-enable path). */
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 0);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD, SFC_OP_WREN);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 2);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD,
+                 0x01 | SFC_CMD_DIR_WR);  /* WRSR, write direction */
+    /* sr1 = 0x00, sr2 = QE bit 1 (0x02): little-endian word. */
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_DATA, 0x00000200);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 1);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD, 0x05);  /* RDSR */
+    g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_DATA) & 0xff,
+                    ==, 0x00);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 1);
+    qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD, 0x35);  /* RDSR2 */
+    g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_DATA) & 0xff,
+                    ==, 0x02);
 
     /* DMA read of 4 bytes from 0x300 into RAM. */
     qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 4);
