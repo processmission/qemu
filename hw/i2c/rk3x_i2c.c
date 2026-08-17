@@ -112,13 +112,22 @@ struct Rk3xI2CState {
     uint8_t txbuf[RK3X_I2C_BUFFER_SIZE];
     uint8_t rxbuf[RK3X_I2C_BUFFER_SIZE];
 
-    Rk3xI2CStateMode state;
+    uint8_t state;
     bool addr_sent;
+    bool xfer_active;
 };
 
 static void rk3x_i2c_update_irq(Rk3xI2CState *s)
 {
     qemu_set_irq(s->irq, (s->ipd & s->ien) != 0);
+}
+
+static void rk3x_i2c_end_transfer(Rk3xI2CState *s)
+{
+    if (s->xfer_active) {
+        i2c_end_transfer(s->bus);
+        s->xfer_active = false;
+    }
 }
 
 static void rk3x_i2c_post_interrupt(Rk3xI2CState *s, uint32_t bits)
@@ -130,28 +139,46 @@ static void rk3x_i2c_post_interrupt(Rk3xI2CState *s, uint32_t bits)
 static void rk3x_i2c_transfer_tx(Rk3xI2CState *s)
 {
     uint8_t addr7;
-    unsigned int n, i;
+    unsigned int n, i, skip;
     bool nak = false;
 
-    n = s->mtxcnt;
+    /* The TX FIFO holds at most 32 bytes (including the address byte). */
+    n = MIN(s->mtxcnt, RK3X_I2C_BUFFER_SIZE);
     if (n == 0) {
         return;
     }
 
-    addr7 = s->txbuf[0] >> 1;
-    if (i2c_start_transfer(s->bus, addr7, false)) {
-        nak = true;
+    /*
+     * The driver refills the FIFO in chunks and writes MTXCNT again for
+     * each one, so keep the bus transaction open until software STOP or
+     * hardware auto-stop: only the first chunk carries the address byte.
+     */
+    if (!s->xfer_active) {
+        addr7 = s->txbuf[0] >> 1;
+        if (i2c_start_transfer(s->bus, addr7, false)) {
+            nak = true;
+        } else {
+            s->xfer_active = true;
+        }
+        skip = 1;
     } else {
-        for (i = 1; i < n; i++) {
+        skip = 0;
+    }
+
+    if (!nak) {
+        for (i = skip; i < n; i++) {
             if (i2c_send(s->bus, s->txbuf[i])) {
                 nak = true;
                 break;
             }
         }
-        i2c_end_transfer(s->bus);
     }
     s->fcnt = n;
 
+    if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
+        i2c_end_transfer(s->bus);
+        s->xfer_active = false;
+    }
     if (nak) {
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
                                ((s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP) ?
@@ -169,7 +196,8 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
     unsigned int n, i;
     bool nak = false;
 
-    n = s->mrxcnt;
+    /* The RX FIFO holds at most 32 bytes. */
+    n = MIN(s->mrxcnt, RK3X_I2C_BUFFER_SIZE);
     if (n == 0) {
         return;
     }
@@ -235,6 +263,7 @@ static void rk3x_i2c_write_con(Rk3xI2CState *s, uint32_t val)
         /* Controller disabled. */
         s->state = RK3X_I2C_STATE_IDLE;
         s->addr_sent = false;
+        rk3x_i2c_end_transfer(s);
     } else if (s->con & RK3X_I2C_CON_START) {
         /*
          * START pulse: arm a transfer; it runs once the byte count
@@ -246,10 +275,12 @@ static void rk3x_i2c_write_con(Rk3xI2CState *s, uint32_t val)
             s->state = RK3X_I2C_STATE_RX;
         }
         s->addr_sent = false;
+        rk3x_i2c_end_transfer(s);
     } else if ((s->con & RK3X_I2C_CON_STOP) &&
                s->state != RK3X_I2C_STATE_IDLE) {
         /* Software-generated STOP after a data interrupt. */
         s->state = RK3X_I2C_STATE_IDLE;
+        rk3x_i2c_end_transfer(s);
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
     }
 }
@@ -406,6 +437,7 @@ static void rk3x_i2c_reset(DeviceState *dev)
     memset(s->rxbuf, 0, sizeof(s->rxbuf));
     s->state = RK3X_I2C_STATE_IDLE;
     s->addr_sent = false;
+    s->xfer_active = false;
     rk3x_i2c_update_irq(s);
 }
 
@@ -420,10 +452,20 @@ static void rk3x_i2c_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
 }
 
+static int rk3x_i2c_post_load(void *opaque, int version_id)
+{
+    Rk3xI2CState *s = opaque;
+
+    /* Reassert the IRQ if pending bits are still enabled after migration. */
+    rk3x_i2c_update_irq(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_rk3x_i2c = {
     .name = "rk3x-i2c",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
+    .post_load = rk3x_i2c_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(con, Rk3xI2CState),
         VMSTATE_UINT32(clkdiv, Rk3xI2CState),
@@ -438,6 +480,9 @@ static const VMStateDescription vmstate_rk3x_i2c = {
         VMSTATE_UINT32(con1, Rk3xI2CState),
         VMSTATE_UINT8_ARRAY(txbuf, Rk3xI2CState, RK3X_I2C_BUFFER_SIZE),
         VMSTATE_UINT8_ARRAY(rxbuf, Rk3xI2CState, RK3X_I2C_BUFFER_SIZE),
+        VMSTATE_UINT8_V(state, Rk3xI2CState, 2),
+        VMSTATE_BOOL_V(addr_sent, Rk3xI2CState, 2),
+        VMSTATE_BOOL_V(xfer_active, Rk3xI2CState, 2),
         VMSTATE_END_OF_LIST()
     }
 };
