@@ -33,6 +33,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
@@ -177,6 +178,23 @@ static const char *rockchip_pcie_host_root_bus_path(
     return s->root_bus_path;
 }
 
+/*
+ * The firmware path starts with the links down and the kernel raises them
+ * via PSCI; carry the dynamic link state across migration so the
+ * destination keeps reporting the same LTSSM status.
+ */
+static const VMStateDescription vmstate_rockchip_pcie_host = {
+    .name = "rockchip-pcie-host",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_STRUCT(parent_obj, RockchipPCIEHost, 1,
+                       vmstate_designware_pcie_host, DesignwarePCIEHost),
+        VMSTATE_BOOL(link_up, RockchipPCIEHost),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static void rockchip_pcie_host_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -186,6 +204,7 @@ static void rockchip_pcie_host_class_init(ObjectClass *klass, const void *data)
     device_class_set_parent_realize(dc, rockchip_pcie_host_realize,
                                     &rkpc->parent_realize);
     device_class_set_props(dc, rockchip_pcie_host_properties);
+    dc->vmsd = &vmstate_rockchip_pcie_host;
     hc->root_bus_path = rockchip_pcie_host_root_bus_path;
     /* Not user-creatable; instantiated by the board. */
     dc->user_creatable = false;
