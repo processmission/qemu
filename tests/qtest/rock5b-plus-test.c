@@ -1234,6 +1234,54 @@ static void test_rock_5b_plus_i2c6_read_rtc(void)
     qtest_quit(qts);
 }
 
+
+/* UART2 (dw-apb-uart, reg-shift 2): 16550 registers. */
+#define UART_RBR     0x00
+#define UART_THR     0x00
+#define UART_IER     0x04
+#define UART_FCR     0x08
+#define UART_LCR     0x0c
+#define UART_MCR     0x10
+#define UART_SCR     0x1c
+#define UART_LCR_DLAB 0x80
+#define UART_MCR_LOOP 0x10
+
+static void test_rock_5b_plus_uart2(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  " -smp 1 -m 128M");
+    const uint32_t b = RK3588_UART2_BASE;
+
+    /* Scratch register round-trip. */
+    qtest_writeb(qts, b + UART_SCR, 0x5a);
+    g_assert_cmphex(qtest_readb(qts, b + UART_SCR), ==, 0x5a);
+
+    /* Divisor latch: DLAB exposes DLL/DLM at THR/IER. */
+    qtest_writeb(qts, b + UART_LCR, UART_LCR_DLAB);
+    qtest_writeb(qts, b + UART_RBR, 0x34);   /* DLL */
+    qtest_writeb(qts, b + UART_IER, 0x00);   /* DLM */
+    g_assert_cmphex(qtest_readb(qts, b + UART_RBR), ==, 0x34);
+    g_assert_cmphex(qtest_readb(qts, b + UART_IER), ==, 0x00);
+    qtest_writeb(qts, b + UART_LCR, 0x03);   /* 8N1 */
+
+    /* Loopback: THR bounces straight back into RBR. */
+    qtest_writeb(qts, b + UART_MCR, UART_MCR_LOOP);
+    qtest_writeb(qts, b + UART_THR, 0x41);
+    g_assert_cmphex(qtest_readb(qts, b + UART_RBR), ==, 0x41);
+    g_assert_cmphex(qtest_readb(qts, b + UART_LSR) &
+                    (UART_LSR_THRE | UART_LSR_TEMT), ==,
+                    UART_LSR_THRE | UART_LSR_TEMT);
+    qtest_writeb(qts, b + UART_MCR, 0);
+
+    /* DesignWare vendor window: USR reports the TX FIFO ready. */
+    g_assert_cmphex(qtest_readl(qts, b + 0x7c) & 0x7, ==, 0x6);
+    /* Vendor scratch storage round-trip. */
+    qtest_writel(qts, b + 0x40, 0x12345678);
+    g_assert_cmphex(qtest_readl(qts, b + 0x40), ==, 0x12345678);
+
+    qtest_quit(qts);
+}
+
 static void test_rock_5b_plus_i2c6_nak(void)
 {
     QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
@@ -1556,6 +1604,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_i2c6_read_rtc);
     qtest_add_func("/rock-5b-plus/i2c6-nak",
                    test_rock_5b_plus_i2c6_nak);
+    qtest_add_func("/rock-5b-plus/uart2",
+                   test_rock_5b_plus_uart2);
     qtest_add_func("/rock-5b-plus/pcie2x1l0-virtio-net",
                    test_rock_5b_plus_pcie2x1l0_virtio_net);
 
