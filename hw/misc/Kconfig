@@ -254,6 +254,9 @@ config RK3588_FIRMWARE_MMIO
 config RK3588_TSADC
     bool
 
+config RK3588_RNG
+    bool
+
 config RK3588_GRF
     bool
     select REGISTER
