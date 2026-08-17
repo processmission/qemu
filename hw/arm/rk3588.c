@@ -11,6 +11,7 @@
 #include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "system/address-spaces.h"
@@ -98,6 +99,30 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_QEMU_SMC_UBOOT_HANDOFF 0xc2003589
 #define RK3588_QEMU_SMC_ATF_ENTRY 0x358a
 #define RK3588_QEMU_SMC_BL31_EXIT 0x358b
+/*
+ * Rockchip SIP services consumed by the vendor fiq-debugger console
+ * (drivers/soc/rockchip/fiq_debugger + drivers/firmware/rockchip_sip.c).
+ * The guest's ttyFIQ0 console writes UART2 registers directly, but its
+ * probe calls into "secure" firmware; answer so the console registers.
+ */
+#define RK3588_SIP_SHARE_MEM 0x82000009
+#define RK3588_SIP_UARTDBG_CFG64 0xc2000005
+#define RK3588_UARTDBG_CFG_INIT 0xf0
+#define RK3588_UARTDBG_CFG_OSHDL_TO_OS 0xf1
+#define RK3588_UARTDBG_CFG_CPUSW 0xf3
+#define RK3588_UARTDBG_CFG_DEBUG_ENABLE 0xf4
+#define RK3588_UARTDBG_CFG_DEBUG_DISABLE 0xf5
+#define RK3588_UARTDBG_CFG_PRINT_PORT 0xf7
+#define RK3588_UARTDBG_CFG_FIQ_ENABLE 0xf8
+#define RK3588_UARTDBG_CFG_FIQ_DISABLE 0xf9
+#define RK3588_SIP_RET_SUCCESS 0
+/*
+ * Physical address handed out as the ATF/OS shared page for the FIQ
+ * debugger (2 pages).  Lives inside the firmware scratch window so the
+ * guest's ioremap lands on model RAM rather than device space.
+ */
+#define RK3588_FIQ_SHARE_MEM_ADDR 0x00108000ULL
+#define RK3588_FIQ_SHARE_MEM_SIZE (8 * KiB)
 #define RK3588_RKNS_MAGIC 0x534e4b52
 #define RK3588_RKNS_LBA 64
 #define RK3588_RKNS_HEADER_SIZE 2048
@@ -3476,6 +3501,47 @@ static bool rk3588_smc_handler(ARMCPU *cpu)
         rk3588_pcie_set_links_up(s);
         s->kernel_started = true;
         return false;
+    }
+
+    /*
+     * Rockchip SIP services for the vendor FIQ debugger.  The guest
+     * console (ttyFIQ0) drives UART2 directly once probed; these SMCs
+     * only need to report success and hand out a shared page.  The
+     * debugger's FIQ itself is never raised in the model, so the shared
+     * page stays untouched by firmware.
+     */
+    if ((uint32_t)fn == RK3588_SIP_SHARE_MEM) {
+        qemu_log_mask(LOG_GUEST_ERROR, "rk3588: SIP_SHARE_MEM called\n");
+        env->xregs[0] = RK3588_SIP_RET_SUCCESS;
+        env->xregs[1] = RK3588_FIQ_SHARE_MEM_ADDR;
+        return true;
+    }
+    if ((uint32_t)fn == RK3588_SIP_UARTDBG_CFG64) {
+        uint64_t sub = is_a64(env) ? env->xregs[3] : env->regs[3];
+
+        qemu_log_mask(LOG_GUEST_ERROR, "rk3588: SIP_UARTDBG sub=%" PRIu64 "\n",
+                      sub);
+
+        switch (sub) {
+        case RK3588_UARTDBG_CFG_INIT:
+            /* a0 = status, a1 = shared page for the CPU context. */
+            env->xregs[0] = RK3588_SIP_RET_SUCCESS;
+            env->xregs[1] = RK3588_FIQ_SHARE_MEM_ADDR;
+            break;
+        case RK3588_UARTDBG_CFG_PRINT_PORT:
+        case RK3588_UARTDBG_CFG_OSHDL_TO_OS:
+        case RK3588_UARTDBG_CFG_CPUSW:
+        case RK3588_UARTDBG_CFG_DEBUG_ENABLE:
+        case RK3588_UARTDBG_CFG_DEBUG_DISABLE:
+        case RK3588_UARTDBG_CFG_FIQ_ENABLE:
+        case RK3588_UARTDBG_CFG_FIQ_DISABLE:
+            env->xregs[0] = RK3588_SIP_RET_SUCCESS;
+            break;
+        default:
+            env->xregs[0] = -2; /* SIP_RET_NOT_SUPPORTED */
+            break;
+        }
+        return true;
     }
 
     /*
