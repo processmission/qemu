@@ -289,10 +289,20 @@ static void rockchip_spi_reset(DeviceState *dev)
     s->rx_pos = 0;
 }
 
+static int rockchip_spi_post_load(void *opaque, int version_id)
+{
+    RockchipSPIState *s = opaque;
+
+    /* Recompute the IRQ output from the migrated status registers. */
+    rockchip_spi_update_status(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_rockchip_spi = {
     .name = "rockchip-spi",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
+    .post_load = rockchip_spi_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ctrlr0, RockchipSPIState),
         VMSTATE_UINT32(ctrlr1, RockchipSPIState),
