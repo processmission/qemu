@@ -49,6 +49,7 @@
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
 #include "hw/i2c/rk3x_i2c.h"
+#include "hw/rtc/hym8563.h"
 #include "hw/ssi/rk806.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/ssi/rockchip_spi.h"
@@ -1575,6 +1576,7 @@ static void rk3588_fdt_add_sfc_node(void *fdt, uint32_t clk_phandle)
 static void rk3588_fdt_add_i2c6_node(void *fdt, uint32_t clk_phandle)
 {
     const char *i2c6 = "/i2c@fec80000";
+    const char *rtc = "/i2c@fec80000/rtc@51";
     static const char * const clock_names[] = {
         "i2c", "pclk",
     };
@@ -1597,6 +1599,10 @@ static void rk3588_fdt_add_i2c6_node(void *fdt, uint32_t clk_phandle)
     qemu_fdt_setprop_cell(fdt, i2c6, "#size-cells", 0);
     qemu_fdt_setprop_string(fdt, i2c6, "status", "okay");
 
+    qemu_fdt_add_subnode(fdt, rtc);
+    qemu_fdt_setprop_string(fdt, rtc, "compatible", "haoyu,hym8563");
+    qemu_fdt_setprop_cell(fdt, rtc, "reg", 0x51);
+    qemu_fdt_setprop_string(fdt, rtc, "status", "okay");
 }
 
 static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
@@ -3783,12 +3789,23 @@ static void rk3588_create_i2c6(RK3588MachineState *s)
 {
     DeviceState *dev = qdev_new(TYPE_RK3X_I2C);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    DeviceState *rtc;
+    I2CBus *bus;
 
     object_property_add_child(OBJECT(s), "i2c6", OBJECT(dev));
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_I2C6].base);
     sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_I2C6_SPI));
 
+    bus = I2C_BUS(qdev_get_child_bus(dev, "i2c-bus"));
+    rtc = i2c_slave_create_simple(bus, TYPE_HYM8563, 0x51);
+    /*
+     * The RTC INT output is open-drain active-low, wired to GPIO0
+     * bank B pin 0 (RK_PB0).  The driver keeps the alarm and timer
+     * interrupts disabled, so the line idles high.
+     */
+    qdev_connect_gpio_out_named(rtc, "irq", 0,
+                                qdev_get_gpio_in(s->gpio[0], 8));
 
     s->i2c6 = dev;
     object_unref(OBJECT(dev));
