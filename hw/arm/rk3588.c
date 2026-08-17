@@ -1210,7 +1210,7 @@ static const RK3588PCIEFDTConfig rk3588_pcie2x1l2_fdt = {
     .bus_start = 0x40,
     .requester_id = 0x4000,
     .prefetch_hi = 0x9,
-    .prefetch_lo = 0x80000000,
+    .prefetch_lo = 0xc0000000,
 };
 
 static void rk3588_fdt_add_pcie_node(void *fdt,
@@ -2079,6 +2079,26 @@ static void rk3588_arm_bootargs_patch(RK3588MachineState *s)
  * Idempotent: once the requested parameters are present the tree is
  * left alone.
  */
+/*
+ * True when the command line already contains the requested text as a
+ * whole argument (bounded by whitespace), so a substring inside another
+ * value cannot mark the patch as done.
+ */
+static bool rk3588_bootargs_has_arg(const char *cmdline, const char *arg)
+{
+    size_t len = strlen(arg);
+    const char *p = cmdline;
+
+    while ((p = strstr(p, arg))) {
+        if ((p == cmdline || p[-1] == ' ') &&
+            (p[len] == '\0' || p[len] == ' ')) {
+            return true;
+        }
+        p += len;
+    }
+    return false;
+}
+
 static void rk3588_patch_firmware_bootargs(RK3588MachineState *s)
 {
     hwaddr dtb_addr = RK3588_UBOOT_DTB_ADDR;
@@ -2130,7 +2150,14 @@ static void rk3588_patch_firmware_bootargs(RK3588MachineState *s)
         if (!old || plen <= 0) {
             return;
         }
-        if (strstr(old, extra)) {
+        /*
+         * The property may not carry a terminator within plen; only use
+         * C-string operations once a NUL is verified inside the copy.
+         */
+        if (!memchr(old, '\0', plen)) {
+            return;
+        }
+        if (rk3588_bootargs_has_arg(old, extra)) {
             return; /* already patched */
         }
         oldlen = strlen(old);
@@ -3141,6 +3168,9 @@ static void rk3588_create_uarts(RK3588MachineState *s)
         if (u->memidx == RK3588_UART2) {
             /* The console UART keeps the legacy chardev slot. */
             chr_index = s->zephyr_ram ? 1 : 0;
+        } else if (s->zephyr_ram && chr_index >= 1) {
+            /* UART2 claims slot 1 in zephyr mode; shift the others. */
+            chr_index++;
         }
 
         /*
