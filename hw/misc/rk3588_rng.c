@@ -20,6 +20,7 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "crypto/random.h"
+#include "qemu/guest-random.h"
 #include "hw/core/irq.h"
 #include "hw/misc/rk3588_rng.h"
 #include "migration/vmstate.h"
@@ -60,7 +61,11 @@ static void rk3588_rng_generate(RK3588RNGState *s)
 {
     Error *err = NULL;
 
-    if (qcrypto_random_bytes(s->rand_words, sizeof(s->rand_words), &err)) {
+    /*
+     * qemu_guest_getrandom() is replay-aware, so record/replay runs see
+     * identical words instead of diverging on the host entropy source.
+     */
+    if (qemu_guest_getrandom(s->rand_words, sizeof(s->rand_words), &err)) {
         /* Fall back to deterministic values on RNG failure. */
         error_free(err);
         memset(s->rand_words, 0x5a, sizeof(s->rand_words));
