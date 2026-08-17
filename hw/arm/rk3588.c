@@ -48,6 +48,7 @@
 #include "hw/sd/rockchip_dwcmshc.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
+#include "hw/i2c/rk3x_i2c.h"
 #include "hw/ssi/rk806.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/ssi/rockchip_spi.h"
@@ -258,6 +259,7 @@ struct RK3588MachineState {
     DeviceState *sdmmc;     /* dw_mmc - SD card controller */
     DeviceState *sfc;       /* rockchip-sfc - SPI NOR flash controller */
     DeviceState *spi2;      /* rockchip-spi - SPI2 (RK806 PMIC) */
+    DeviceState *i2c6;      /* rk3x-i2c - I2C6 (hym8563 RTC) */
     DeviceState *dmac1;     /* rk3588-pl330 - DMAC1 stub */
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
     DeviceState *pcie3x4;
@@ -400,6 +402,7 @@ enum {
     RK3588_PIPE_PHY_GRF1,
     RK3588_PIPE_PHY_GRF2,
     RK3588_SPI2,
+    RK3588_I2C6,
     RK3588_DMAC1,
     RK3588_RNG_MMIO,
 };
@@ -507,6 +510,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_PIPE_PHY_GRF1] = { 0xfd5c0000, 0x00001000 },
     [RK3588_PIPE_PHY_GRF2] = { 0xfd5c4000, 0x00001000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
+    [RK3588_I2C6] =         { 0xfec80000, 0x00001000 },
     [RK3588_DMAC1] =        { 0xfea10000, RK3588_PL330_MMIO_SIZE },
     [RK3588_RNG_MMIO] =     { 0xfe378000, RK3588_RNG_MMIO_SIZE },
 };
@@ -553,6 +557,7 @@ enum {
     RK3588_UART3_SPI = 334,
     RK3588_TSADC_SPI = 397,
     RK3588_SPI2_SPI = 328,
+    RK3588_I2C6_SPI = 323,
     RK3588_DMAC1_SPI = 86,
     RK3588_RNG_SPI = 400,
 };
@@ -1567,6 +1572,33 @@ static void rk3588_fdt_add_sfc_node(void *fdt, uint32_t clk_phandle)
     qemu_fdt_setprop_string(fdt, flash, "status", "okay");
 }
 
+static void rk3588_fdt_add_i2c6_node(void *fdt, uint32_t clk_phandle)
+{
+    const char *i2c6 = "/i2c@fec80000";
+    static const char * const clock_names[] = {
+        "i2c", "pclk",
+    };
+
+    qemu_fdt_add_subnode(fdt, i2c6);
+    qemu_fdt_setprop_string(fdt, i2c6, "compatible",
+                            "rockchip,rk3588-i2c");
+    qemu_fdt_setprop_sized_cells(fdt, i2c6, "reg",
+                                 2, rk3588_memmap[RK3588_I2C6].base,
+                                 2, rk3588_memmap[RK3588_I2C6].size);
+    qemu_fdt_setprop_cells(fdt, i2c6, "interrupts",
+                           FDT_GIC_SPI, RK3588_I2C6_SPI,
+                           FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+    qemu_fdt_setprop_cells(fdt, i2c6, "clocks",
+                           clk_phandle, clk_phandle);
+    qemu_fdt_setprop_string_array(fdt, i2c6, "clock-names",
+                                  (char **)&clock_names,
+                                  ARRAY_SIZE(clock_names));
+    qemu_fdt_setprop_cell(fdt, i2c6, "#address-cells", 1);
+    qemu_fdt_setprop_cell(fdt, i2c6, "#size-cells", 0);
+    qemu_fdt_setprop_string(fdt, i2c6, "status", "okay");
+
+}
+
 static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 {
     RK3588MachineState *s = container_of(binfo, RK3588MachineState, bootinfo);
@@ -1600,6 +1632,7 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_uart_node(fdt);
     rk3588_fdt_add_storage_nodes(fdt, clk_phandle, scmi_clk_phandle);
     rk3588_fdt_add_sfc_node(fdt, clk_phandle);
+    rk3588_fdt_add_i2c6_node(fdt, clk_phandle);
     rk3588_fdt_add_gpio_nodes(fdt, clk_phandle);
     rk3588_fdt_add_gmac_nodes(s, fdt, clk_phandle, sys_grf_ph, php_grf_ph);
     rk3588_fdt_add_pcie_nodes(s, fdt, cru_phandle, clk_phandle,
@@ -3746,6 +3779,21 @@ static void rk3588_create_spi2(RK3588MachineState *s)
     object_unref(OBJECT(dev));
 }
 
+static void rk3588_create_i2c6(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3X_I2C);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "i2c6", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_I2C6].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_I2C6_SPI));
+
+
+    s->i2c6 = dev;
+    object_unref(OBJECT(dev));
+}
+
 /* TRNGv1: seeds the kernel CRNG so getrandom() does not block. */
 static void rk3588_create_rng(RK3588MachineState *s)
 {
@@ -3845,6 +3893,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_gpio(s);
     rk3588_create_dmac1(s);
     rk3588_create_spi2(s);
+    rk3588_create_i2c6(s);
     rk3588_create_rng(s);
     rk3588_create_gmac(s);
     rk3588_create_rknpu(s);

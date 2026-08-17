@@ -238,6 +238,8 @@ config RK3588
     select RK806
     select RK3588_PL330
     select RK3588_RNG
+    select RK3X_I2C
+    select HYM8563
 
 config RK3588_EVB
     bool
