@@ -2053,18 +2053,37 @@ static void rk3588_patch_firmware_bootargs(RK3588MachineState *s)
             return; /* already patched */
         }
         oldlen = strlen(old);
-        if (oldlen > sizeof(fwver_tail) - 1) {
+        if (oldlen > sizeof(fwver_tail) - 1 &&
+            strcmp(old + oldlen - (sizeof(fwver_tail) - 1),
+                   fwver_tail) == 0) {
             /*
              * Drop the trailing Rockchip "androidboot.fwver" marker to
              * make room for the extra parameters inside the existing
-             * property slot (the value must not grow).
+             * property slot (the value must not grow).  Only shorten
+             * when the value really ends with that marker; a length-only
+             * test would discard arbitrary kernel parameters.
              */
             newargs = g_strdup_printf("%.*s %s",
                                       (int)(oldlen - (sizeof(fwver_tail) - 1)),
                                       old, extra);
         } else {
-            /* Unknown tail: append only if it still fits the slot. */
-            newargs = g_strdup_printf("%s %s", old, extra);
+            /*
+             * No marker: append if it fits; otherwise trim whole
+             * trailing tokens (never mid-token) until the patched value
+             * fits, preserving the leading root=/console= parameters.
+             */
+            size_t keep = oldlen;
+            size_t need = strlen(extra) + 2; /* space + value + NUL */
+
+            while (keep + need > (size_t)plen && keep > 0) {
+                while (keep > 0 && old[keep - 1] == ' ') {
+                    keep--;
+                }
+                while (keep > 0 && old[keep - 1] != ' ') {
+                    keep--;
+                }
+            }
+            newargs = g_strdup_printf("%.*s %s", (int)keep, old, extra);
         }
         newlen = strlen(newargs) + 1;
         if (newlen > (size_t)plen) {
