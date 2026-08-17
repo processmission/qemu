@@ -1305,6 +1305,106 @@ static void test_rock_5b_plus_i2c6_nak(void)
     qtest_quit(qts);
 }
 
+
+static void test_rock_5b_plus_uarts(void)
+{
+    static const uint32_t uart_bases[] = {
+        0xfd890000, 0xfeb40000, 0xfeb50000, 0xfeb60000,
+        0xfeb70000, 0xfeb80000, 0xfeb90000, 0xfeba0000,
+        0xfebb0000, 0xfebc0000,
+    };
+    static const int uart_spis[] = {
+        331, 332, 333, 334, 335, 336, 337, 338, 339, 340,
+    };
+    QTestState *qts;
+    g_autofree char *kernel_path = NULL;
+    g_autofree char *dtb_path = NULL;
+    g_autofree char *machine_arg = NULL;
+    g_autofree char *stderr_buf = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *dtb = NULL;
+    static const uint32_t kernel_insn = GUINT32_TO_LE(0x14000000);
+    gsize dtb_size;
+    int kernel_fd, dtb_fd, exit_status;
+    bool spawned;
+    unsigned int i;
+
+    qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                      " -smp 1 -m 128M");
+
+    /* Every RK3588 UART answers on its 16550 core and vendor window. */
+    for (i = 0; i < ARRAY_SIZE(uart_bases); i++) {
+        const uint32_t b = uart_bases[i];
+
+        qtest_writeb(qts, b + UART_SCR, 0xa5);
+        g_assert_cmphex(qtest_readb(qts, b + UART_SCR), ==, 0xa5);
+        g_assert_cmphex(qtest_readb(qts, b + UART_LSR) &
+                        (UART_LSR_THRE | UART_LSR_TEMT), ==,
+                        UART_LSR_THRE | UART_LSR_TEMT);
+        g_assert_cmphex(qtest_readl(qts, b + 0x7c) & 0x7, ==, 0x6);
+    }
+    qtest_quit(qts);
+
+    /* The machine FDT exposes all ten ports with their IRQs. */
+    kernel_fd = g_file_open_tmp("rock5b-plus-kernel-XXXXXX", &kernel_path,
+                                &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(kernel_fd, >=, 0);
+    g_assert_cmpint(close(kernel_fd), ==, 0);
+    g_assert_true(g_file_set_contents(kernel_path,
+                                      (const char *)&kernel_insn,
+                                      sizeof(kernel_insn), &error));
+    g_assert_no_error(error);
+
+    dtb_fd = g_file_open_tmp("rock5b-plus-dtb-XXXXXX", &dtb_path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(dtb_fd, >=, 0);
+    g_assert_cmpint(close(dtb_fd), ==, 0);
+
+    machine_arg = g_strdup_printf(ROCK_5B_PLUS_MACHINE ",dumpdtb=%s",
+                                  dtb_path);
+    const char *argv[] = {
+        qtest_qemu_binary(NULL),
+        "-machine", machine_arg,
+        "-cpu", "cortex-a76",
+        "-smp", "1",
+        "-m", "512M",
+        "-kernel", kernel_path,
+        "-display", "none",
+        "-serial", "none",
+        "-nodefaults",
+        NULL,
+    };
+
+    spawned = g_spawn_sync(NULL, (char **)argv, NULL,
+                           G_SPAWN_STDOUT_TO_DEV_NULL, NULL, NULL, NULL,
+                           &stderr_buf, &exit_status, &error);
+    g_assert_true(spawned);
+    g_assert_no_error(error);
+    if (!g_spawn_check_exit_status(exit_status, &error)) {
+        g_error("QEMU failed to dump the ROCK 5B+ DTB: %s\n%s",
+                error->message, stderr_buf ? stderr_buf : "");
+    }
+
+    g_assert_true(g_file_get_contents(dtb_path, &dtb, &dtb_size, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(fdt_check_header(dtb), ==, 0);
+
+    for (i = 0; i < ARRAY_SIZE(uart_bases); i++) {
+        g_autofree char *node = g_strdup_printf("/serial@%x", uart_bases[i]);
+        const fdt32_t *cells;
+        int length;
+
+        g_assert_cmpint(fdt_path_offset(dtb, node), >=, 0);
+        g_assert_cmpstr(fdt_getprop(dtb, fdt_path_offset(dtb, node),
+                                    "status", &length), ==, "okay");
+        cells = fdt_getprop(dtb, fdt_path_offset(dtb, node),
+                            "interrupts", &length);
+        g_assert_cmpint(length, >=, 4 * sizeof(uint32_t));
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, uart_spis[i]);
+    }
+}
+
 static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
 {
     static const uint8_t tx_frame[60] = {
@@ -1606,6 +1706,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_i2c6_nak);
     qtest_add_func("/rock-5b-plus/uart2",
                    test_rock_5b_plus_uart2);
+    qtest_add_func("/rock-5b-plus/uarts",
+                   test_rock_5b_plus_uarts);
     qtest_add_func("/rock-5b-plus/pcie2x1l0-virtio-net",
                    test_rock_5b_plus_pcie2x1l0_virtio_net);
 
