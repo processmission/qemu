@@ -278,13 +278,34 @@ static const MemoryRegionOps designware_pci_host_conf_ops = {
     },
 };
 
+static uint64_t designware_pcie_viewport_size(
+    const DesignwarePCIEViewport *viewport)
+{
+    /*
+     * The untouched default inbound window passes all inbound TLPs
+     * through to guest memory, so it spans the whole address space
+     * even though the limit register only holds 32 bits.
+     */
+    if (viewport->inbound && viewport->base == 0 &&
+        viewport->target == 0 && viewport->limit == UINT32_MAX &&
+        (viewport->cr[1] & DESIGNWARE_PCIE_ATU_ENABLE)) {
+        return UINT64_MAX;
+    }
+    /*
+     * The limit register carries the low 32 bits of the window end;
+     * reconstruct the upper bits from the base so windows above 4 GiB
+     * (e.g. the ROCK 5B+ prefetch ranges) compute the right size.
+     */
+    return ((viewport->base & ~0xffffffffULL) | viewport->limit) -
+           viewport->base + 1;
+}
+
 static void designware_pcie_update_viewport(DesignwarePCIERoot *root,
                                             DesignwarePCIEViewport *viewport)
 {
     const uint64_t target = viewport->target;
     const uint64_t base   = viewport->base;
-    const uint64_t size   = viewport->limit == UINT64_MAX ? UINT64_MAX :
-                            (uint64_t)viewport->limit - base + 1;
+    const uint64_t size   = designware_pcie_viewport_size(viewport);
     const bool enabled    = viewport->cr[1] & DESIGNWARE_PCIE_ATU_ENABLE;
 
     MemoryRegion *current, *other;
@@ -438,12 +459,12 @@ static void designware_pcie_root_realize(PCIDevice *dev, Error **errp)
         viewport->base    = 0x0000000000000000ULL;
         viewport->target  = 0x0000000000000000ULL;
         /*
-         * The default inbound window passes all inbound TLPs through,
-         * so it must cover the whole address space: guests with RAM
-         * above 4 GiB DMA from high pages and a 32-bit window would
-         * leave those accesses untranslated.
+         * The default inbound window passes all inbound TLPs through;
+         * designware_pcie_viewport_size() treats this untouched window
+         * as covering the whole address space so guests with RAM above
+         * 4 GiB can DMA from high pages.
          */
-        viewport->limit   = UINT64_MAX;
+        viewport->limit   = UINT32_MAX;
         viewport->cr[0]   = DESIGNWARE_PCIE_ATU_TYPE_MEM;
 
         source      = &host->pci.address_space_root;
@@ -569,12 +590,12 @@ static const VMStateDescription vmstate_designware_pcie_msi = {
 
 static const VMStateDescription vmstate_designware_pcie_viewport = {
     .name = "designware-pcie-viewport",
-    .version_id = 2,
+    .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(base, DesignwarePCIEViewport),
         VMSTATE_UINT64(target, DesignwarePCIEViewport),
-        VMSTATE_UINT64_V(limit, DesignwarePCIEViewport, 2),
+        VMSTATE_UINT32(limit, DesignwarePCIEViewport),
         VMSTATE_UINT32_ARRAY(cr, DesignwarePCIEViewport, 2),
         VMSTATE_END_OF_LIST()
     }
@@ -728,7 +749,7 @@ static void designware_pcie_host_realize(DeviceState *dev, Error **errp)
     qdev_realize(DEVICE(&s->root), BUS(pci->bus), &error_fatal);
 }
 
-static const VMStateDescription vmstate_designware_pcie_host = {
+const VMStateDescription vmstate_designware_pcie_host = {
     .name = "designware-pcie-host",
     .version_id = 1,
     .minimum_version_id = 1,

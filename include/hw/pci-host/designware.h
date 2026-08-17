@@ -29,6 +29,9 @@
 OBJECT_DECLARE_SIMPLE_TYPE(DesignwarePCIERootBus, DESIGNWARE_PCIE_ROOT_BUS)
 
 #define TYPE_DESIGNWARE_PCIE_HOST "designware-pcie-host"
+
+/* Parent VMState, reused by subclasses that add state. */
+extern const VMStateDescription vmstate_designware_pcie_host;
 OBJECT_DECLARE_SIMPLE_TYPE(DesignwarePCIEHost, DESIGNWARE_PCIE_HOST)
 
 #define TYPE_DESIGNWARE_PCIE_ROOT "designware-pcie-root"
@@ -46,7 +49,7 @@ typedef struct DesignwarePCIEViewport {
 
     uint64_t base;
     uint64_t target;
-    uint64_t limit;
+    uint32_t limit;
     uint32_t cr[2];
 
     bool inbound;
