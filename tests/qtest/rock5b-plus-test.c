@@ -763,7 +763,7 @@ static uint8_t sfc_pattern_byte(uint32_t addr)
 
 static void test_rock_5b_plus_sfc_flash(void)
 {
-    /* The w25q128 model requires a full-size backing file. */
+    /* The XT25F128 model requires a full-size backing file. */
     static const size_t flash_size = 16 * 1024 * 1024;
     g_autofree uint8_t *pattern = g_malloc(flash_size);
     g_autofree char *flash_path = NULL;
@@ -797,13 +797,13 @@ static void test_rock_5b_plus_sfc_flash(void)
     qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_CTRL, 1);
     qtest_writel(qts, RK3588_SFC_BASE + SFC_ICLR, 0xffffffff);
 
-    /* JEDEC ID through the PIO FIFO: w25q128 = ef 40 18. */
+    /* JEDEC ID through the PIO FIFO: XT25F128 = 40 18 18. */
     qtest_writel(qts, RK3588_SFC_BASE + SFC_LEN_EXT, 3);
     qtest_writel(qts, RK3588_SFC_BASE + SFC_CMD, SFC_OP_JEDEC_ID);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_FSR) &
                     SFC_FSR_RXLV_MASK, !=, 0);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_DATA) &
-                    0xffffff, ==, 0x1840ef);
+                    0xffffff, ==, 0x181840);
     g_assert_cmphex(qtest_readl(qts, RK3588_SFC_BASE + SFC_SR), ==, 0);
 
     /* PIO read of the flash contents at 0x100. */

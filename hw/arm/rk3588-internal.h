@@ -15,6 +15,7 @@
 #define TYPE_RK3588_MACHINE MACHINE_TYPE_NAME("rk3588")
 
 #define RK3588_BROM_BOOTSOURCE_EMMC 2
+#define RK3588_BROM_BOOTSOURCE_SPINOR 3
 #define RK3588_BROM_BOOTSOURCE_SD 5
 
 #define RK3588_DRAM_TYPE_LPDDR4X 8
@@ -26,6 +27,7 @@ typedef struct RK3588FirmwareProfile {
     bool dynamic_fit_handoff;
     bool atags_core;
     uint64_t fit_offset;
+    uint64_t spi_fit_offset;
     uint32_t fit_alignment;
 } RK3588FirmwareProfile;
 
@@ -41,6 +43,7 @@ typedef struct RK3588BoardConfig {
     const char *fdt_model;
     const char * const *fdt_compatible;
     size_t fdt_compatible_count;
+    bool firmware_spi;
     unsigned int firmware_sd_unit;
     uint32_t brom_bootsource;
     uint32_t dram_type;

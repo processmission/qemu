@@ -24,6 +24,7 @@ static const RK3588FirmwareProfile rock_5b_plus_firmware = {
     .dynamic_fit_handoff = true,
     .atags_core = true,
     .fit_offset = 0x800000,
+    .spi_fit_offset = 0x60000,
     .fit_alignment = 512,
 };
 
@@ -34,6 +35,7 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .fdt_model = "Radxa ROCK 5B+",
     .fdt_compatible = rock_5b_plus_compatible,
     .fdt_compatible_count = ARRAY_SIZE(rock_5b_plus_compatible),
+    .firmware_spi = true,
     .firmware_sd_unit = 0,
     .default_ram_size = 8 * GiB,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,

@@ -244,6 +244,7 @@ typedef struct RK3588BootROM {
     uint32_t atf_size;
     uint32_t uboot_size;
     uint32_t uboot_entry_word;
+    uint32_t brom_bootsource;
     bool spl_loaded;
     bool fit_handoff_valid;
 } RK3588BootROM;
@@ -2504,6 +2505,28 @@ static bool rk3588_fit_check_string(const void *fit, int node,
     return true;
 }
 
+static bool rk3588_fit_is_uboot_os(const char *value)
+{
+    return value && (!strcmp(value, "U-Boot") || !strcmp(value, "u-boot"));
+}
+
+static bool rk3588_fit_check_uboot_os(const void *fit, int node,
+                                      Error **errp)
+{
+    const char *value = rk3588_fit_single_string(fit, node, "os", errp);
+
+    if (!value) {
+        return false;
+    }
+    if (!rk3588_fit_is_uboot_os(value)) {
+        error_setg(errp, "FIT image %s has os '%s', expected U-Boot",
+                   fdt_get_name(fit, node, NULL), value);
+        return false;
+    }
+
+    return true;
+}
+
 static bool rk3588_fit_get_address(const void *fit, int node,
                                     const char *property, bool optional,
                                     hwaddr *value, Error **errp)
@@ -2588,13 +2611,15 @@ static const char *rk3588_fit_find_uboot(const void *fit, int config,
         const char *name = fdt_stringlist_get(fit, config, "loadables", i,
                                                NULL);
         int image = fdt_subnode_offset(fit, images, name);
+        const char *os;
 
         if (image < 0) {
             error_setg(errp, "FIT loadable '%s' has no image node", name);
             return NULL;
         }
+        os = fdt_getprop(fit, image, "os", NULL);
         if (fdt_stringlist_search(fit, image, "type", "standalone") >= 0 &&
-            fdt_stringlist_search(fit, image, "os", "U-Boot") >= 0) {
+            rk3588_fit_is_uboot_os(os)) {
             if (candidate) {
                 error_setg(errp, "FIT configuration has multiple U-Boot "
                            "loadables");
@@ -2627,7 +2652,10 @@ static bool rk3588_fit_read_image(const void *fit, int images,
         return false;
     }
     if (!rk3588_fit_check_string(fit, node, "type", expected_type, errp) ||
-        !rk3588_fit_check_string(fit, node, "os", expected_os, errp) ||
+        (strcmp(expected_os, "U-Boot") &&
+         !rk3588_fit_check_string(fit, node, "os", expected_os, errp)) ||
+        (!strcmp(expected_os, "U-Boot") &&
+         !rk3588_fit_check_uboot_os(fit, node, errp)) ||
         !rk3588_fit_check_string(fit, node, "compression", "none", errp) ||
         !rk3588_fit_get_address(fit, node, "load", false,
                                  &image->load, errp) ||
@@ -2678,6 +2706,7 @@ static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
     const char *uboot_name;
     int64_t media_len;
     uint64_t media_size;
+    uint64_t fit_offset;
     uint64_t payload_base;
     uint64_t entry_delta;
     uint32_t metadata_size;
@@ -2707,9 +2736,12 @@ static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
         return false;
     }
     media_size = media_len;
-    if (profile->fit_offset > media_size ||
-        sizeof(header) > media_size - profile->fit_offset ||
-        !rk3588_blk_read(blk, profile->fit_offset, &header,
+    fit_offset = s->bootrom_state.brom_bootsource ==
+                 RK3588_BROM_BOOTSOURCE_SPINOR && profile->spi_fit_offset ?
+                 profile->spi_fit_offset : profile->fit_offset;
+    if (fit_offset > media_size ||
+        sizeof(header) > media_size - fit_offset ||
+        !rk3588_blk_read(blk, fit_offset, &header,
                          sizeof(header), errp)) {
         if (!*errp) {
             error_setg(errp, "%s FIT header exceeds boot media",
@@ -2727,14 +2759,14 @@ static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
     metadata_size = fdt_totalsize(&header);
     if (metadata_size < sizeof(header) ||
         metadata_size > RK3588_FIT_METADATA_MAX_SIZE ||
-        metadata_size > media_size - profile->fit_offset) {
+        metadata_size > media_size - fit_offset) {
         error_setg(errp, "%s FIT metadata size 0x%x is invalid",
                    s->board->machine_name, metadata_size);
         return false;
     }
 
     fit = g_malloc(metadata_size);
-    if (!rk3588_blk_read(blk, profile->fit_offset, fit, metadata_size,
+    if (!rk3588_blk_read(blk, fit_offset, fit, metadata_size,
                          errp)) {
         return false;
     }
@@ -2747,12 +2779,12 @@ static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
 
     payload_base = ROUND_UP((uint64_t)metadata_size,
                             profile->fit_alignment);
-    if (payload_base > media_size - profile->fit_offset) {
+    if (payload_base > media_size - fit_offset) {
         error_setg(errp, "%s FIT payload exceeds boot media",
                    s->board->machine_name);
         return false;
     }
-    payload_base += profile->fit_offset;
+    payload_base += fit_offset;
 
     configs = fdt_path_offset(fit, "/configurations");
     images = fdt_path_offset(fit, "/images");
@@ -2823,13 +2855,13 @@ static bool rk3588_bootrom_prepare_fit_handoff(RK3588MachineState *s,
 
 static bool rk3588_load_rkns_image(BlockBackend *blk,
                                    const RK3588HeaderV2 *hdr,
-                                   unsigned int index, uint8_t **data,
+                                   uint64_t rkns_base, unsigned int index,
+                                   uint8_t **data,
                                    size_t *size, Error **errp)
 {
     uint32_t size_and_off = le32_to_cpu(hdr->images[index].size_and_off);
     uint32_t sectors = size_and_off >> 16;
     uint32_t offset_sectors = size_and_off & 0xffff;
-    int64_t base = RK3588_RKNS_LBA * RK3588_RKNS_SECTOR_SIZE;
     size_t bytes;
 
     if (!sectors || !offset_sectors) {
@@ -2847,37 +2879,57 @@ static bool rk3588_load_rkns_image(BlockBackend *blk,
     *data = g_malloc0(bytes);
     *size = bytes;
     return rk3588_blk_read(blk,
-                           base + offset_sectors * RK3588_RKNS_SECTOR_SIZE,
+                           rkns_base + offset_sectors * RK3588_RKNS_SECTOR_SIZE,
                            *data, bytes, errp);
 }
 
 static bool rk3588_bootrom_prepare(RK3588MachineState *s, Error **errp)
 {
     const RK3588BoardConfig *board = s->board;
-    DriveInfo *di = drive_get(IF_SD, 0, board->firmware_sd_unit);
+    DriveInfo *di = NULL;
     BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
     RK3588HeaderV2 hdr;
     uint8_t *tpl = NULL;
     size_t tpl_size = 0;
     uint8_t *spl = NULL;
     size_t spl_size = 0;
-    int64_t header_offset = RK3588_RKNS_LBA * RK3588_RKNS_SECTOR_SIZE;
+    uint64_t rkns_base = RK3588_RKNS_LBA * RK3588_RKNS_SECTOR_SIZE;
     uint32_t nimage;
 
+    if (board->firmware_spi) {
+        di = drive_get(IF_MTD, 0, 0);
+        blk = di ? blk_by_legacy_dinfo(di) : NULL;
+        if (blk) {
+            s->bootrom_state.brom_bootsource =
+                RK3588_BROM_BOOTSOURCE_SPINOR;
+        }
+    }
     if (!blk) {
-        error_setg(errp, "%s firmware boot requires "
-                   "-drive if=sd,index=%u,file=<rockchip-image>,format=raw",
-                   board->machine_name, board->firmware_sd_unit);
+        di = drive_get(IF_SD, 0, board->firmware_sd_unit);
+        blk = di ? blk_by_legacy_dinfo(di) : NULL;
+        s->bootrom_state.brom_bootsource = board->brom_bootsource;
+    }
+    if (!blk) {
+        if (board->firmware_spi) {
+            error_setg(errp, "%s firmware boot requires "
+                       "-drive if=mtd,index=0,file=<spi-image>,format=raw "
+                       "and SD payload media at if=sd,index=%u",
+                       board->machine_name, board->firmware_sd_unit + 2);
+        } else {
+            error_setg(errp, "%s firmware boot requires "
+                       "-drive if=sd,index=%u,file=<rockchip-image>,format=raw",
+                       board->machine_name, board->firmware_sd_unit);
+        }
         return false;
     }
 
-    if (!rk3588_blk_read(blk, header_offset, &hdr, sizeof(hdr), errp)) {
+    if (!rk3588_blk_read(blk, rkns_base, &hdr, sizeof(hdr), errp)) {
         return false;
     }
 
     if (le32_to_cpu(hdr.magic) != RK3588_RKNS_MAGIC) {
-        error_setg(errp, "%s boot media LBA %u does not contain an RKNS v2 "
-                   "header", board->machine_name, RK3588_RKNS_LBA);
+        error_setg(errp, "%s boot media does not contain an RKNS v2 header",
+                   board->machine_name);
         return false;
     }
 
@@ -2888,10 +2940,12 @@ static bool rk3588_bootrom_prepare(RK3588MachineState *s, Error **errp)
         return false;
     }
 
-    if (!rk3588_load_rkns_image(blk, &hdr, 0, &tpl, &tpl_size, errp)) {
+    if (!rk3588_load_rkns_image(blk, &hdr, rkns_base, 0, &tpl, &tpl_size,
+                                errp)) {
         return false;
     }
-    if (!rk3588_load_rkns_image(blk, &hdr, 1, &spl, &spl_size, errp)) {
+    if (!rk3588_load_rkns_image(blk, &hdr, rkns_base, 1, &spl, &spl_size,
+                                errp)) {
         g_free(tpl);
         return false;
     }
@@ -2920,7 +2974,6 @@ static bool rk3588_bootrom_prepare(RK3588MachineState *s, Error **errp)
 
 static void rk3588_bootrom_load_spl(RK3588MachineState *s, ARMCPU *cpu)
 {
-    const RK3588BoardConfig *board = s->board;
     CPUARMState *env = &cpu->env;
 
     if (!s->bootrom_state.spl || s->bootrom_state.spl_loaded) {
@@ -2934,7 +2987,7 @@ static void rk3588_bootrom_load_spl(RK3588MachineState *s, ARMCPU *cpu)
         rk3588_patch_spl_atf_handoff();
     }
     stl_le_p(memory_region_get_ram_ptr(&s->iram) + 0x10,
-             board->brom_bootsource);
+             s->bootrom_state.brom_bootsource);
     s->bootrom_state.spl_loaded = true;
 
     cpu_set_pc(CPU(cpu), rk3588_memmap[RK3588_SRAM].base);
@@ -3788,8 +3841,8 @@ static void rk3588_create_sdmmc(RK3588MachineState *s)
 
 /*
  * Rockchip SFC with the board SPI NOR flash.  The flash is the 16 MiB
- * part used by the Radxa ROCK 5B+ (jedec,spi-nor class); a backing store
- * can be supplied with -drive if=mtd,index=0,file=...,format=raw.
+ * XTX XT25F128 part used by the Radxa ROCK 5B+ (jedec,spi-nor class); a
+ * backing store can be supplied with -drive if=mtd,index=0,file=...,format=raw.
  */
 static void rk3588_create_sfc(RK3588MachineState *s)
 {
@@ -3804,7 +3857,7 @@ static void rk3588_create_sfc(RK3588MachineState *s)
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SFC].base);
     sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SFC_SPI));
 
-    flash = qdev_new("w25q128");
+    flash = qdev_new("xt25f128");
     if (di) {
         qdev_prop_set_drive(flash, "drive", blk_by_legacy_dinfo(di));
     }

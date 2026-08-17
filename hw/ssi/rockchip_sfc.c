@@ -17,7 +17,7 @@
  * The modeled flash device sits on a child SSI bus; commands are executed
  * against it through byte transfers with an active-low chip-select, the
  * same wiring used by the NPCM7xx FIU.  A 16 MiB m25p80-class device is
- * attached by the board (e.g. "w25q128").
+ * attached by the board (e.g. "xt25f128").
  *
  * Register behavior follows the drivers' contract:
  *  - SFC_VER >= 4 selects the v4 register semantics.
@@ -328,7 +328,8 @@ static uint64_t rockchip_sfc_read(void *opaque, hwaddr offset, unsigned size)
         break;
     case ROCKCHIP_SFC_FSR:
     {
-        uint32_t rx_level;
+        uint32_t tx_free, rx_level;
+        uint32_t tx_words = (s->tx_len + 3) / 4;
         uint32_t rx_words = (s->rx_len - s->rx_pos + 3) / 4;
 
         /*
@@ -336,12 +337,20 @@ static uint64_t rockchip_sfc_read(void *opaque, hwaddr offset, unsigned size)
          * words straight to the flash, so the FIFO is always empty when
          * the guest reads FSR and the PIO write loop can keep filling it.
          */
-        rx_level = rx_words > ROCKCHIP_SFC_FIFO_DEPTH ?
-            ROCKCHIP_SFC_FIFO_DEPTH : rx_words;
+        /* The level fields are five bits wide: 31 is the full value. */
+        tx_free = tx_words >= ROCKCHIP_SFC_FIFO_DEPTH ?
+            0 : MIN(ROCKCHIP_SFC_FIFO_DEPTH - tx_words,
+                    ROCKCHIP_SFC_FIFO_DEPTH - 1);
+        rx_level = MIN(rx_words, ROCKCHIP_SFC_FIFO_DEPTH - 1);
 
-        value = (ROCKCHIP_SFC_FIFO_DEPTH << ROCKCHIP_SFC_FSR_TXLV_SHIFT) |
+        value = (tx_free << ROCKCHIP_SFC_FSR_TXLV_SHIFT) |
                 (rx_level << ROCKCHIP_SFC_FSR_RXLV_SHIFT);
-        value |= ROCKCHIP_SFC_FSR_TX_IS_EMPTY;
+        if (tx_words == 0) {
+            value |= ROCKCHIP_SFC_FSR_TX_IS_EMPTY;
+        }
+        if (tx_words >= ROCKCHIP_SFC_FIFO_DEPTH) {
+            value |= ROCKCHIP_SFC_FSR_TX_IS_FULL;
+        }
         if (s->rx_pos >= s->rx_len) {
             value |= ROCKCHIP_SFC_FSR_RX_IS_EMPTY;
         }
