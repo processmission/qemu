@@ -165,7 +165,9 @@ static void rockchip_sfc_start_op(RockchipSFCState *s, uint32_t cmd)
     s->op.opcode = cmd & ROCKCHIP_SFC_CMD_IDX_MASK;
     s->op.dir = (cmd >> ROCKCHIP_SFC_CMD_DIR_SHIFT) & 0x1;
     s->op.cs = (cmd >> ROCKCHIP_SFC_CMD_CS_SHIFT) & 0x3;
-    s->op.len = s->len_ext; /* v4: length lives in SFC_LEN_EXT */
+    /* v4: length lives in SFC_LEN_EXT.  Cap it so the PIO write buffer
+     * and the DMA staging buffer stay bounded. */
+    s->op.len = MIN(s->len_ext, ROCKCHIP_SFC_MAX_BUFFER);
 
     switch (addr_mode) {
     case ROCKCHIP_SFC_CMD_ADDR_24BITS:
@@ -271,6 +273,11 @@ static void rockchip_sfc_dma_trigger(RockchipSFCState *s)
     if (!s->op.pending) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "%s: DMA trigger with no pending op\n", __func__);
+        return;
+    }
+    if (s->op.dir == ROCKCHIP_SFC_CMD_DIR_RD && !s->rx) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: DMA read before the address phase\n", __func__);
         return;
     }
 
@@ -534,10 +541,27 @@ static void rockchip_sfc_reset(DeviceState *dev)
     s->addr_reg = 0;
 }
 
+static int rockchip_sfc_post_load(void *opaque, int version_id)
+{
+    RockchipSFCState *s = opaque;
+
+    /*
+     * The chip-select line is not part of the VMState; reassert it when a
+     * pending operation already sent its command/address phase, and rearm
+     * the pending interrupt state.
+     */
+    if (s->op.pending && s->op.cmd_sent) {
+        rockchip_sfc_select(s, s->op.cs);
+    }
+    rockchip_sfc_update_irq(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_rockchip_sfc = {
     .name = "rockchip-sfc",
     .version_id = 2,
     .minimum_version_id = 1,
+    .post_load = rockchip_sfc_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ctrl, RockchipSFCState),
         VMSTATE_UINT32(imr, RockchipSFCState),
