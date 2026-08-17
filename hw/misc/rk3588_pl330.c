@@ -75,9 +75,14 @@ static void rk3588_pl330_realize(DeviceState *dev, Error **errp)
 
     sysbus_init_irq(sbd, &s->irq[0]);
     sysbus_init_irq(sbd, &s->irq[1]);
+    /*
+     * The AMBA probe reads the PrimeCell ID registers as separate
+     * 32-bit registers (PIDR/CIDR n at 4-byte spacing), so store each
+     * byte at its register's offset.
+     */
     for (i = 0; i < 4; i++) {
-        s->storage[PL330_PIDR_BASE + i] = pidr[i];
-        s->storage[PL330_CIDR_BASE + i] = cidr[i];
+        s->storage[PL330_PIDR_BASE + 4 * i] = pidr[i];
+        s->storage[PL330_CIDR_BASE + 4 * i] = cidr[i];
     }
 
     memory_region_init_io(&s->iomem, OBJECT(dev), &rk3588_pl330_ops, s,
