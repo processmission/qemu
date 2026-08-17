@@ -86,4 +86,12 @@ struct RockchipPCIEHostClass {
     DeviceRealize parent_realize;
 };
 
+/*
+ * Flip the LTSSM link status reported in the APB window.  Used by the
+ * RK3588 boards to expose a down link while U-Boot scans the bus and an
+ * up link once the kernel takes over (the property cannot be changed
+ * through qdev after realize).
+ */
+void rockchip_pcie_host_set_link_up(DeviceState *dev, bool up);
+
 #endif /* HW_PCI_HOST_ROCKCHIP_PCIE_H */
