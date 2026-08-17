@@ -45,6 +45,9 @@
 #include "hw/sd/rockchip_dwcmshc.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
+#include "hw/ssi/rk806.h"
+#include "hw/ssi/rockchip_sfc.h"
+#include "hw/ssi/rockchip_spi.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/timer/rockchip_stimer.h"
 #include "hw/usb/rk3588_dwc3_udc.h"
@@ -194,6 +197,7 @@ struct RK3588MachineState {
     DeviceState *sdhci;
     DeviceState *sdmmc;     /* dw_mmc - SD card controller */
     DeviceState *sfc;       /* rockchip-sfc - SPI NOR flash controller */
+    DeviceState *spi2;      /* rockchip-spi - SPI2 (RK806 PMIC) */
     DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
     DeviceState *pcie3x4;
     DeviceState *pcie3x2;
@@ -308,6 +312,7 @@ enum {
     RK3588_BROM,
     RK3588_UART2,
     RK3588_UART3,
+    RK3588_SPI2,
 };
 
 static const MemMapEntry rk3588_memmap[] = {
@@ -392,6 +397,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
     [RK3588_UART2] =        { 0xfeb50000, 0x00000100 },
     [RK3588_UART3] =        { 0xfeb60000, 0x00000100 },
+    [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
 };
 
 static hwaddr rk3588_ram_base(const RK3588MachineState *s)
@@ -424,6 +430,7 @@ enum {
     RK3588_GPIO0_SPI = 277,
     RK3588_UART2_SPI = 333,
     RK3588_UART3_SPI = 334,
+    RK3588_SPI2_SPI = 328,
 };
 
 static const char *rk3588_cpu_type(unsigned int n)
@@ -3198,6 +3205,30 @@ static void rk3588_create_crypto(RK3588MachineState *s)
     sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_CRYPTO].base);
 }
 
+/*
+ * SPI2 with the RK806 PMIC on chip-select 0.  The PMIC supplies the
+ * board regulators (vcc_3v3_s3 for the SD controller, etc.); the model
+ * exposes them enabled at their nominal voltages so the MMC and PCIe
+ * driver probe chains do not defer forever.
+ */
+static void rk3588_create_spi2(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SPI);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    DeviceState *pmic;
+
+    object_property_add_child(OBJECT(s), "spi2", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SPI2].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SPI2_SPI));
+
+    pmic = qdev_new(TYPE_RK806);
+    qdev_realize_and_unref(pmic, BUS(ROCKCHIP_SPI(dev)->spi), &error_fatal);
+
+    s->spi2 = dev;
+    object_unref(OBJECT(dev));
+}
+
 static void rk3588_create_secure_otp(RK3588MachineState *s)
 {
     const RK3588FirmwareProfile *profile = s->board->firmware_profile;
@@ -3262,6 +3293,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_sdmmc(s);
     rk3588_create_sfc(s);
     rk3588_create_gpio(s);
+    rk3588_create_spi2(s);
     rk3588_create_gmac(s);
     rk3588_create_rknpu(s);
     rk3588_create_pcie(s);
