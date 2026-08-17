@@ -770,7 +770,6 @@ static void test_rock_5b_plus_sfc_flash(void)
     g_autoptr(GError) error = NULL;
     QTestState *qts;
     int flash_fd;
-    gsize readback_size = 0;
 
     for (size_t i = 0; i < flash_size; i++) {
         pattern[i] = sfc_pattern_byte(i);
