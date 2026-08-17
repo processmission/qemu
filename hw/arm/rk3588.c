@@ -31,6 +31,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rockchip_iommu.h"
+#include "hw/misc/rk3588_rng.h"
 #include "hw/misc/rk3588_tsadc.h"
 #include "hw/misc/rk3588_rknpu.h"
 #include "hw/misc/rockchip_syscon.h"
@@ -317,6 +318,7 @@ enum {
     RK3588_TSADC_MMIO,
     RK3588_SARADC,
     RK3588_SPI2,
+    RK3588_RNG_MMIO,
 };
 
 static const MemMapEntry rk3588_memmap[] = {
@@ -404,6 +406,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
     [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
+    [RK3588_RNG_MMIO] =     { 0xfe378000, RK3588_RNG_MMIO_SIZE },
 };
 
 static hwaddr rk3588_ram_base(const RK3588MachineState *s)
@@ -438,6 +441,7 @@ enum {
     RK3588_UART3_SPI = 334,
     RK3588_TSADC_SPI = 397,
     RK3588_SPI2_SPI = 328,
+    RK3588_RNG_SPI = 400,
 };
 
 static const char *rk3588_cpu_type(unsigned int n)
@@ -3254,6 +3258,19 @@ static void rk3588_create_spi2(RK3588MachineState *s)
     object_unref(OBJECT(dev));
 }
 
+/* TRNGv1: seeds the kernel CRNG so getrandom() does not block. */
+static void rk3588_create_rng(RK3588MachineState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_RNG);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "rng", OBJECT(dev));
+    sysbus_realize(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_RNG_MMIO].base);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_RNG_SPI));
+    object_unref(OBJECT(dev));
+}
+
 static void rk3588_create_secure_otp(RK3588MachineState *s)
 {
     const RK3588FirmwareProfile *profile = s->board->firmware_profile;
@@ -3320,6 +3337,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_sfc(s);
     rk3588_create_gpio(s);
     rk3588_create_spi2(s);
+    rk3588_create_rng(s);
     rk3588_create_gmac(s);
     rk3588_create_rknpu(s);
     rk3588_create_pcie(s);
