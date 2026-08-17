@@ -304,6 +304,7 @@ enum {
     RK3588_IRAM,
     RK3588_BROM,
     RK3588_UART2,
+    RK3588_UART3,
 };
 
 static const MemMapEntry rk3588_memmap[] = {
@@ -386,6 +387,7 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_IRAM] =         { 0xff000000, RK3588_IRAM_SIZE },
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
     [RK3588_UART2] =        { 0xfeb50000, 0x00000100 },
+    [RK3588_UART3] =        { 0xfeb60000, 0x00000100 },
 };
 
 static hwaddr rk3588_ram_base(const RK3588MachineState *s)
@@ -416,6 +418,7 @@ enum {
     RK3588_PCIE3X4_SYS_SPI = 263,
     RK3588_GPIO0_SPI = 277,
     RK3588_UART2_SPI = 333,
+    RK3588_UART3_SPI = 334,
 };
 
 static const char *rk3588_cpu_type(unsigned int n)
@@ -2494,29 +2497,43 @@ static void rk3588_create_its(RK3588MachineState *s)
     }
 }
 
-static void rk3588_create_uart(RK3588MachineState *s)
+static void rk3588_create_one_uart(RK3588MachineState *s, int memmap_idx,
+                                   int spi, int serial_idx,
+                                   const char *vendor_name)
 {
     DeviceState *vendor;
     SysBusDevice *vendor_sbd;
 
-    /*
-     * UART2 is a Synopsys dw-apb-uart (16550-compatible). serial_mm models the
-     * standard 16550 range (8 registers, regshift 2 -> a 0x20-byte window). The
-     * DesignWare extension registers (USR @0x7c, DMASA, CPR/UCV/CTR) sit
-     * above that window. Cover only that range so it does not overlap serial_mm.
-     */
-    serial_mm_init(get_system_memory(), rk3588_memmap[RK3588_UART2].base, 2,
-                   qdev_get_gpio_in(s->gic, RK3588_UART2_SPI),
+    serial_mm_init(get_system_memory(), rk3588_memmap[memmap_idx].base, 2,
+                   qdev_get_gpio_in(s->gic, spi),
                    RK3588_UART_BAUDBASE,
-                   serial_hd(s->zephyr_ram ? 1 : 0), DEVICE_LITTLE_ENDIAN);
+                   serial_hd(serial_idx), DEVICE_LITTLE_ENDIAN);
 
     vendor = qdev_new(TYPE_DW_APB_UART_VENDOR);
     vendor_sbd = SYS_BUS_DEVICE(vendor);
-    object_property_add_child(OBJECT(s), "uart2-vendor", OBJECT(vendor));
+    object_property_add_child(OBJECT(s), vendor_name, OBJECT(vendor));
     sysbus_realize(vendor_sbd, &error_fatal);
     sysbus_mmio_map(vendor_sbd, 0,
-                    rk3588_memmap[RK3588_UART2].base +
+                    rk3588_memmap[memmap_idx].base +
                     DW_APB_UART_VENDOR_BASE);
+}
+
+static void rk3588_create_uart(RK3588MachineState *s)
+{
+    /*
+     * UART2/UART3 are Synopsys dw-apb-uart (16550-compatible). serial_mm
+     * models the standard 16550 range (8 registers, regshift 2 -> a 0x20-byte
+     * window). The DesignWare extension registers (USR @0x7c, DMASA,
+     * CPR/UCV/CTR) sit above that window. Cover only that range so it does
+     * not overlap serial_mm.
+     *
+     * In zephyr-ram mode serial_hd(0) is the DWC3 UDC CDC bridge and
+     * serial_hd(1) is the UART2 console, so UART3 takes serial_hd(2).
+     */
+    rk3588_create_one_uart(s, RK3588_UART2, RK3588_UART2_SPI,
+                           s->zephyr_ram ? 1 : 0, "uart2-vendor");
+    rk3588_create_one_uart(s, RK3588_UART3, RK3588_UART3_SPI,
+                           s->zephyr_ram ? 2 : 1, "uart3-vendor");
 }
 
 static void rk3588_attach_emmc_card(RK3588MachineState *s)
