@@ -95,12 +95,15 @@ static void hym8563_tick(void *opaque)
         }
     }
 
-    /* SEC..DAY alarm fields. */
+    /*
+     * Alarm registers 0x09..0x0c hold minute, hour, day and weekday;
+     * each is compared against the matching live time register.
+     */
     for (i = 0; i < 4; i++) {
         uint8_t mask = i == 0 ? 0x7f : 0x3f;
 
         if (!(alarm[i] & BIT(7)) &&
-            (s->regs[HYM8563_SEC + i] & mask) != (alarm[i] & mask)) {
+            (s->regs[HYM8563_SEC + 1 + i] & mask) != (alarm[i] & mask)) {
             match = false;
             break;
         }
@@ -111,6 +114,11 @@ static void hym8563_tick(void *opaque)
 
     s->regs[HYM8563_CTL2] = ctl2;
     hym8563_update_irq(s);
+
+    /* Keep the one-second cadence going. */
+    timer_mod(s->tick_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              NANOSECONDS_PER_SECOND);
 }
 
 static void hym8563_capture_current_time(Hym8563State *s)
