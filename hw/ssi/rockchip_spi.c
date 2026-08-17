@@ -70,10 +70,13 @@ static void rockchip_spi_update_irq(RockchipSPIState *s)
 
 static void rockchip_spi_update_status(RockchipSPIState *s)
 {
-    unsigned int rxftlr = (s->rxftlr + 1) & 0x3f;
-
+    /*
+     * RF_FULL asserts once the RX FIFO level exceeds the programmed
+     * RXFTLR value.  The Linux driver programs words - 1 (zero for a
+     * one-word read), so a single received byte must assert it.
+     */
     s->isr = INT_TF_EMPTY;
-    if (s->rx_level > rxftlr) {
+    if (s->rx_level > s->rxftlr) {
         s->isr |= INT_RF_FULL;
     }
     rockchip_spi_update_irq(s);
