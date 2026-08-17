@@ -3210,6 +3210,27 @@ static void rk3588_init(MachineState *machine)
     }
 
     if (machine->kernel_filename) {
+        /*
+         * arm/boot.c only invokes the ARMLinuxBootIf handoff for raw
+         * Linux images; ELF kernels skip it, leaving a TZ-aware GIC with
+         * all interrupts in Group 0 that NS guests can neither reassign
+         * nor enable. Zephyr-ram direct boot is known to run NonSecure,
+         * so run the same handoff for it: the GIC resets with all
+         * interrupts in NonSecure Group 1, as secure firmware would have
+         * configured it on real hardware.
+         *
+         * Other ELF payloads (e.g. U-Boot or BL31) boot at secure EL3
+         * and may rely on or test the hardware Group 0 reset state, so
+         * leave the GIC untouched for them.
+         */
+        if (s->zephyr_ram) {
+            ARMLinuxBootIf *albif = ARM_LINUX_BOOT_IF(s->gic);
+            ARMLinuxBootIfClass *albifc = ARM_LINUX_BOOT_IF_GET_CLASS(albif);
+
+            if (albifc->arm_linux_init) {
+                albifc->arm_linux_init(albif, false);
+            }
+        }
         arm_load_kernel(s->cpu[0], machine, &s->bootinfo);
     } else {
         Error *local_err = NULL;
