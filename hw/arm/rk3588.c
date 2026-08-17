@@ -400,8 +400,16 @@ enum {
     RK3588_CRYPTO,
     RK3588_IRAM,
     RK3588_BROM,
+    RK3588_UART0,
+    RK3588_UART1,
     RK3588_UART2,
     RK3588_UART3,
+    RK3588_UART4,
+    RK3588_UART5,
+    RK3588_UART6,
+    RK3588_UART7,
+    RK3588_UART8,
+    RK3588_UART9,
     RK3588_TSADC_MMIO,
     RK3588_SARADC,
     RK3588_COMBPHY0,
@@ -503,8 +511,16 @@ static const MemMapEntry rk3588_memmap[] = {
                               ROCKCHIP_CRYPTO_V2_MMIO_SIZE },
     [RK3588_IRAM] =         { 0xff000000, RK3588_IRAM_SIZE },
     [RK3588_BROM] =         { RK3588_BROM_TRAMPOLINE, 0x00001000 },
+    [RK3588_UART0] =        { 0xfd890000, 0x00000100 },
+    [RK3588_UART1] =        { 0xfeb40000, 0x00000100 },
     [RK3588_UART2] =        { 0xfeb50000, 0x00000100 },
     [RK3588_UART3] =        { 0xfeb60000, 0x00000100 },
+    [RK3588_UART4] =        { 0xfeb70000, 0x00000100 },
+    [RK3588_UART5] =        { 0xfeb80000, 0x00000100 },
+    [RK3588_UART6] =        { 0xfeb90000, 0x00000100 },
+    [RK3588_UART7] =        { 0xfeba0000, 0x00000100 },
+    [RK3588_UART8] =        { 0xfebb0000, 0x00000100 },
+    [RK3588_UART9] =        { 0xfebc0000, 0x00000100 },
     [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
     [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
     /*
@@ -563,13 +579,50 @@ enum {
     RK3588_PCIE2X1L2_PMC_SPI = 252,
     RK3588_PCIE2X1L2_SYS_SPI = 253,
     RK3588_GPIO0_SPI = 277,
+    RK3588_UART0_SPI = 331,
+    RK3588_UART1_SPI = 332,
     RK3588_UART2_SPI = 333,
     RK3588_UART3_SPI = 334,
+    RK3588_UART4_SPI = 335,
+    RK3588_UART5_SPI = 336,
+    RK3588_UART6_SPI = 337,
+    RK3588_UART7_SPI = 338,
+    RK3588_UART8_SPI = 339,
+    RK3588_UART9_SPI = 340,
     RK3588_TSADC_SPI = 397,
     RK3588_SPI2_SPI = 328,
     RK3588_I2C6_SPI = 323,
     RK3588_DMAC1_SPI = 86,
     RK3588_RNG_SPI = 400,
+};
+
+/*
+ * RK3588 UARTs (rockchip,rk3588-uart / snps,dw-apb-uart).  Every port
+ * is modeled, but only the ones with I/O routed out on the ROCK 5B+
+ * (40-pin header / debug console: UART1, UART2, UART3, UART4, UART7)
+ * get a serial chardev; the rest exist without external output.
+ * UART2 is the console: it keeps serial_hd(0) (serial_hd(1) with
+ * zephyr-ram) so the existing -serial mon:stdio flow is unchanged;
+ * the routed ports map to serial_hd(1..4) in table order.
+ */
+typedef struct RK3588UARTInfo {
+    const char *name;
+    int memidx;
+    int spi;
+    int chr_index;
+} RK3588UARTInfo;
+
+static const RK3588UARTInfo rk3588_uarts[] = {
+    { "uart0", RK3588_UART0, RK3588_UART0_SPI, -1 },
+    { "uart1", RK3588_UART1, RK3588_UART1_SPI, 1 },
+    { "uart2", RK3588_UART2, RK3588_UART2_SPI, 0 },
+    { "uart3", RK3588_UART3, RK3588_UART3_SPI, 2 },
+    { "uart4", RK3588_UART4, RK3588_UART4_SPI, 3 },
+    { "uart5", RK3588_UART5, RK3588_UART5_SPI, -1 },
+    { "uart6", RK3588_UART6, RK3588_UART6_SPI, -1 },
+    { "uart7", RK3588_UART7, RK3588_UART7_SPI, 4 },
+    { "uart8", RK3588_UART8, RK3588_UART8_SPI, -1 },
+    { "uart9", RK3588_UART9, RK3588_UART9_SPI, -1 },
 };
 
 static const char *rk3588_cpu_type(unsigned int n)
@@ -671,8 +724,7 @@ static void rk3588_fdt_add_timer_node(void *fdt)
     qemu_fdt_setprop(fdt, timer, "always-on", NULL, 0);
 }
 
-static void rk3588_fdt_add_one_uart_node(void *fdt, const char *uart,
-                                         int memmap_idx, uint32_t spi)
+static void rk3588_fdt_add_uart_nodes(void *fdt)
 {
     static const char * const compat[] = {
         "rockchip,rk3588-uart",
@@ -680,37 +732,36 @@ static void rk3588_fdt_add_one_uart_node(void *fdt, const char *uart,
         "ns16550a",
     };
 
-    qemu_fdt_add_subnode(fdt, uart);
-    qemu_fdt_setprop_string_array(fdt, uart, "compatible",
-                                  (char **)&compat, ARRAY_SIZE(compat));
-    qemu_fdt_setprop_sized_cells(fdt, uart, "reg",
-                                 2, rk3588_memmap[memmap_idx].base,
-                                 2, rk3588_memmap[memmap_idx].size);
-    qemu_fdt_setprop_cells(fdt, uart, "interrupts",
-                           FDT_GIC_SPI, spi,
-                           FDT_IRQ_TYPE_LEVEL_HIGH, 0);
-    qemu_fdt_setprop_cell(fdt, uart, "clock-frequency", RK3588_GTIMER_HZ);
-    qemu_fdt_setprop_cell(fdt, uart, "current-speed", RK3588_UART_BAUDBASE);
-    qemu_fdt_setprop_cell(fdt, uart, "reg-shift", 2);
-    qemu_fdt_setprop_cell(fdt, uart, "reg-io-width", 4);
-    qemu_fdt_setprop_string(fdt, uart, "status", "okay");
-}
-
-static void rk3588_fdt_add_uart_node(void *fdt)
-{
-    const char *uart2 = "/serial@feb50000";
-    const char *uart3 = "/serial@feb60000";
-
     qemu_fdt_add_subnode(fdt, "/aliases");
-    qemu_fdt_setprop_string(fdt, "/aliases", "serial2", uart2);
-    qemu_fdt_setprop_string(fdt, "/aliases", "serial3", uart3);
-
     qemu_fdt_add_subnode(fdt, "/chosen");
-    qemu_fdt_setprop_string(fdt, "/chosen", "stdout-path", "serial2:1500000n8");
 
-    rk3588_fdt_add_one_uart_node(fdt, uart2, RK3588_UART2, RK3588_UART2_SPI);
-    rk3588_fdt_add_one_uart_node(fdt, uart3, RK3588_UART3, RK3588_UART3_SPI);
+    for (unsigned int i = 0; i < ARRAY_SIZE(rk3588_uarts); i++) {
+        const RK3588UARTInfo *u = &rk3588_uarts[i];
+        g_autofree char *alias = g_strdup_printf("serial%u", i);
+        g_autofree char *node = g_strdup_printf("/serial@%" PRIx64,
+                                                rk3588_memmap[u->memidx].base);
+
+        qemu_fdt_setprop_string(fdt, "/aliases", alias, node);
+
+        qemu_fdt_add_subnode(fdt, node);
+        qemu_fdt_setprop_string_array(fdt, node, "compatible",
+                                      (char **)&compat, ARRAY_SIZE(compat));
+        qemu_fdt_setprop_sized_cells(fdt, node, "reg",
+                                     2, rk3588_memmap[u->memidx].base,
+                                     2, rk3588_memmap[u->memidx].size);
+        qemu_fdt_setprop_cells(fdt, node, "interrupts",
+                               FDT_GIC_SPI, u->spi,
+                               FDT_IRQ_TYPE_LEVEL_HIGH, 0);
+        qemu_fdt_setprop_cell(fdt, node, "clock-frequency", RK3588_GTIMER_HZ);
+        qemu_fdt_setprop_cell(fdt, node, "current-speed", RK3588_UART_BAUDBASE);
+        qemu_fdt_setprop_cell(fdt, node, "reg-shift", 2);
+        qemu_fdt_setprop_cell(fdt, node, "reg-io-width", 4);
+        qemu_fdt_setprop_string(fdt, node, "status", "okay");
+    }
+
+    qemu_fdt_setprop_string(fdt, "/chosen", "stdout-path", "serial2:1500000n8");
 }
+
 static uint32_t rk3588_fdt_add_fixed_clock_node(void *fdt)
 {
     const char *clk = "/xin24m";
@@ -1644,7 +1695,7 @@ static void *rk3588_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     rk3588_fdt_add_cpu_nodes(s, fdt);
     rk3588_fdt_add_gic_node(fdt, &its0_phandle, &its1_phandle);
     rk3588_fdt_add_timer_node(fdt);
-    rk3588_fdt_add_uart_node(fdt);
+    rk3588_fdt_add_uart_nodes(fdt);
     rk3588_fdt_add_storage_nodes(fdt, clk_phandle, scmi_clk_phandle);
     rk3588_fdt_add_sfc_node(fdt, clk_phandle);
     rk3588_fdt_add_i2c6_node(fdt, clk_phandle);
@@ -3025,43 +3076,42 @@ static void rk3588_create_its(RK3588MachineState *s)
     }
 }
 
-static void rk3588_create_one_uart(RK3588MachineState *s, int memmap_idx,
-                                   int spi, int serial_idx,
-                                   const char *vendor_name)
+static void rk3588_create_uarts(RK3588MachineState *s)
 {
-    DeviceState *vendor;
-    SysBusDevice *vendor_sbd;
+    for (unsigned int i = 0; i < ARRAY_SIZE(rk3588_uarts); i++) {
+        const RK3588UARTInfo *u = &rk3588_uarts[i];
+        DeviceState *vendor;
+        SysBusDevice *vendor_sbd;
+        g_autofree char *name = g_strdup_printf("%s-vendor", u->name);
+        int chr_index = u->chr_index;
 
-    serial_mm_init(get_system_memory(), rk3588_memmap[memmap_idx].base, 2,
-                   qdev_get_gpio_in(s->gic, spi),
-                   RK3588_UART_BAUDBASE,
-                   serial_hd(serial_idx), DEVICE_LITTLE_ENDIAN);
+        if (u->memidx == RK3588_UART2) {
+            /* The console UART keeps the legacy chardev slot. */
+            chr_index = s->zephyr_ram ? 1 : 0;
+        }
 
-    vendor = qdev_new(TYPE_DW_APB_UART_VENDOR);
-    vendor_sbd = SYS_BUS_DEVICE(vendor);
-    object_property_add_child(OBJECT(s), vendor_name, OBJECT(vendor));
-    sysbus_realize(vendor_sbd, &error_fatal);
-    sysbus_mmio_map(vendor_sbd, 0,
-                    rk3588_memmap[memmap_idx].base +
-                    DW_APB_UART_VENDOR_BASE);
-}
+        /*
+         * Each UART is a Synopsys dw-apb-uart (16550-compatible).
+         * serial_mm models the standard 16550 range (8 registers,
+         * regshift 2 -> a 0x20-byte window).  The DesignWare extension
+         * registers (USR @0x7c, ...) sit above that window; cover only
+         * that range so it does not overlap serial_mm.  Ports without
+         * routed I/O pass no chardev, so they stay usable in the guest
+         * but have no external backend.
+         */
+        serial_mm_init(get_system_memory(), rk3588_memmap[u->memidx].base, 2,
+                       qdev_get_gpio_in(s->gic, u->spi),
+                       RK3588_UART_BAUDBASE,
+                       chr_index >= 0 ? serial_hd(chr_index) : NULL,
+                       DEVICE_LITTLE_ENDIAN);
 
-static void rk3588_create_uart(RK3588MachineState *s)
-{
-    /*
-     * UART2/UART3 are Synopsys dw-apb-uart (16550-compatible). serial_mm
-     * models the standard 16550 range (8 registers, regshift 2 -> a 0x20-byte
-     * window). The DesignWare extension registers (USR @0x7c, DMASA,
-     * CPR/UCV/CTR) sit above that window. Cover only that range so it does
-     * not overlap serial_mm.
-     *
-     * In zephyr-ram mode serial_hd(0) is the DWC3 UDC CDC bridge and
-     * serial_hd(1) is the UART2 console, so UART3 takes serial_hd(2).
-     */
-    rk3588_create_one_uart(s, RK3588_UART2, RK3588_UART2_SPI,
-                           s->zephyr_ram ? 1 : 0, "uart2-vendor");
-    rk3588_create_one_uart(s, RK3588_UART3, RK3588_UART3_SPI,
-                           s->zephyr_ram ? 2 : 1, "uart3-vendor");
+        vendor = qdev_new(TYPE_DW_APB_UART_VENDOR);
+        vendor_sbd = SYS_BUS_DEVICE(vendor);
+        object_property_add_child(OBJECT(s), name, OBJECT(vendor));
+        sysbus_realize(vendor_sbd, &error_fatal);
+        sysbus_mmio_map(vendor_sbd, 0, rk3588_memmap[u->memidx].base +
+                        DW_APB_UART_VENDOR_BASE);
+    }
 }
 
 static void rk3588_attach_emmc_card(RK3588MachineState *s)
@@ -3998,7 +4048,7 @@ static void rk3588_init(MachineState *machine)
     rk3588_create_secure_otp(s);
     rk3588_create_crypto(s);
     rk3588_create_tsadc(s);
-    rk3588_create_uart(s);
+    rk3588_create_uarts(s);
     rk3588_create_sdhci(s);
     rk3588_create_sdmmc(s);
     rk3588_create_sfc(s);

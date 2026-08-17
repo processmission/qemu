@@ -44,8 +44,14 @@ RK3588 kernel and ZVM smoke tests:
   firmware and ZVM paths.  The RK3588 machines do not install RK3588-only CPU
   compatibility properties for EL2 FP/SIMD traps or EL2 PAN handling.
 * GICv3 with two ITS blocks and LPI support.
-* UART2 through QEMU's ``serial_mm`` 16550-compatible model, plus a vendor
-  register cover for the DesignWare APB UART window.
+* All ten RK3588 UARTs (UART0-UART9) through QEMU's ``serial_mm``
+  16550-compatible model, each with a DesignWare APB UART vendor
+  register cover (USR @0x7c).  Only the ports with I/O routed out on
+  the ROCK 5B+ (UART1, UART2, UART3, UART4, UART7) bind a serial
+  chardev: UART2 keeps ``serial_hd(0)`` as the console, the others
+  map to ``-serial`` slots 1..4 in table order.  The remaining
+  ports (UART0, UART5, UART6, UART8, UART9) are modeled without
+  external output.
 * Rockchip GPIO banks.
 * Dedicated RK3588 PMU0/PMU1/SYS GRF banks, plus reusable Rockchip RAM-backed
   syscon blocks for IOC and firewall-style register banks.
