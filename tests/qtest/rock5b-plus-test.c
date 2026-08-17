@@ -1053,6 +1053,38 @@ static ssize_t socket_recv_some(int fd, void *buf, size_t len)
     return recv(fd, buf, len, 0);
 }
 
+static void test_rock_5b_plus_sdhci_cmd1(void)
+{
+    gchar *card = g_strdup("/tmp/rock5b-sdhci-card-XXXXXX");
+    QTestState *qts;
+    const uint32_t b = 0xfe2e0000ULL;
+    int fd = mkstemp(card);
+
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                      " -smp 1 -m 512M"
+                      " -drive if=sd,index=0,file=%s,format=raw", card);
+    unlink(card);
+    g_free(card);
+
+    /* Power on the eMMC SDHCI controller, unmask the command-complete
+     * interrupt, and check the card slot reports the inserted card. */
+    qtest_writeb(qts, b + 0x29, 0x0f);   /* SDHCI_POWER_CONTROL */
+    qtest_writel(qts, b + 0x2c, 0x0007); /* SDHCI_CLKCON: clocks on */
+    qtest_writel(qts, b + 0x34, 0x0001); /* NORINTSTSEN: CMDCMP */
+    g_assert_cmphex(qtest_readl(qts, b + 0x24) & 0x00010000,
+                    ==, 0x00010000);     /* card present */
+
+    /* Issue CMD1 (SEND_OP_COND) with a 48-bit response; the controller
+     * completes the command and raises the command-complete status. */
+    qtest_writel(qts, b + 0x08, 0x00000000);  /* argument */
+    qtest_writel(qts, b + 0x0e, (1 << 8) | 1); /* CMD1 | 48-bit resp */
+    g_assert_cmphex(qtest_readl(qts, b + 0x30) & 0x0001, ==, 0x0001);
+
+    qtest_quit(qts);
+}
+
 static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
 {
     static const uint8_t tx_frame[60] = {
@@ -1336,6 +1368,8 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_crypto_sha256);
     qtest_add_func("/rock-5b-plus/sfc-flash",
                    test_rock_5b_plus_sfc_flash);
+    qtest_add_func("/rock-5b-plus/sdhci-cmd1",
+                   test_rock_5b_plus_sdhci_cmd1);
     qtest_add_func("/rock-5b-plus/pcie2x1l0-virtio-net",
                    test_rock_5b_plus_pcie2x1l0_virtio_net);
 
