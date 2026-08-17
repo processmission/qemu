@@ -283,7 +283,8 @@ static void designware_pcie_update_viewport(DesignwarePCIERoot *root,
 {
     const uint64_t target = viewport->target;
     const uint64_t base   = viewport->base;
-    const uint64_t size   = (uint64_t)viewport->limit - base + 1;
+    const uint64_t size   = viewport->limit == UINT64_MAX ? UINT64_MAX :
+                            (uint64_t)viewport->limit - base + 1;
     const bool enabled    = viewport->cr[1] & DESIGNWARE_PCIE_ATU_ENABLE;
 
     MemoryRegion *current, *other;
@@ -436,7 +437,13 @@ static void designware_pcie_root_realize(PCIDevice *dev, Error **errp)
         viewport->inbound = true;
         viewport->base    = 0x0000000000000000ULL;
         viewport->target  = 0x0000000000000000ULL;
-        viewport->limit   = UINT32_MAX;
+        /*
+         * The default inbound window passes all inbound TLPs through,
+         * so it must cover the whole address space: guests with RAM
+         * above 4 GiB DMA from high pages and a 32-bit window would
+         * leave those accesses untranslated.
+         */
+        viewport->limit   = UINT64_MAX;
         viewport->cr[0]   = DESIGNWARE_PCIE_ATU_TYPE_MEM;
 
         source      = &host->pci.address_space_root;
@@ -562,12 +569,12 @@ static const VMStateDescription vmstate_designware_pcie_msi = {
 
 static const VMStateDescription vmstate_designware_pcie_viewport = {
     .name = "designware-pcie-viewport",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(base, DesignwarePCIEViewport),
         VMSTATE_UINT64(target, DesignwarePCIEViewport),
-        VMSTATE_UINT32(limit, DesignwarePCIEViewport),
+        VMSTATE_UINT64_V(limit, DesignwarePCIEViewport, 2),
         VMSTATE_UINT32_ARRAY(cr, DesignwarePCIEViewport, 2),
         VMSTATE_END_OF_LIST()
     }
