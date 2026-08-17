@@ -282,6 +282,7 @@ struct RK3588MachineState {
     MemoryRegion sram;
     MemoryRegion iram;
     MemoryRegion atags;
+    MemoryRegion ramoops;
     MemoryRegion zvm_low_ram;
     MemoryRegion zvm_high_ram;
     MemoryRegion bootrom;
@@ -2184,6 +2185,17 @@ static void rk3588_create_low_memory(RK3588MachineState *s)
     memory_region_add_subregion(sysmem, rk3588_memmap[RK3588_ATAGS].base,
                                 &s->atags);
     rk3588_write_atags(s);
+
+    /*
+     * Reserved DRAM backing the vendor DTB's ramoops@110000 pstore
+     * window (0x110000, 0xe0000 bytes).  The real board's boot firmware
+     * keeps the first MiBs of DRAM reserved below the 0x200000 memory
+     * start; the pstore driver reads this window at probe and must not
+     * take a synchronous external abort on an unmapped address.
+     */
+    memory_region_init_ram(&s->ramoops, NULL, "rk3588.ramoops",
+                           0x000e0000, &error_fatal);
+    memory_region_add_subregion(sysmem, 0x00110000, &s->ramoops);
 
     memory_region_init_ram(&s->iram, NULL, "rk3588.iram",
                            rk3588_memmap[RK3588_IRAM].size, &error_fatal);
