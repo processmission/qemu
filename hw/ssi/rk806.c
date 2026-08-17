@@ -64,6 +64,8 @@ static uint32_t rk806_transfer(SSIPeripheral *ss, uint32_t tx)
     case RK806_FRAME_DATA:
         if (s->frame_remain) {
             s->regs[s->frame_addr] = byte;
+            /* Bulk frames address sequential registers. */
+            s->frame_addr++;
             s->frame_remain--;
             if (!s->frame_remain) {
                 s->frame_state = RK806_FRAME_CMD;
@@ -74,6 +76,8 @@ static uint32_t rk806_transfer(SSIPeripheral *ss, uint32_t tx)
         if (s->frame_remain) {
             uint8_t val = s->regs[s->frame_addr];
 
+            /* Bulk frames address sequential registers. */
+            s->frame_addr++;
             s->frame_remain--;
             if (!s->frame_remain) {
                 s->frame_state = RK806_FRAME_CMD;
