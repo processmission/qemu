@@ -527,7 +527,7 @@ static void rockchip_sfc_reset(DeviceState *dev)
 
 static const VMStateDescription vmstate_rockchip_sfc = {
     .name = "rockchip-sfc",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ctrl, RockchipSFCState),
@@ -541,6 +541,28 @@ static const VMStateDescription vmstate_rockchip_sfc = {
         VMSTATE_UINT32(dma_addr, RockchipSFCState),
         VMSTATE_UINT32(cmd_reg, RockchipSFCState),
         VMSTATE_UINT32(addr_reg, RockchipSFCState),
+        /*
+         * Version 2: carry the pending operation across migration.
+         * Transfers span multiple MMIO writes (CMD, ADDR, DATA words),
+         * so the destination needs op, rx and tx to continue them.
+         */
+        VMSTATE_UINT32_V(op.opcode, RockchipSFCState, 2),
+        VMSTATE_UINT32_V(op.addr, RockchipSFCState, 2),
+        VMSTATE_UINT8_V(op.addr_nbytes, RockchipSFCState, 2),
+        VMSTATE_UINT8_V(op.dummy_bytes, RockchipSFCState, 2),
+        VMSTATE_UINT8_V(op.dir, RockchipSFCState, 2),
+        VMSTATE_UINT8_V(op.cs, RockchipSFCState, 2),
+        VMSTATE_UINT32_V(op.len, RockchipSFCState, 2),
+        VMSTATE_BOOL_V(op.cmd_sent, RockchipSFCState, 2),
+        VMSTATE_BOOL_V(op.addr_sent, RockchipSFCState, 2),
+        VMSTATE_BOOL_V(op.pending, RockchipSFCState, 2),
+        VMSTATE_UINT32_V(rx_len, RockchipSFCState, 2),
+        VMSTATE_UINT32_V(rx_pos, RockchipSFCState, 2),
+        VMSTATE_VARRAY_UINT32_ALLOC(rx, RockchipSFCState, rx_len, 2,
+                                      vmstate_info_uint8, uint8_t),
+        VMSTATE_UINT32_V(tx_len, RockchipSFCState, 2),
+        VMSTATE_VARRAY_UINT32_ALLOC(tx, RockchipSFCState, tx_len, 2,
+                                      vmstate_info_uint8, uint8_t),
         VMSTATE_END_OF_LIST()
     },
 };
