@@ -103,6 +103,38 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_RKNS_HEADER_SIZE 2048
 #define RK3588_RKNS_SECTOR_SIZE 512
 #define RK3588_UBOOT_LOAD_ADDR 0x00800000ULL
+/*
+ * U-Boot proper loads the kernel DTB from the boot media into low RAM
+ * before jumping to the kernel (booti).  The vendor Radxa images put it
+ * at the standard Rockchip address.  booti() rewrites /chosen/bootargs
+ * from U-Boot's own environment immediately before entering the kernel,
+ * so when the firmware-bootargs property is set the machine keeps
+ * re-patching /chosen/bootargs (idempotently) on a short timer until
+ * the kernel entry PC is seen; after that the DTB is left untouched
+ * for the kernel to walk.  The unmodified official image can then be
+ * booted headless without an interactive U-Boot session.
+ */
+#define RK3588_UBOOT_DTB_ADDR 0x08300000ULL
+/*
+ * The main loop polls timer deadlines on real time while TCG runs the
+ * guest faster than real time, so a 500us deadline is ~2ms of guest
+ * time and can miss the kernel's short low-RAM phase.  50us keeps the
+ * guest-time tick period well under a millisecond.
+ */
+#define RK3588_FIRMWARE_BOOTARGS_INTERVAL_NS (50 * SCALE_US)
+#define RK3588_FIRMWARE_BOOTARGS_DEADLINE_NS (300ULL * 1000 * SCALE_MS)
+/*
+ * The vendor image's U-Boot loads the kernel image at 0x00400000 (the
+ * kernel's early code runs there in low RAM until __primary_switch,
+ * then at high virtual addresses); the DTB sits at 0x08300000, outside
+ * the range below.  U-Boot itself runs from high RAM after relocation
+ * and never uses high virtual addresses.
+ */
+#define RK3588_KERNEL_LOAD_ADDR 0x00400000ULL
+#define RK3588_KERNEL_ENTRY_RANGE 0x00400000ULL
+#define RK3588_KERNEL_VA_BASE 0xffff800000000000ULL
+/* Slack kept in the patched DTB so U-Boot's own booti fixups still fit. */
+#define RK3588_FIRMWARE_BOOTARGS_SLACK 0x4000
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
 #define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
@@ -239,6 +271,10 @@ struct RK3588MachineState {
     bool zephyr_ram;
     bool pcie_links_up;
     bool kernel_started;
+    bool kernel_entered;
+    int64_t bootargs_patch_start_ns;
+    char *firmware_bootargs;
+    QEMUTimer *bootargs_timer;
     RK3588BootROM bootrom_state;
 };
 
@@ -262,6 +298,7 @@ G_STATIC_ASSERT(ARRAY_SIZE(rk3588_cpu_mpidr) == RK3588_MAX_CPUS);
 G_STATIC_ASSERT(ARRAY_SIZE(rk3588_cpu_types) == RK3588_MAX_CPUS);
 
 static void rk3588_firmware_patch_tick(void *opaque);
+static void rk3588_arm_bootargs_patch(RK3588MachineState *s);
 static bool rk3588_dynamic_fit_handoff(RK3588MachineState *s);
 
 enum {
@@ -1841,6 +1878,7 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
     rk3588_set_uboot_cpu_state(s, cpu);
     s->firmware_handoff_done = true;
     rk3588_usb2_host_set_active(s->usb2_host, true);
+    rk3588_arm_bootargs_patch(s);
 }
 
 static void rk3588_firmware_handoff_work(CPUState *cs,
@@ -1857,8 +1895,174 @@ static void rk3588_schedule_firmware_handoff(RK3588MachineState *s,
     rk3588_prepare_nonsecure_linux_interrupts(s);
     s->firmware_handoff_done = true;
     rk3588_usb2_host_set_active(s->usb2_host, true);
+    rk3588_arm_bootargs_patch(s);
     async_run_on_cpu(CPU(cpu), rk3588_firmware_handoff_work,
                      RUN_ON_CPU_HOST_PTR(s));
+}
+
+static void rk3588_arm_bootargs_patch(RK3588MachineState *s)
+{
+    if (s->bootargs_timer && s->firmware_bootargs &&
+        s->firmware_bootargs[0]) {
+        s->bootargs_patch_start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        timer_mod(s->bootargs_timer,
+                  s->bootargs_patch_start_ns +
+                  RK3588_FIRMWARE_BOOTARGS_INTERVAL_NS);
+    }
+}
+
+/*
+ * Patch /chosen/bootargs in the kernel DTB that U-Boot loaded into RAM.
+ * Runs against a host-side copy with libfdt slack so the property can
+ * grow, then writes the repacked tree back in place (the kernel only
+ * ever reads the DTB through the address U-Boot passed in x0).
+ *
+ * The patch is idempotent: once the requested parameters are present in
+ * /chosen/bootargs the tree is left alone, so repeated polling never
+ * grows the command line.  booti() rewrites bootargs from its own
+ * environment right before entering the kernel, so the poller keeps
+ * re-applying the patch until the kernel entry PC is seen (see
+ * rk3588_firmware_bootargs_tick()).
+ */
+/*
+ * Patch /chosen/bootargs in place.  The new value is built to fit the
+ * existing property slot (the trailing Rockchip "androidboot.fwver"
+ * marker is dropped to make room), so the DTB layout never changes:
+ * U-Boot's libfdt fixups and the kernel's unflatten keep their cached
+ * offsets valid, and a plain 400-byte store cannot race either of them.
+ * Idempotent: once the requested parameters are present the tree is
+ * left alone.
+ */
+static void rk3588_patch_firmware_bootargs(RK3588MachineState *s)
+{
+    hwaddr dtb_addr = RK3588_UBOOT_DTB_ADDR;
+    uint32_t magic, totalsize;
+    g_autofree uint8_t *src = NULL;
+    const char *extra = s->firmware_bootargs;
+    static const char fwver_tail[] =
+        " androidboot.fwver=uboot-17.09-64-3-07/24/202626";
+    int chosen = -1;
+
+    if (!extra || !extra[0]) {
+        return;
+    }
+
+    /*
+     * The DTB is stored big-endian in memory (FDT format), so the raw
+     * 32-bit reads need a byte swap before comparing with the magic.
+     */
+    if (!rk3588_phys_read32(dtb_addr, &magic)) {
+        return;
+    }
+    magic = bswap32(magic);
+    if (magic != 0xd00dfeed) {
+        return;
+    }
+    if (!rk3588_phys_read32(dtb_addr + 4, &totalsize)) {
+        return;
+    }
+    totalsize = bswap32(totalsize);
+    if (totalsize < 8 || totalsize > 0x100000) {
+        return;
+    }
+
+    src = g_malloc(0x100000);
+    address_space_read(&address_space_memory, dtb_addr,
+                       MEMTXATTRS_UNSPECIFIED, src, totalsize);
+
+    chosen = fdt_path_offset(src, "/chosen");
+    if (chosen < 0) {
+        return;
+    }
+
+    {
+        int plen;
+        const char *old = fdt_getprop(src, chosen, "bootargs", &plen);
+        g_autofree char *newargs = NULL;
+        size_t oldlen, newlen;
+
+        if (!old || plen <= 0) {
+            return;
+        }
+        if (strstr(old, extra)) {
+            return; /* already patched */
+        }
+        oldlen = strlen(old);
+        if (oldlen > sizeof(fwver_tail) - 1) {
+            /*
+             * Drop the trailing Rockchip "androidboot.fwver" marker to
+             * make room for the extra parameters inside the existing
+             * property slot (the value must not grow).
+             */
+            newargs = g_strdup_printf("%.*s %s",
+                                      (int)(oldlen - (sizeof(fwver_tail) - 1)),
+                                      old, extra);
+        } else {
+            /* Unknown tail: append only if it still fits the slot. */
+            newargs = g_strdup_printf("%s %s", old, extra);
+        }
+        newlen = strlen(newargs) + 1;
+        if (newlen > (size_t)plen) {
+            return; /* does not fit the existing slot in place */
+        }
+
+        {
+            g_autofree uint8_t *slot = g_malloc0(plen);
+
+            memcpy(slot, newargs, newlen);
+            address_space_write(&address_space_memory,
+                                dtb_addr + (hwaddr)(old - (const char *)src),
+                                MEMTXATTRS_UNSPECIFIED, slot, plen);
+        }
+    }
+}
+
+/*
+ * Polling tick for the firmware-bootargs DTB patch.
+ *
+ * booti() rewrites /chosen/bootargs from U-Boot's environment (from the
+ * extlinux append line) immediately before jumping to the kernel, so
+ * patching earlier would be overwritten.  The tick therefore does
+ * nothing but wait until the CPU reaches the kernel entry in low RAM:
+ * by then U-Boot's fixups are finished, the DTB is stable, and the
+ * kernel will not unflatten it for a long time (its early phase runs
+ * head.S and the page-table setup first).  One patch at that point
+ * sticks, and the timer is stopped so the kernel never sees a rewrite
+ * while walking the tree.  The kernel Image header is checked so the
+ * PC range cannot latch on stray U-Boot code in low RAM.  The first
+ * PSCI probe and a deadline are safety nets.
+ */
+static void rk3588_firmware_bootargs_tick(void *opaque)
+{
+    RK3588MachineState *s = opaque;
+    CPUARMState *env = &s->cpu[0]->env;
+
+    if (!s->firmware_boot || s->kernel_started || s->kernel_entered) {
+        return;
+    }
+
+    /*
+     * The kernel's early code runs either in low RAM (0x00400000,
+     * before __primary_switch) or at high virtual addresses afterwards.
+     * Either way the DTB has not been unflattened yet (that happens in
+     * setup_machine_fdt(), long after the switch), so patching here is
+     * safe, and the in-place value store cannot race the kernel's later
+     * read.  U-Boot never executes at these addresses.
+     */
+    if ((env->pc >= RK3588_KERNEL_LOAD_ADDR &&
+         env->pc < RK3588_KERNEL_LOAD_ADDR + RK3588_KERNEL_ENTRY_RANGE) ||
+        env->pc >= RK3588_KERNEL_VA_BASE) {
+        s->kernel_entered = true;
+        rk3588_patch_firmware_bootargs(s);
+        return;
+    }
+
+    if (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->bootargs_patch_start_ns <
+        RK3588_FIRMWARE_BOOTARGS_DEADLINE_NS) {
+        timer_mod(s->bootargs_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  RK3588_FIRMWARE_BOOTARGS_INTERVAL_NS);
+    }
 }
 
 static void rk3588_firmware_patch_tick(void *opaque)
@@ -1923,6 +2127,7 @@ static void rk3588_boot_state_reset(void *opaque)
     s->firmware_handoff_done = false;
     s->firmware_atf_entered = false;
     s->kernel_started = false;
+    s->kernel_entered = false;
     s->bootrom_state.spl_loaded = false;
     rk3588_schedule_firmware_patch(s);
 }
@@ -3615,6 +3820,11 @@ static void rk3588_init(MachineState *machine)
         s->firmware_boot = true;
         rk3588_schedule_firmware_patch(s);
         rk3588_register_firmware_reset(s);
+        if (s->firmware_bootargs && s->firmware_bootargs[0]) {
+            s->bootargs_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                             rk3588_firmware_bootargs_tick,
+                                             s);
+        }
     }
 }
 
@@ -3655,6 +3865,15 @@ rk3588_cpu_index_to_props(MachineState *ms, unsigned cpu_index)
 
     assert(cpu_index < possible_cpus->len);
     return possible_cpus->cpus[cpu_index].props;
+}
+
+static void rk3588_set_firmware_bootargs(Object *obj, const char *value,
+                                        Error **errp)
+{
+    RK3588MachineState *s = RK3588_MACHINE(obj);
+
+    g_free(s->firmware_bootargs);
+    s->firmware_bootargs = g_strdup(value);
 }
 
 static bool rk3588_get_zvm_ram(Object *obj, Error **errp)
@@ -3750,12 +3969,28 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     object_class_property_set_description(oc, "zephyr-ram",
                                           "Place direct-kernel RAM at "
                                           "0x10000000 for Zephyr board images");
+
+    object_class_property_add_str(oc, "firmware-bootargs",
+                                  NULL, rk3588_set_firmware_bootargs);
+    object_class_property_set_description(oc, "firmware-bootargs",
+                                          "Extra kernel arguments appended "
+                                          "to /chosen/bootargs in the DTB "
+                                          "loaded by the firmware path");
+}
+
+static void rk3588_machine_finalize(Object *obj)
+{
+    RK3588MachineState *s = RK3588_MACHINE(obj);
+
+    timer_free(s->bootargs_timer);
+    g_free(s->firmware_bootargs);
 }
 
 static const TypeInfo rk3588_machine_typeinfo = {
     .name = TYPE_RK3588_MACHINE,
     .parent = TYPE_MACHINE,
     .instance_size = sizeof(RK3588MachineState),
+    .instance_finalize = rk3588_machine_finalize,
     .abstract = true,
     .interfaces = aarch64_machine_interfaces,
 };
