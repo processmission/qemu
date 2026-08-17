@@ -1085,6 +1085,175 @@ static void test_rock_5b_plus_sdhci_cmd1(void)
     qtest_quit(qts);
 }
 
+
+/* Rockchip rk3x-i2c (I2C6) registers, see hw/i2c/rk3x_i2c.c. */
+#define RK3588_I2C6_BASE 0xfec80000ULL
+#define RK3X_I2C_CON         0x000
+#define RK3X_I2C_MRXADDR     0x008
+#define RK3X_I2C_MRXRADDR    0x00c
+#define RK3X_I2C_MTXCNT      0x010
+#define RK3X_I2C_MRXCNT      0x014
+#define RK3X_I2C_IPD         0x01c
+#define RK3X_I2C_FCNT        0x020
+#define RK3X_I2C_TXBUFFER    0x100
+#define RK3X_I2C_RXBUFFER    0x200
+#define RK3X_I2C_CON1        0x228
+
+#define RK3X_I2C_CON_EN       (1u << 0)
+#define RK3X_I2C_CON_MOD_REGISTER_TX (1u << 1)
+#define RK3X_I2C_CON_START    (1u << 3)
+#define RK3X_I2C_CON_STOP     (1u << 4)
+#define RK3X_I2C_CON_LASTACK  (1u << 5)
+#define RK3X_I2C_CON_ACTACK   (1u << 6)
+#define RK3X_I2C_CON_VERSION  (5u << 16)
+
+#define RK3X_I2C_INT_MBTF     (1u << 2)
+#define RK3X_I2C_INT_MBRF     (1u << 3)
+#define RK3X_I2C_INT_STOP     (1u << 5)
+#define RK3X_I2C_INT_NAKRCV   (1u << 6)
+
+#define RK3X_I2C_CON1_TRANSFER_AUTO_STOP (1u << 1)
+#define RK3X_I2C_CON1_NACK_AUTO_STOP     (1u << 2)
+
+#define HYM8563_SEC 0x02
+
+static void test_rock_5b_plus_i2c6_device(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  " -smp 1 -m 128M");
+    QDict *resp;
+    const QListEntry *e;
+    QList *children;
+    bool found = false;
+
+    /* The controller sits at the RK3588 I2C6 slot and reports I2C v5,
+     * which enables the Linux driver'''s auto-stop path. */
+    g_assert_cmphex(qtest_readl(qts, RK3588_I2C6_BASE + RK3X_I2C_CON) &
+                    RK3X_I2C_CON_VERSION, ==, RK3X_I2C_CON_VERSION);
+
+    resp = qtest_qmp(qts, "{'execute': 'qom-list',"
+                     " 'arguments': {'path': '/machine'}}");
+    g_assert_true(resp);
+    children = qdict_get_qlist(resp, "return");
+    g_assert_true(children);
+    QLIST_FOREACH_ENTRY(children, e) {
+        QDict *child = qobject_to(QDict, qlist_entry_obj(e));
+        const char *name = qdict_get_str(child, "name");
+
+        if (g_str_equal(name, "i2c6")) {
+            found = true;
+            break;
+        }
+    }
+    g_assert_true(found);
+    qobject_unref(resp);
+
+    qtest_quit(qts);
+}
+
+static void test_rock_5b_plus_i2c6_write_rtc(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  " -smp 1 -m 128M");
+    const uint32_t b = RK3588_I2C6_BASE;
+
+    /* TX transfer to the hym8563 at 0x51: write CTL1 (0x00). */
+    qtest_writel(qts, b + RK3X_I2C_TXBUFFER, 0x000000a2);
+    qtest_writel(qts, b + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START | RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, b + RK3X_I2C_MTXCNT, 2);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_MBTF,
+                    ==, RK3X_I2C_INT_MBTF);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_FCNT), ==, 2);
+
+    /* The software STOP completes the transaction. */
+    qtest_writel(qts, b + RK3X_I2C_CON, RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_STOP,
+                    ==, RK3X_I2C_INT_STOP);
+
+    /* Pending bits clear on write. */
+    qtest_writel(qts, b + RK3X_I2C_IPD, 0xff);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_rock_5b_plus_i2c6_read_rtc(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  " -smp 1 -m 128M");
+    const uint32_t b = RK3588_I2C6_BASE;
+    static const uint8_t date[8] = {
+        0x02, 0x45, 0x30, 0x11, 0x07, 0x06, 0x03, 0x26,
+    };  /* reg 0x02 (SEC) + 2026-03-07 17:30:45, Sat (wday 6), BCD */
+    uint32_t i;
+
+    /* TX: program the RTC date registers 0x02..0x08. */
+    qtest_writel(qts, b + RK3X_I2C_TXBUFFER,
+                 0x000000a2 | (date[0] << 8) | (date[1] << 16) |
+                 (date[2] << 24));
+    qtest_writel(qts, b + RK3X_I2C_TXBUFFER + 4,
+                 date[3] | (date[4] << 8) | (date[5] << 16) | (date[6] << 24));
+    qtest_writel(qts, b + RK3X_I2C_TXBUFFER + 8, date[7]);
+    qtest_writel(qts, b + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START | RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, b + RK3X_I2C_MTXCNT, 9);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_MBTF,
+                    ==, RK3X_I2C_INT_MBTF);
+    qtest_writel(qts, b + RK3X_I2C_CON, RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    qtest_writel(qts, b + RK3X_I2C_IPD, 0xff);
+
+    /* REGISTER_TX read of the same block, with the hardware auto-stop
+     * path enabled (as the v5 driver does). */
+    qtest_writel(qts, b + RK3X_I2C_MRXADDR, 0xa2);
+    qtest_writel(qts, b + RK3X_I2C_MRXRADDR, HYM8563_SEC | (1u << 24));
+    qtest_writel(qts, b + RK3X_I2C_CON1,
+                 RK3X_I2C_CON1_TRANSFER_AUTO_STOP |
+                 RK3X_I2C_CON1_NACK_AUTO_STOP);
+    qtest_writel(qts, b + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, b + RK3X_I2C_MRXCNT, 7);
+
+    /* Auto-stop posts STOP directly; the block lands in RXBUFFER. */
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_STOP,
+                    ==, RK3X_I2C_INT_STOP);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_NAKRCV,
+                    ==, 0);
+    for (i = 0; i < 7; i++) {
+        uint8_t byte = (qtest_readl(qts, b + RK3X_I2C_RXBUFFER + 4 * (i / 4))
+                        >> (8 * (i % 4))) & 0xff;
+
+        g_assert_cmphex(byte, ==, date[i + 1]);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_rock_5b_plus_i2c6_nak(void)
+{
+    QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
+                                  " -smp 1 -m 128M");
+    const uint32_t b = RK3588_I2C6_BASE;
+
+    /* No slave at 0x7f: the transfer NAKs and the auto-stop raises STOP
+     * alongside NAKRCV. */
+    qtest_writel(qts, b + RK3X_I2C_TXBUFFER, 0x000000fe);
+    qtest_writel(qts, b + RK3X_I2C_CON1,
+                 RK3X_I2C_CON1_TRANSFER_AUTO_STOP |
+                 RK3X_I2C_CON1_NACK_AUTO_STOP);
+    qtest_writel(qts, b + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START | RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, b + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_NAKRCV,
+                    ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_STOP,
+                    ==, RK3X_I2C_INT_STOP);
+
+    qtest_quit(qts);
+}
+
 static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
 {
     static const uint8_t tx_frame[60] = {
@@ -1370,6 +1539,14 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_sfc_flash);
     qtest_add_func("/rock-5b-plus/sdhci-cmd1",
                    test_rock_5b_plus_sdhci_cmd1);
+    qtest_add_func("/rock-5b-plus/i2c6-device",
+                   test_rock_5b_plus_i2c6_device);
+    qtest_add_func("/rock-5b-plus/i2c6-write-rtc",
+                   test_rock_5b_plus_i2c6_write_rtc);
+    qtest_add_func("/rock-5b-plus/i2c6-read-rtc",
+                   test_rock_5b_plus_i2c6_read_rtc);
+    qtest_add_func("/rock-5b-plus/i2c6-nak",
+                   test_rock_5b_plus_i2c6_nak);
     qtest_add_func("/rock-5b-plus/pcie2x1l0-virtio-net",
                    test_rock_5b_plus_pcie2x1l0_virtio_net);
 
