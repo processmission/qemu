@@ -11,6 +11,7 @@
 #include <libfdt.h>
 #include "hw/core/uboot_image.h"
 #include "qemu/bitops.h"
+#include "qemu/sockets.h"
 #include "qobject/qdict.h"
 #include "qobject/qlist.h"
 #include "libqtest.h"
@@ -81,6 +82,7 @@
 
 #define DWC_PCIE_VENDOR_DEVICE 0x0000
 #define DWC_PCIE_LTSSM_STATUS 0x0300
+#define DWC_PCIE_LTSSM_LINK_UP 0x00030011
 #define DWC_PCIE_ATU_VIEWPORT 0x0900
 #define DWC_PCIE_ATU_CR1 0x0904
 #define DWC_PCIE_ATU_CR2 0x0908
@@ -369,7 +371,8 @@ static void test_rock_5b_plus_machine_creation(void)
     g_assert_cmphex(pcie_id, !=, 0);
     g_assert_cmphex(pcie_id, !=, UINT32_MAX);
     g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X4_APB_BASE +
-                                DWC_PCIE_LTSSM_STATUS), ==, 0);
+                                DWC_PCIE_LTSSM_STATUS), ==,
+                    DWC_PCIE_LTSSM_LINK_UP);
     g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X4_DBI_BASE +
                                 0x3ffffc), ==, 0);
 
@@ -378,7 +381,8 @@ static void test_rock_5b_plus_machine_creation(void)
     g_assert_cmphex(pcie_id, !=, 0);
     g_assert_cmphex(pcie_id, !=, UINT32_MAX);
     g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X2_APB_BASE +
-                                DWC_PCIE_LTSSM_STATUS), ==, 0);
+                                DWC_PCIE_LTSSM_STATUS), ==,
+                    DWC_PCIE_LTSSM_LINK_UP);
     qtest_writel(qts, RK3588_PCIE3X2_DBI_BASE + 0x100010,
                  UINT32_MAX);
     g_assert_cmphex(qtest_readl(qts, RK3588_PCIE3X2_DBI_BASE +
@@ -1280,7 +1284,13 @@ static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
     int sv[2];
     int i, cap;
 
+#ifdef _WIN32
+    /* qemu_socketpair() is the portable path; POSIX keeps the plain
+     * socketpair() so the fd survives exec into the QEMU child. */
+    g_assert_cmpint(qemu_socketpair(PF_UNIX, SOCK_STREAM, 0, sv), ==, 0);
+#else
     g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, sv), ==, 0);
+#endif
 
     qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
                       " -smp 1 -m 512M"
