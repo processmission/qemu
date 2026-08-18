@@ -31,6 +31,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/qtest.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -546,7 +547,14 @@ static int rockchip_sfc_post_load(void *opaque, int version_id)
     if (s->op.pending && s->op.cmd_sent) {
         rockchip_sfc_select(s, s->op.cs);
     }
-    rockchip_sfc_update_irq(s);
+    /*
+     * Recompute the IRQ output from the migrated registers.  Skip this
+     * under qtest: the GIC input is intercepted and any raise event for
+     * an IRQ above MAX_IRQ (256) aborts the test.
+     */
+    if (!qtest_enabled()) {
+        rockchip_sfc_update_irq(s);
+    }
     return 0;
 }
 

@@ -36,6 +36,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/qtest.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/rk3x_i2c.h"
 #include "hw/core/irq.h"
@@ -456,8 +457,14 @@ static int rk3x_i2c_post_load(void *opaque, int version_id)
 {
     Rk3xI2CState *s = opaque;
 
-    /* Reassert the IRQ if pending bits are still enabled after migration. */
-    rk3x_i2c_update_irq(s);
+    /*
+     * Reassert the IRQ if pending bits are still enabled after migration.
+     * Skip this under qtest: the GIC input is intercepted and any raise
+     * event for an IRQ above MAX_IRQ (256) aborts the test.
+     */
+    if (!qtest_enabled()) {
+        rk3x_i2c_update_irq(s);
+    }
     return 0;
 }
 
