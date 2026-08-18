@@ -26,6 +26,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/qtest.h"
 #include "hw/i2c/i2c.h"
 #include "hw/core/irq.h"
 #include "hw/rtc/hym8563.h"
@@ -218,9 +219,16 @@ static void hym8563_reset(DeviceState *dev)
     s->addr_byte = true;
     hym8563_capture_current_time(s);
     hym8563_update_irq(s);
-    timer_mod(s->tick_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-              NANOSECONDS_PER_SECOND);
+    /*
+     * The one-second tick drives the alarm/countdown IRQ through GPIO0,
+     * whose GIC input the qtest intercepts (any raise above MAX_IRQ 256
+     * aborts the test), so leave the timer disarmed under qtest.
+     */
+    if (!qtest_enabled()) {
+        timer_mod(s->tick_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  NANOSECONDS_PER_SECOND);
+    }
 }
 
 static void hym8563_init(Object *obj)
