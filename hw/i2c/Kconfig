@@ -23,6 +23,10 @@ config ARM_SBCON_I2C
     bool
     select BITBANG_I2C
 
+config RK3X_I2C
+    bool
+    select I2C
+
 config DESIGNWARE_I2C
     bool
     select REGISTER

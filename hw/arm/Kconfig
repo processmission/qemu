@@ -224,6 +224,7 @@ config RK3588
     select ROCKCHIP_STIMER
     select ROCKCHIP_SYSCON
     select RK3588_SCMI
+    select RK3588_TSADC
     select OR_IRQ
     select ROCKCHIP_GPIO
     select ROCKCHIP_IOMMU
@@ -232,6 +233,13 @@ config RK3588
     select SDHCI
     select SERIAL_MM
     select RK3588_USB2_HOST
+    select ROCKCHIP_SFC
+    select ROCKCHIP_SPI
+    select RK806
+    select RK3588_PL330
+    select RK3588_RNG
+    select RK3X_I2C
+    select HYM8563
 
 config RK3588_EVB
     bool

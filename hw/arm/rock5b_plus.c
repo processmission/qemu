@@ -8,6 +8,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
+#include "qemu/units.h"
 #include "rk3588-internal.h"
 
 #define TYPE_ROCK_5B_PLUS_MACHINE MACHINE_TYPE_NAME("rock-5b-plus")
@@ -23,6 +24,7 @@ static const RK3588FirmwareProfile rock_5b_plus_firmware = {
     .dynamic_fit_handoff = true,
     .atags_core = true,
     .fit_offset = 0x800000,
+    .spi_fit_offset = 0x60000,
     .fit_alignment = 512,
 };
 
@@ -33,14 +35,17 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .fdt_model = "Radxa ROCK 5B+",
     .fdt_compatible = rock_5b_plus_compatible,
     .fdt_compatible_count = ARRAY_SIZE(rock_5b_plus_compatible),
+    .firmware_spi = true,
     .firmware_sd_unit = 0,
+    .default_ram_size = 8 * GiB,
     .brom_bootsource = RK3588_BROM_BOOTSOURCE_EMMC,
     .dram_type = RK3588_DRAM_TYPE_LPDDR5,
     .gmac_mask = 0,
     .pcie3x4_num_lanes = 2,
     .pcie3x2_num_lanes = 2,
-    .pcie3x4_link_down = true,
-    .pcie3x2_link_down = true,
+    .pcie3x4_link_down = false,
+    .pcie3x2_link_down = false,
+    .pcie2x1_mask = BIT(0) | BIT(2),
     .swap_gmac_aliases = false,
     .default_zvm_ram = false,
     .rknpu_fdt_topology = RK3588_RKNPU_FDT_AGGREGATE,

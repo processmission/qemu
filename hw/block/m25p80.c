@@ -354,6 +354,10 @@ static const FlashPartInfo known_devices[] = {
     { INFO("w25x32",      0xef3016,      0,  64 << 10,  64, ER_4K) },
     { INFO("w25q32",      0xef4016,      0,  64 << 10,  64, ER_4K) },
     { INFO("w25q32dw",    0xef6016,      0,  64 << 10,  64, ER_4K) },
+    { INFO("w25q128",     0xef4018,      0,  64 << 10, 256, ER_4K),
+      .sfdp_read = m25p80_sfdp_w25q128 },
+    { INFO("xt25f128",    0x0b4018,      0,  64 << 10, 256, ER_4K),
+      .sfdp_read = m25p80_sfdp_w25q128 },
     { INFO("w25x64",      0xef3017,      0,  64 << 10, 128, ER_4K) },
     { INFO("w25q64",      0xef4017,      0,  64 << 10, 128, ER_4K) },
     { INFO("w25q80",      0xef5014,      0,  64 << 10,  16, ER_4K) },
@@ -466,6 +470,7 @@ typedef enum {
     MAN_MACRONIX,
     MAN_NUMONYX,
     MAN_WINBOND,
+    MAN_XTX,
     MAN_SST,
     MAN_ISSI,
     MAN_GENERIC,
@@ -543,6 +548,8 @@ static inline Manufacturer get_man(Flash *s)
         return MAN_NUMONYX;
     case 0xEF:
         return MAN_WINBOND;
+    case 0x0B:
+        return MAN_XTX;
     case 0x01:
         return MAN_SPANSION;
     case 0xC2:
@@ -819,6 +826,7 @@ static void complete_collecting_data(Flash *s)
             }
             break;
         case MAN_WINBOND:
+        case MAN_XTX:
             if (s->len > 1) {
                 s->quad_enable = !!(s->data[1] & 0x02);
             }
@@ -833,6 +841,7 @@ static void complete_collecting_data(Flash *s)
     case WRSR2:
         switch (get_man(s)) {
         case MAN_WINBOND:
+        case MAN_XTX:
             s->quad_enable = !!(s->data[0] & 0x02);
             break;
         default:
@@ -1085,6 +1094,10 @@ static void decode_fast_read_cmd(Flash *s)
     case MAN_WINBOND:
         s->needed_bytes += 1;
         break;
+    case MAN_XTX:
+        /* XT25F128 0x0b/0x3b/0x6b reads use eight dummy clocks. */
+        s->needed_bytes += 1;
+        break;
     case MAN_NUMONYX:
         s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
@@ -1122,6 +1135,10 @@ static void decode_dio_read_cmd(Flash *s)
     switch (get_man(s)) {
     case MAN_WINBOND:
         s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
+        break;
+    case MAN_XTX:
+        /* XT25F128 0xbb Dual I/O Read: 3 dummy clocks at dual width. */
+        s->needed_bytes += 1;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;
@@ -1169,6 +1186,13 @@ static void decode_qio_read_cmd(Flash *s)
         break;
     case MAN_MACRONIX:
         s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 4);
+        break;
+    case MAN_XTX:
+        /*
+         * XT25F128 0xeb Quad I/O Read: 2 mode plus 4 wait clocks at
+         * quad width, matching the SFDP read settings.
+         */
+        s->needed_bytes += 3;
         break;
     case MAN_ISSI:
         /*
@@ -1335,6 +1359,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
             s->state = STATE_COLLECTING_VAR_LEN_DATA;
             break;
         case MAN_WINBOND:
+        case MAN_XTX:
             s->needed_bytes = 2;
             s->state = STATE_COLLECTING_VAR_LEN_DATA;
             break;
@@ -1361,6 +1386,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
 
         switch (get_man(s)) {
         case MAN_WINBOND:
+        case MAN_XTX:
             s->needed_bytes = 1;
             s->state = STATE_COLLECTING_DATA;
             s->pos = 0;
@@ -1540,6 +1566,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
             s->quad_enable = true;
             break;
         case MAN_WINBOND:
+        case MAN_XTX:
             s->data[0] = (!!s->quad_enable) << 1;
             s->pos = 0;
             s->len = 1;

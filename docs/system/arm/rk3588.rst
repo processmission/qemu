@@ -29,9 +29,11 @@ contains only shared SoC construction and boot orchestration:
 
 ``rock-5b-plus``
   Radxa ROCK 5B+ with LPDDR5, the two board PCIe hosts, and the firmware
-  compatibility profile needed by Radxa's RK3588 SDK image.  Firmware boot
-  reads the raw Radxa image from ``if=sd,index=0`` and exposes it through the
-  non-removable eMMC controller.
+  compatibility profile needed by Radxa's RK3588 SDK image.  With separate
+  board media, firmware boot reads SPI NOR from ``if=mtd,index=0`` and reads
+  the SD payload media from ``if=sd,index=2`` (the controller selected by
+  U-Boot's ``mmc dev 1``).  A complete legacy Radxa image at
+  ``if=sd,index=0`` remains accepted when no SPI drive is supplied.
 
 Supported devices
 -----------------
@@ -44,8 +46,14 @@ RK3588 kernel and ZVM smoke tests:
   firmware and ZVM paths.  The RK3588 machines do not install RK3588-only CPU
   compatibility properties for EL2 FP/SIMD traps or EL2 PAN handling.
 * GICv3 with two ITS blocks and LPI support.
-* UART2 through QEMU's ``serial_mm`` 16550-compatible model, plus a vendor
-  register cover for the DesignWare APB UART window.
+* All ten RK3588 UARTs (UART0-UART9) through QEMU's ``serial_mm``
+  16550-compatible model, each with a DesignWare APB UART vendor
+  register cover (USR @0x7c).  Only the ports with I/O routed out on
+  the ROCK 5B+ (UART1, UART2, UART3, UART4, UART7) bind a serial
+  chardev: UART2 keeps ``serial_hd(0)`` as the console, the others
+  map to ``-serial`` slots 1..4 in table order.  The remaining
+  ports (UART0, UART5, UART6, UART8, UART9) are modeled without
+  external output.
 * Rockchip GPIO banks.
 * Dedicated RK3588 PMU0/PMU1/SYS GRF banks, plus reusable Rockchip RAM-backed
   syscon blocks for IOC and firewall-style register banks.
@@ -54,6 +62,7 @@ RK3588 kernel and ZVM smoke tests:
 * Rockchip secure timer stub.
 * RK3588 CRU and SCMI-over-SMC clock/reset support.
 * SDHCI eMMC and Synopsys DesignWare MMC for the SD-card controller.
+* RK3588 SFC with an XTX XT25F128 SPI NOR device on chip select 0.
 * Synopsys DWMAC4 GMAC0 and GMAC1.
 * Rockchip DesignWare PCIe host wrapper, including MSI/MSI-X through GIC ITS.
 * Firmware-only USB2 EHCI/OHCI register windows used by U-Boot bootflow
@@ -63,8 +72,10 @@ RK3588 kernel and ZVM smoke tests:
   implements hardware-pipeline execution for register-level jobs submitted
   through the Linux mainline ``rocket`` or vendor ``rknpu`` driver.
 
-The machine does not instantiate a SPI controller yet.  ``SPI`` in the RK3588
-machine source refers to GIC Shared Peripheral Interrupt numbers.
+The SFC model is the register-driven SPI-memory controller used by the
+Rockchip Linux and U-Boot drivers.  It supports JEDEC/SFDP discovery, PIO
+transfers, and DMA transfers.  ``SPI`` in the RK3588 machine source also names
+GIC Shared Peripheral Interrupt numbers; it is not a second SPI controller.
 
 The optional RKNPU model exposes the three accelerator cores and their
 Rockchip IOMMU.  It is enabled with ``-machine ...,rknpu=on``.  The selected
@@ -228,8 +239,13 @@ as a complete replacement for a real RK3588 PMU/secure firmware environment.
 Radxa ROCK 5B+ Firmware Image
 -----------------------------
 
-The ``rock-5b-plus`` firmware profile also accepts a complete raw image made by
-the Radxa RK3588 SDK.  No extraction or repackaging is required:
+The ``rock-5b-plus`` firmware profile accepts either a complete raw Radxa SDK
+image or the split layout used by the real board: SPI NOR contains U-Boot and
+the SD card contains the ZVisor/guest payload files.  The split layout keeps
+the firmware and payload media separate while preserving the board's boot
+order.
+
+For a complete legacy image, no extraction or repackaging is required:
 
 .. code-block:: bash
 
@@ -237,17 +253,79 @@ the Radxa RK3588 SDK.  No extraction or repackaging is required:
        -accel tcg \
        -machine rock-5b-plus \
        -smp 1 \
-       -m 2G \
+       -m 8G \
        -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_b2.output.img,format=raw \
        -snapshot \
        -serial mon:stdio \
        -display none
 
+For the split SPI/SD layout, pass a 16 MiB SPI NOR image containing the
+Rockchip SPI boot image and an SD image whose FAT partition contains the files
+loaded by the U-Boot environment (``zvisor.img``, ``zvisor.dtb``,
+``zephyr-guest.bin``, ``linux-Image.flash.gz``, and
+``initramfs.cpio.flash.gz``):
+
+.. code-block:: bash
+
+   $ build/qemu-system-aarch64 \
+       -accel tcg,thread=multi \
+       -machine rock-5b-plus \
+       -smp 8 \
+       -m 8G \
+       -drive if=mtd,index=0,file=rock5b-spi-16m.img,format=raw \
+       -drive if=sd,index=2,file=rock5b-sd-payload.img,format=raw \
+       -serial mon:stdio \
+       -monitor none \
+       -display none
+
+The SPI image has the RKNS header at offset ``0x8000`` and the FIT at
+``0x60000``.  The SD payload image is attached to the DesignWare MMC
+controller, so U-Boot sees it as ``mmc 1`` and uses ``mmc 1:1`` for FAT loads.
+The ROCK 5B+ machine defaults to 8 GiB and exposes RAM below 4 GiB plus a
+second bank above 4 GiB, matching the board's physical address layout.
+
 This path runs the image's DDR/TPL and SPL code, verifies all FIT loadables,
 uses the FIT metadata to select the U-Boot load address dynamically, enters
-U-Boot proper, and continues through its ``extlinux`` boot flow.  With the
-Radxa Bookworm image, U-Boot loads the SDK kernel, initramfs, and
-``rk3588-rock-5b-plus.dtb`` before printing ``Starting kernel ...``.
+U-Boot proper, and continues through its ``extlinux`` boot flow.  U-Boot loads
+the SDK kernel, initramfs, and
+``rk3588-rock-5b-plus.dtb`` from the image root file system before printing
+``Starting kernel ...``.
+
+The ``firmware-bootargs`` machine property appends parameters to the kernel
+command line without touching the image: U-Boot ``booti`` rewrites
+``/chosen/bootargs`` from its own environment immediately before entering the
+kernel, so the model keeps the DTB bootargs value patched in place (a
+same-length store in the existing property slot; the trailing
+``androidboot.fwver`` marker is dropped to make room) until the kernel entry
+is observed, then leaves the tree untouched.  The Radxa Bookworm image boots
+headless with the parameters above; without them the KDE graphical target
+stalls (no DRM) and the PSCI cpuidle path can leave the CPU asleep.
+
+The verified run reaches the ``rock-5b-plus login:`` prompt on the serial
+console (user ``rock`` / ``rock``) with the official 6.1.84-8-rk2410 kernel.
+Inside the guest the SD card appears as ``mmcblk0`` with the ``/config``,
+``/boot/efi``, and root partitions; ``/proc/mtd`` shows the 16 MiB SFC flash
+as ``mtd0`` (``loader`` partition); and ``lspci`` enumerates the PCIe root
+bridge (``0002:20:00.0 DWC_usb3 / PCIe bridge``).
+
+A network endpoint on ``pcie2x1l0`` is verified both ways.  The qtest
+``/rock-5b-plus/pcie2x1l0-virtio-net`` attaches ``virtio-net-pci`` to the root
+bridge secondary bus (``bus=/pcie2x1l0/pcie/designware-pcie-root/dw-pcie``)
+and exercises the ATU config path, BAR assignment, MSI-X table, and full
+RX/TX over a socket ``-netdev``.  In the real Linux guest, attaching a NIC on
+the same bus works end to end::
+
+   $ qemu-system-aarch64 -machine rock-5b-plus,firmware-bootargs='cpuidle.off=1 systemd.unit=multi-user.target' \
+       -smp 1 -m 8G -drive if=sd,index=0,file=rock-5b-plus_bookworm_kde_r7.output_512.img,format=raw -snapshot \
+       -netdev user,id=n0 -device e1000e,bus=/pcie2x1l0/pcie/designware-pcie-root/dw-pcie,netdev=n0 \
+       -serial mon:stdio -display none
+
+The guest kernel enumerates the endpoint on the bridge secondary bus
+(``0002:21:00.0``), assigns BARs through the bridge windows (32-bit at
+0xf2xxxxxx and a 64-bit prefetch BAR above 4 GiB), and the e1000e driver comes
+up at 1 Gbit/s with DHCP (10.0.2.15) and working ping/HTTP through
+``-netdev user``.  (The stock Radxa kernel does not ship virtio PCI drivers;
+the image-shipped e1000e driver is used for the real-boot check.)
 
 U-Boot to Linux Boot
 --------------------
@@ -503,8 +581,8 @@ RK3588 machine applies narrow runtime shims to enter BL31, keep BL31
 initialization moving, hand off to U-Boot proper, and prepare the NonSecure
 PSCI/GIC state U-Boot's Linux entry path expects.  U-Boot autoboot scans the
 modeled eMMC/SDMMC, USB2, and GMAC boot devices and either boots the extlinux
-test image or reaches the prompt when no boot image is present.  USB3 DWC3, a
-real TRNG, and attached USB storage are not modeled.
+test image or reaches the prompt when no boot image is present.  USB3 DWC3
+and attached USB storage are not modeled.
 
 Linux may print an ignored SCMI protocol-16 event registration warning, and the
 PCIe legacy INTx irq-domain path is only stubbed; PCIe MSI/MSI-X is functional
