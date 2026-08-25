@@ -89,12 +89,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588MachineState, RK3588_MACHINE)
 #define RK3588_DEFAULT_RAM_BASE 0x00200000ULL
 /*
  * The low RAM window ends where the first PCIe config window starts
- * (0xf0000000); RAM above it lives in the high window at 4 GiB.
+ * (0xf0000000); RAM above it lives in the high window at 16 GiB, leaving the
+ * fixed ZVM high-memory window at 4 GiB available on boards that use it.
  */
 #define RK3588_LOW_RAM_END 0xf0000000ULL
-#define RK3588_HIGH_RAM_BASE 0x100000000ULL
+#define RK3588_HIGH_RAM_BASE 0x400000000ULL
 #define RK3588_MAX_RAM_SIZE (16 * GiB)
-#define RK3588_ZEPHYR_RAM_BASE 0x10000000ULL
+#define RK3588_DIRECT_RAM_BASE 0x10000000ULL
 #define RK3588_SRAM_SIZE MiB
 #define RK3588_IRAM_SIZE 0x00ff0000
 #define RK3588_ATAGS_SIZE (8 * KiB)
@@ -307,7 +308,7 @@ struct RK3588MachineState {
     bool firmware_atf_entered;
     bool zvm_ram;
     bool rknpu;
-    bool zephyr_ram;
+    bool direct_ram_layout;
     bool pcie_links_up;
     bool kernel_started;
     bool kernel_entered;
@@ -552,7 +553,7 @@ static const MemMapEntry rk3588_memmap[] = {
 
 static hwaddr rk3588_ram_base(const RK3588MachineState *s)
 {
-    return s->zephyr_ram ? RK3588_ZEPHYR_RAM_BASE :
+    return s->direct_ram_layout ? RK3588_DIRECT_RAM_BASE :
                            rk3588_memmap[RK3588_RAM].base;
 }
 
@@ -610,8 +611,8 @@ enum {
  * is modeled, but only the ones with I/O routed out on the ROCK 5B+
  * (40-pin header / debug console: UART1, UART2, UART3, UART4, UART7)
  * get a serial chardev; the rest exist without external output.
- * UART2 is the console: it keeps serial_hd(0) (serial_hd(1) with
- * zephyr-ram) so the existing -serial mon:stdio flow is unchanged;
+ * UART2 is the console: it keeps serial_hd(0) (serial_hd(1) with the
+ * direct-boot layout) so the existing -serial mon:stdio flow is unchanged;
  * the routed ports map to serial_hd(1..4) in table order.
  */
 typedef struct RK3588UARTInfo {
@@ -1814,7 +1815,7 @@ static void rk3588_write_atags(RK3588MachineState *s)
      * DDR ATAG banks: the low window runs from 0 to the end of the
      * first 4 GiB window (the base address is folded into the size, as
      * the firmware expects); RAM above it is described as a second bank
-     * at 4 GiB.  The firmware (TPL) hands these banks to U-Boot, which
+     * at 16 GiB.  The firmware (TPL) hands these banks to U-Boot, which
      * adds one bank per entry.
      */
     if (!profile || !profile->atags_core) {
@@ -3166,6 +3167,13 @@ static void rk3588_create_its(RK3588MachineState *s)
 
 static void rk3588_create_uarts(RK3588MachineState *s)
 {
+    /*
+     * Direct-boot layout: slot 0 is the UDC CDC bridge, slot 1 the UART2
+     * console and slot 2 the UART3 data link; other routed ports follow
+     * in table order from slot 3.
+     */
+    int next_chr = 3;
+
     for (unsigned int i = 0; i < ARRAY_SIZE(rk3588_uarts); i++) {
         const RK3588UARTInfo *u = &rk3588_uarts[i];
         DeviceState *vendor;
@@ -3173,12 +3181,20 @@ static void rk3588_create_uarts(RK3588MachineState *s)
         g_autofree char *name = g_strdup_printf("%s-vendor", u->name);
         int chr_index = u->chr_index;
 
-        if (u->memidx == RK3588_UART2) {
+        if (s->direct_ram_layout) {
+            if (u->memidx == RK3588_UART2) {
+                /* The console UART keeps the legacy chardev slot. */
+                chr_index = 1;
+            } else if (u->memidx == RK3588_UART3) {
+                /* UART3 is the dedicated data link. */
+                chr_index = 2;
+            } else if (u->chr_index >= 1) {
+                /* Other routed ports follow: uart1 -> 3, uart4 -> 4, ... */
+                chr_index = next_chr++;
+            }
+        } else if (u->memidx == RK3588_UART2) {
             /* The console UART keeps the legacy chardev slot. */
-            chr_index = s->zephyr_ram ? 1 : 0;
-        } else if (s->zephyr_ram && chr_index >= 1) {
-            /* UART2 claims slot 1 in zephyr mode; shift the others. */
-            chr_index++;
+            chr_index = 0;
         }
 
         /*
@@ -3687,7 +3703,7 @@ static void rk3588_create_usb3_device(RK3588MachineState *s)
     DeviceState *dev = qdev_new(TYPE_RK3588_DWC3_UDC);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
-    if (s->zephyr_ram) {
+    if (s->direct_ram_layout) {
         qdev_prop_set_chr(dev, "chardev", serial_hd(0));
     }
     object_property_add_child(OBJECT(s), "usb3otg0", OBJECT(dev));
@@ -4103,12 +4119,13 @@ static void rk3588_init(MachineState *machine)
     /*
      * The first 4 GiB window is shared with the peripheral MMIO, so
      * RAM above the low window is mapped in the high window starting
-     * at 4 GiB (as on real RK3588).  The generic -kernel loader can
+     * at 16 GiB in this model.  The generic -kernel loader can
      * only describe a single memory bank, so direct kernel boots stay
      * within the low window; the firmware path describes both banks
      * through the DDR ATAGS.
      */
-    if (machine->kernel_filename && machine->ram_size > low_ram_size) {
+    if (machine->kernel_filename && machine->ram_size > low_ram_size &&
+        !s->direct_ram_layout) {
         g_autofree char *sz = size_to_str(low_ram_size);
         error_report("%s: -kernel boot supports at most %s of RAM",
                      board->machine_name, sz);
@@ -4176,7 +4193,7 @@ static void rk3588_init(MachineState *machine)
          * arm/boot.c only invokes the ARMLinuxBootIf handoff for raw
          * Linux images; ELF kernels skip it, leaving a TZ-aware GIC with
          * all interrupts in Group 0 that NS guests can neither reassign
-         * nor enable. Zephyr-ram direct boot is known to run NonSecure,
+         * nor enable. Direct boot is known to run NonSecure,
          * so run the same handoff for it: the GIC resets with all
          * interrupts in NonSecure Group 1, as secure firmware would have
          * configured it on real hardware.
@@ -4185,7 +4202,7 @@ static void rk3588_init(MachineState *machine)
          * and may rely on or test the hardware Group 0 reset state, so
          * leave the GIC untouched for them.
          */
-        if (s->zephyr_ram) {
+        if (s->direct_ram_layout) {
             ARMLinuxBootIf *albif = ARM_LINUX_BOOT_IF(s->gic);
             ARMLinuxBootIfClass *albifc = ARM_LINUX_BOOT_IF_GET_CLASS(albif);
 
@@ -4288,20 +4305,6 @@ static void rk3588_set_rknpu(Object *obj, bool value, Error **errp)
     s->rknpu = value;
 }
 
-static bool rk3588_get_zephyr_ram(Object *obj, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    return s->zephyr_ram;
-}
-
-static void rk3588_set_zephyr_ram(Object *obj, bool value, Error **errp)
-{
-    RK3588MachineState *s = RK3588_MACHINE(obj);
-
-    s->zephyr_ram = value;
-}
-
 void rk3588_machine_instance_configure(Object *obj,
                                        const RK3588BoardConfig *board)
 {
@@ -4319,6 +4322,7 @@ void rk3588_machine_instance_configure(Object *obj,
     assert(!(board->pcie2x1_mask & ~(BIT(0) | BIT(2))));
     s->board = board;
     s->zvm_ram = board->default_zvm_ram;
+    s->direct_ram_layout = board->default_direct_ram_layout;
     s->rknpu = false;
 }
 
@@ -4333,7 +4337,7 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     mc->max_cpus = RK3588_MAX_CPUS;
     mc->default_cpus = RK3588_MAX_CPUS;
     mc->default_ram_size = board->default_ram_size ?
-                        board->default_ram_size : 2 * GiB;
+                        board->default_ram_size : 8 * GiB;
     mc->default_ram_id = board->ram_id;
     mc->possible_cpu_arch_ids = rk3588_possible_cpu_arch_ids;
     mc->cpu_index_to_instance_props = rk3588_cpu_index_to_props;
@@ -4348,12 +4352,6 @@ void rk3588_machine_class_configure(ObjectClass *oc,
     object_class_property_set_description(oc, "rknpu",
                                           "Enable RK3588 RKNN/RKNPU "
                                           "accelerator cores");
-
-    object_class_property_add_bool(oc, "zephyr-ram", rk3588_get_zephyr_ram,
-                                   rk3588_set_zephyr_ram);
-    object_class_property_set_description(oc, "zephyr-ram",
-                                          "Place direct-kernel RAM at "
-                                          "0x10000000 for Zephyr board images");
 
     object_class_property_add_str(oc, "firmware-bootargs",
                                   NULL, rk3588_set_firmware_bootargs);
