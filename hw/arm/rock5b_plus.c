@@ -48,6 +48,7 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .pcie2x1_mask = BIT(0) | BIT(2),
     .swap_gmac_aliases = false,
     .default_zvm_ram = false,
+    .default_direct_ram_layout = true,
     .rknpu_fdt_topology = RK3588_RKNPU_FDT_AGGREGATE,
     .firmware_profile = &rock_5b_plus_firmware,
 };
