@@ -2,7 +2,7 @@
 /*
  * Common ARM PSCI helpers.
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  */
 
 #include "qemu/osdep.h"
