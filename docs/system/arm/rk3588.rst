@@ -1,4 +1,4 @@
-.. Copyright (c) 2026 Chao Liu
+.. Copyright (c) 2026 Process Mission
 .. SPDX-License-Identifier: GPL-2.0-or-later
 
 Rockchip RK3588 Boards
@@ -281,8 +281,10 @@ loaded by the U-Boot environment (``zvisor.img``, ``zvisor.dtb``,
 The SPI image has the RKNS header at offset ``0x8000`` and the FIT at
 ``0x60000``.  The SD payload image is attached to the DesignWare MMC
 controller, so U-Boot sees it as ``mmc 1`` and uses ``mmc 1:1`` for FAT loads.
-The ROCK 5B+ machine defaults to 8 GiB and exposes RAM below 4 GiB plus a
-second bank above 4 GiB, matching the board's physical address layout.
+The RK3588 machines default to 8 GiB.  ROCK 5B+ uses the direct-kernel
+RAM base at ``0x10000000`` by default.  RAM below the 4 GiB peripheral window
+is mapped in the low bank; the remaining RAM is mapped at 16 GiB so it does
+not overlap the fixed ZVM high-memory window at 4 GiB.
 
 This path runs the image's DDR/TPL and SPL code, verifies all FIT loadables,
 uses the FIT metadata to select the U-Boot load address dynamically, enters

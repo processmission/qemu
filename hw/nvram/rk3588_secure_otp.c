@@ -1,7 +1,7 @@
 /*
  * Rockchip RK3588 secure OTP
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */

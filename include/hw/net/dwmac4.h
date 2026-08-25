@@ -1,7 +1,7 @@
 /*
  * Synopsys DesignWare Ethernet MAC dwmac-4.20a (GMAC4).
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * RK3588 wires this for its GMAC node (snps,dwmac-4.20a /
  * rockchip,rk3588-gmac).

@@ -1,7 +1,7 @@
 /*
  * Radxa ROCK 5B+ machine
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -48,6 +48,7 @@ static const RK3588BoardConfig rock_5b_plus_board = {
     .pcie2x1_mask = BIT(0) | BIT(2),
     .swap_gmac_aliases = false,
     .default_zvm_ram = false,
+    .default_direct_ram_layout = true,
     .rknpu_fdt_topology = RK3588_RKNPU_FDT_AGGREGATE,
     .firmware_profile = &rock_5b_plus_firmware,
 };

@@ -9,7 +9,7 @@
 /*
  * This is the device-mode counterpart to the RK3588 host controllers.  It
  * implements the DWC3 registers, event ring, endpoint commands, and DMA TRBs
- * exercised by Zephyr's DWC3 UDC driver.  An internal high-speed USB host
+ * exercised by the direct-boot DWC3 UDC driver.  An internal high-speed USB host
  * performs the minimum CDC ACM enumeration needed by firmware without
  * requiring a second QEMU USB topology.
  *
