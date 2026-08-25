@@ -19,8 +19,7 @@
 #define ROCK_5B_PLUS_MACHINE "rock-5b-plus"
 
 #define RK3588_ATAGS_BASE 0x001fe000ULL
-#define RK3588_RAM_BASE 0x00200000ULL
-#define RK3588_ZEPHYR_RAM_BASE 0x10000000ULL
+#define RK3588_RAM_BASE 0x10000000ULL
 #define RK3588_DWC3_BASE 0xfc000000ULL
 #define RK3588_PMU1_GRF_BASE 0xfd58a000ULL
 #define RK3588_CRYPTO_BASE 0xfe370000ULL
@@ -439,32 +438,31 @@ static void test_rock_5b_plus_smp_creation(void)
     qtest_quit(qts);
 }
 
-static void test_rock_5b_plus_zephyr_ram(void)
+static void test_rock_5b_plus_direct_ram_layout(void)
 {
     QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
-                                  ",zephyr-ram=on -smp 1 -m 128M");
+                                  " -smp 1 -m 128M");
     const uint32_t value = 0x5b3585b3;
 
-    qtest_writel(qts, RK3588_ZEPHYR_RAM_BASE, value);
-    g_assert_cmphex(qtest_readl(qts, RK3588_ZEPHYR_RAM_BASE), ==, value);
-    g_assert_cmphex(qtest_readl(qts, RK3588_RAM_BASE), ==, 0);
+    qtest_writel(qts, RK3588_RAM_BASE, value);
+    g_assert_cmphex(qtest_readl(qts, RK3588_RAM_BASE), ==, value);
 
     qtest_quit(qts);
 }
 
-static void test_rock_5b_plus_zephyr_uimage(void)
+static void test_rock_5b_plus_direct_uimage(void)
 {
     static const uint32_t kernel_insn = GUINT32_TO_LE(0x14000000);
     uboot_image_header_t header = {
         .ih_magic = GUINT32_TO_BE(IH_MAGIC),
         .ih_size = GUINT32_TO_BE(sizeof(kernel_insn)),
-        .ih_load = GUINT32_TO_BE(RK3588_ZEPHYR_RAM_BASE),
-        .ih_ep = GUINT32_TO_BE(RK3588_ZEPHYR_RAM_BASE),
+        .ih_load = GUINT32_TO_BE(RK3588_RAM_BASE),
+        .ih_ep = GUINT32_TO_BE(RK3588_RAM_BASE),
         .ih_os = IH_OS_LINUX,
         .ih_arch = IH_ARCH_ARM64,
         .ih_type = IH_TYPE_KERNEL,
         .ih_comp = IH_COMP_NONE,
-        .ih_name = "Zephyr ROCK 5B+",
+        .ih_name = "ROCK 5B+ direct boot",
     };
     g_autofree uint8_t *image = g_malloc(sizeof(header) +
                                          sizeof(kernel_insn));
@@ -476,7 +474,7 @@ static void test_rock_5b_plus_zephyr_uimage(void)
     memcpy(image, &header, sizeof(header));
     memcpy(image + sizeof(header), &kernel_insn, sizeof(kernel_insn));
 
-    kernel_fd = g_file_open_tmp("rock5b-plus-zephyr-XXXXXX", &kernel_path,
+    kernel_fd = g_file_open_tmp("rock5b-plus-direct-XXXXXX", &kernel_path,
                                 &error);
     g_assert_no_error(error);
     g_assert_cmpint(kernel_fd, >=, 0);
@@ -487,9 +485,9 @@ static void test_rock_5b_plus_zephyr_uimage(void)
     g_assert_no_error(error);
 
     qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
-                      ",zephyr-ram=on -smp 1 -m 128M -kernel %s",
+                      " -smp 1 -m 128M -kernel %s",
                       kernel_path);
-    g_assert_cmphex(qtest_readl(qts, RK3588_ZEPHYR_RAM_BASE), ==,
+    g_assert_cmphex(qtest_readl(qts, RK3588_RAM_BASE), ==,
                     GUINT32_FROM_LE(kernel_insn));
 
     qtest_quit(qts);
@@ -499,11 +497,11 @@ static void test_rock_5b_plus_zephyr_uimage(void)
 static void test_rock_5b_plus_dwc3_device(void)
 {
     const uint64_t event_buffer = 0;
-    const uint64_t setup_trb = RK3588_ZEPHYR_RAM_BASE + 0x2000;
-    const uint64_t setup_packet = RK3588_ZEPHYR_RAM_BASE + 0x2100;
-    const uint64_t status_trb = RK3588_ZEPHYR_RAM_BASE + 0x2200;
+    const uint64_t setup_trb = RK3588_RAM_BASE + 0x2000;
+    const uint64_t setup_packet = RK3588_RAM_BASE + 0x2100;
+    const uint64_t status_trb = RK3588_RAM_BASE + 0x2200;
     QTestState *qts = qtest_initf("-machine " ROCK_5B_PLUS_MACHINE
-                                  ",zephyr-ram=on -smp 1 -m 128M");
+                                  " -smp 1 -m 128M");
 
     g_assert_cmphex(qtest_readl(qts, RK3588_DWC3_BASE + DWC3_GCOREID) >> 16,
                     ==, 0x5533);
@@ -951,9 +949,9 @@ static void test_rock_5b_plus_sfc_flash(void)
 #define RK3588_PCIE2X1L0_CFG_BASE 0xf2000000ULL
 #define PCIE2X1L0_NET_BDF (0x21 << 24)
 #define PCIE2X1L0_MEM_WIN 0xf3000000ULL
-#define PCIE2X1L0_BAR_BASE 0x10000000ULL
-#define NET_RING_BASE 0x01000000ULL
-#define NET_BUF_BASE 0x01100000ULL
+#define PCIE2X1L0_BAR_BASE 0x40000000ULL
+#define NET_RING_BASE 0x11000000ULL
+#define NET_BUF_BASE 0x11100000ULL
 #define VIRTIO_NET_HDR_SIZE 10
 #define VRING_DESC_F_WRITE BIT(1)
 #define VIRTIO_PCI_CAP_COMMON_CFG 1
@@ -1445,7 +1443,7 @@ static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
     uint8_t tx_buf[VIRTIO_NET_HDR_SIZE + sizeof(tx_frame)];
     uint8_t recv_buf[2048];
     uint32_t bar_addr[6] = {
-        0x10000000, 0x10001000, 0x10002000, 0x10003000, 0x10004000, 0x10005000,
+        0x40000000, 0x40001000, 0x40002000, 0x40003000, 0x40004000, 0x40005000,
     };
     uint32_t common_cfg = 0, notify_cfg = 0, isr_cfg = 0;
     uint32_t notify_mult = 4, notify_off = 0;
@@ -1488,8 +1486,8 @@ static void test_rock_5b_plus_pcie2x1l0_virtio_net(void)
     pcie2x1l0_write_cfg(qts, 0x19, 0x21, 1); /* PCI_SECONDARY_BUS */
     pcie2x1l0_write_cfg(qts, 0x1a, 0x21, 1); /* PCI_SUBORDINATE_BUS */
     pcie2x1l0_write_cfg(qts, 0x04, 0x6, 2);  /* PCI_COMMAND */
-    pcie2x1l0_write_cfg(qts, 0x20, 0x1000, 2); /* PCI_MEMORY_BASE */
-    pcie2x1l0_write_cfg(qts, 0x22, 0x100f, 2); /* PCI_MEMORY_LIMIT */
+    pcie2x1l0_write_cfg(qts, 0x20, 0x4000, 2); /* PCI_MEMORY_BASE */
+    pcie2x1l0_write_cfg(qts, 0x22, 0x400f, 2); /* PCI_MEMORY_LIMIT */
 
     /* Read the endpoint config space through the ATU data window. */
     pcie2x1l0_atu_cfg0(qts, PCIE2X1L0_NET_BDF);
@@ -1704,10 +1702,10 @@ int main(int argc, char **argv)
                    test_rock_5b_plus_machine_creation);
     qtest_add_func("/rock-5b-plus/smp-creation",
                    test_rock_5b_plus_smp_creation);
-    qtest_add_func("/rock-5b-plus/zephyr-ram",
-                   test_rock_5b_plus_zephyr_ram);
-    qtest_add_func("/rock-5b-plus/zephyr-uimage",
-                   test_rock_5b_plus_zephyr_uimage);
+    qtest_add_func("/rock-5b-plus/direct-ram-layout",
+                   test_rock_5b_plus_direct_ram_layout);
+    qtest_add_func("/rock-5b-plus/direct-uimage",
+                   test_rock_5b_plus_direct_uimage);
     qtest_add_func("/rock-5b-plus/dwc3-device",
                    test_rock_5b_plus_dwc3_device);
     qtest_add_func("/rock-5b-plus/pcie3x2-fdt",
