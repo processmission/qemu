@@ -392,6 +392,10 @@ enum {
     RK3588_GPIO2,
     RK3588_GPIO3,
     RK3588_GPIO4,
+    RK3588_PWM0_3,
+    RK3588_PWM4_7,
+    RK3588_PWM8_11,
+    RK3588_PWM12_15,
     RK3588_SYS_GRF,
     RK3588_PHP_GRF,
     RK3588_CRU_MEM,
@@ -489,6 +493,10 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_GPIO2] =        { 0xfec30000, 0x00000100 },
     [RK3588_GPIO3] =        { 0xfec40000, 0x00000100 },
     [RK3588_GPIO4] =        { 0xfec50000, 0x00000100 },
+    [RK3588_PWM0_3] =       { 0xfd8b0000, 0x00001000 },
+    [RK3588_PWM4_7] =       { 0xfebd0000, 0x00001000 },
+    [RK3588_PWM8_11] =      { 0xfebe0000, 0x00001000 },
+    [RK3588_PWM12_15] =     { 0xfebf0000, 0x00001000 },
     /*
      * General Register File (GRF) syscons - write-only RGMII-delay / PHY-
      * interface-select registers consumed by dwmac-rk. Dedicated RK3588 GRF
@@ -3921,6 +3929,10 @@ static void rk3588_create_syscon_devices(RK3588MachineState *s)
     rk3588_create_syscon(s, "pmu1-ioc", RK3588_PMU1_IOC);
     rk3588_create_syscon(s, "pmu2-ioc", RK3588_PMU2_IOC);
     rk3588_create_syscon(s, "bus-ioc", RK3588_BUS_IOC);
+    rk3588_create_syscon(s, "pwm0-3", RK3588_PWM0_3);
+    rk3588_create_syscon(s, "pwm4-7", RK3588_PWM4_7);
+    rk3588_create_syscon(s, "pwm8-11", RK3588_PWM8_11);
+    rk3588_create_syscon(s, "pwm12-15", RK3588_PWM12_15);
     rk3588_create_syscon(s, "firewall-ddr", RK3588_FIREWALL_DDR);
     rk3588_create_syscon(s, "firewall-sysmem", RK3588_FIREWALL_SYSMEM);
 
