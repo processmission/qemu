@@ -1,7 +1,7 @@
 /*
  * Synopsys DesignWare APB UART vendor register window
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */

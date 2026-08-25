@@ -1,7 +1,7 @@
 /*
  * QTest for the Rockchip RK3588 RKNPU accelerator
  *
- * Copyright (c) 2026 Chao Liu
+ * Copyright (c) 2026 Process Mission
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
