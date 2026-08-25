@@ -505,7 +505,10 @@ class MCS51ISATest(QemuSystemTest):
         main.emit(0x75, 0x89, 0x01)
         main.emit(0x75, 0x8c, 0x00, 0x75, 0x8a, 0x00)
         main.emit(0x75, 0xa8, 0x82, 0x75, 0x88, 0x10)
+        # Leave Timer 0 running until IDL returns so an early interrupt
+        # cannot consume the only wakeup.
         main.emit(0x75, 0x87, 0x31)
+        main.emit(0x75, 0x88, 0x00)
         self.assert_direct(main, 0x20, 0x01)
         self.assert_direct(main, 0x87, 0x30)
         self.emit_text(main, b'IDLE-PASS\n')
@@ -517,7 +520,6 @@ class MCS51ISATest(QemuSystemTest):
         write(0x0100, main.finish(0x0100))
 
         handler = bytes((
-            0x75, 0x88, 0x00,
             0x75, 0x20, 0x01,
             0x32,
         ))
