@@ -273,6 +273,7 @@ static void test_machine_migration(void)
     migrate_incoming_qmp(to, "tcp:127.0.0.1:0", NULL, "{}");
     migrate_qmp(from, to, NULL, NULL, "{}");
     wait_for_migration_complete(from);
+    wait_for_migration_complete(to);
 
     if (old_qemu) {
         g_assert_cmphex(qtest_readl(to, RTC_BASE + RTC_CONTROL), ==,
