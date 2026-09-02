@@ -784,6 +784,8 @@ static void test_sd_adma_aplic_imsic(void)
                  17 << 8 | SDHCI_CMD_RESP_SHORT | SDHCI_CMD_CRC |
                  SDHCI_CMD_INDEX | SDHCI_CMD_DATA);
 
+    /* ADMA now runs independently of MMIO accesses. */
+    qtest_clock_step_next(qts);
     status = qtest_readl(qts, K3_SDHCI0_BASE + SDHCI_NORINTSTS);
     g_assert_cmphex(status & (SDHCI_NIS_CMDCMP | SDHCI_NIS_TRSCMP), ==,
                     SDHCI_NIS_CMDCMP | SDHCI_NIS_TRSCMP);
