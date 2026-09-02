@@ -1675,6 +1675,7 @@ static int sdhci_pre_load(void *opaque)
 {
     SDHCIState *s = opaque;
 
+    s->hostctl2 = 0;
     s->sdma_boundary_paused = false;
     return 0;
 }
@@ -1751,6 +1752,7 @@ const VMStateDescription sdhci_vmstate = {
     .subsections = (const VMStateDescription * const []) {
         &sdhci_hostctl2_vmstate,
         &sdhci_pending_insert_vmstate,
+        &sdhci_sdma_boundary_paused_vmstate,
         NULL
     },
 };
