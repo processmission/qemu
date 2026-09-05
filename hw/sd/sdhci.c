@@ -229,6 +229,23 @@ static bool sdhci_update_irq(SDHCIState *s)
     return pending;
 }
 
+static uint8_t sdhci_get_dma_type(SDHCIState *s)
+{
+    uint8_t type = SDHC_DMA_TYPE(s->hostctl1);
+
+    /*
+     * In version 4 mode, the legacy ADMA2_32 encoding selects ADMA2,
+     * while ADDRESSING_64 determines its address width.
+     */
+    if (type == SDHC_CTRL_ADMA2_32 &&
+        FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4) &&
+        FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING_64)) {
+        return SDHC_CTRL_ADMA2_64;
+    }
+
+    return type;
+}
+
 static void sdhci_raise_insertion_irq(void *opaque)
 {
     SDHCIState *s = (SDHCIState *)opaque;
@@ -262,6 +279,7 @@ static void sdhci_set_inserted(DeviceState *dev, bool level)
             }
         } else {
             s->prnsts = 0x1fa0000;
+            timer_del(s->transfer_timer);
             s->pwrcon &= ~SDHC_POWER_ON;
             s->clkcon &= ~SDHC_CLOCK_SDCLK_EN;
             if (s->norintstsen & SDHC_NISEN_REMOVE) {
@@ -309,6 +327,7 @@ static void sdhci_reset(SDHCIState *s)
     s->data_count = 0;
     s->stopped_state = sdhc_not_stopped;
     s->pending_insert_state = false;
+    s->sdma_boundary_paused = false;
     if (object_dynamic_cast(OBJECT(s), TYPE_FSL_ESDHC_BE) ||
             object_dynamic_cast(OBJECT(s), TYPE_FSL_ESDHC_LE)) {
         s->norintstsen = 0x013f;
@@ -332,7 +351,34 @@ static void sdhci_poweron_reset(DeviceState *dev)
     }
 }
 
-static void sdhci_data_transfer(void *opaque);
+static void sdhci_data_transfer(SDHCIState *s);
+static void sdhci_adma_engine(void *opaque);
+
+static void sdhci_set_transfer_active(SDHCIState *s)
+{
+    s->prnsts |= SDHC_DATA_INHIBIT | SDHC_DAT_LINE_ACTIVE;
+    if (s->trnmod & SDHC_TRNS_READ) {
+        s->prnsts |= SDHC_DOING_READ;
+    } else {
+        s->prnsts |= SDHC_DOING_WRITE;
+    }
+}
+
+static void sdhci_schedule_adma(SDHCIState *s)
+{
+    timer_mod(s->transfer_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SDHC_TRANSFER_DELAY);
+}
+
+static bool sdhci_adma_transfer_active(SDHCIState *s)
+{
+    return TRANSFERRING_DATA(s->prnsts) &&
+           (s->trnmod & SDHC_TRNS_DMA) &&
+           (s->cmdreg & SDHC_CMD_DATA_PRESENT) &&
+           sdhci_get_dma_type(s) != SDHC_CTRL_SDMA &&
+           !(s->admaerr & SDHC_ADMAERR_STATE_MASK) &&
+           !(s->errintsts & SDHC_EIS_ADMAERR);
+}
 
 #define BLOCK_SIZE_MASK (4 * KiB - 1)
 
@@ -420,7 +466,13 @@ static void sdhci_send_command(SDHCIState *s)
     if (!timeout && (s->blksize & BLOCK_SIZE_MASK) &&
         (s->cmdreg & SDHC_CMD_DATA_PRESENT)) {
         s->data_count = 0;
-        sdhci_data_transfer(s);
+        if ((s->trnmod & SDHC_TRNS_DMA) &&
+            sdhci_get_dma_type(s) != SDHC_CTRL_SDMA) {
+            sdhci_set_transfer_active(s);
+            sdhci_schedule_adma(s);
+        } else {
+            sdhci_data_transfer(s);
+        }
     }
 }
 
@@ -447,6 +499,7 @@ static void sdhci_end_transfer(SDHCIState *s)
         s->norintsts |= SDHC_NIS_TRSCMP;
     }
 
+    s->sdma_boundary_paused = false;
     sdhci_update_irq(s);
 }
 
@@ -629,6 +682,41 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
  * Single DMA data transfer
  */
 
+static bool sdhci_version4_enabled(SDHCIState *s)
+{
+    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4);
+}
+
+static bool sdhci_64bit_addressing_enabled(SDHCIState *s)
+{
+    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING_64);
+}
+
+static uint64_t sdhci_sdma_address(SDHCIState *s)
+{
+    if (!sdhci_version4_enabled(s)) {
+        return s->sdmasysad;
+    }
+
+    return sdhci_64bit_addressing_enabled(s) ?
+           s->admasysaddr : (uint32_t)s->admasysaddr;
+}
+
+static void sdhci_advance_sdma_address(SDHCIState *s, uint32_t bytes)
+{
+    if (!sdhci_version4_enabled(s)) {
+        s->sdmasysad += bytes;
+    } else if (sdhci_64bit_addressing_enabled(s)) {
+        s->admasysaddr += bytes;
+    } else {
+        uint32_t address = s->admasysaddr;
+
+        address += bytes;
+        s->admasysaddr = (s->admasysaddr & 0xffffffff00000000ULL) |
+                         address;
+    }
+}
+
 /* Multi block SDMA transfer */
 static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 {
@@ -636,7 +724,8 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     unsigned int begin;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     uint32_t boundary_chk = 1 << (((s->blksize & ~BLOCK_SIZE_MASK) >> 12) + 12);
-    uint32_t boundary_count = boundary_chk - (s->sdmasysad % boundary_chk);
+    uint64_t sdma_address = sdhci_sdma_address(s);
+    uint32_t boundary_count = boundary_chk - (sdma_address % boundary_chk);
 
     if (!(s->trnmod & SDHC_TRNS_BLK_CNT_EN) || !s->blkcnt) {
         qemu_log_mask(LOG_UNIMP, "infinite transfer is not supported\n");
@@ -648,7 +737,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
      * possible stop at page boundary if initial address is not page aligned,
      * allow them to work properly
      */
-    if ((s->sdmasysad % boundary_chk) == 0) {
+    if ((sdma_address % boundary_chk) == 0) {
         page_aligned = true;
     }
 
@@ -670,9 +759,10 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                     s->blkcnt--;
                 }
             }
-            dma_memory_write(s->dma_as, s->sdmasysad, &s->fifo_buffer[begin],
+            dma_memory_write(s->dma_as, sdhci_sdma_address(s),
+                             &s->fifo_buffer[begin],
                              s->data_count - begin, MEMTXATTRS_UNSPECIFIED);
-            s->sdmasysad += s->data_count - begin;
+            sdhci_advance_sdma_address(s, s->data_count - begin);
             if (s->data_count == block_size) {
                 s->data_count = 0;
             }
@@ -691,9 +781,10 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 s->data_count = block_size;
                 boundary_count -= block_size - begin;
             }
-            dma_memory_read(s->dma_as, s->sdmasysad, &s->fifo_buffer[begin],
+            dma_memory_read(s->dma_as, sdhci_sdma_address(s),
+                            &s->fifo_buffer[begin],
                             s->data_count - begin, MEMTXATTRS_UNSPECIFIED);
-            s->sdmasysad += s->data_count - begin;
+            sdhci_advance_sdma_address(s, s->data_count - begin);
             if (s->data_count == block_size) {
                 sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                 s->data_count = 0;
@@ -714,6 +805,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     if (s->blkcnt == 0) {
         sdhci_end_transfer(s);
     } else {
+        s->sdma_boundary_paused = true;
         sdhci_update_irq(s);
     }
 }
@@ -725,10 +817,12 @@ static void sdhci_sdma_transfer_single_block(SDHCIState *s)
 
     if (s->trnmod & SDHC_TRNS_READ) {
         sdbus_read_data(&s->sdbus, s->fifo_buffer, datacnt);
-        dma_memory_write(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt,
+        dma_memory_write(s->dma_as, sdhci_sdma_address(s),
+                         s->fifo_buffer, datacnt,
                          MEMTXATTRS_UNSPECIFIED);
     } else {
-        dma_memory_read(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt,
+        dma_memory_read(s->dma_as, sdhci_sdma_address(s),
+                        s->fifo_buffer, datacnt,
                         MEMTXATTRS_UNSPECIFIED);
         sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
@@ -750,6 +844,21 @@ static void sdhci_sdma_transfer(SDHCIState *s)
     }
 }
 
+static bool sdhci_sdma_transfer_active(SDHCIState *s)
+{
+    return TRANSFERRING_DATA(s->prnsts) &&
+            (s->trnmod & SDHC_TRNS_DMA) &&
+            s->blkcnt &&
+            (s->blksize & BLOCK_SIZE_MASK) &&
+            SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA;
+}
+
+static void sdhci_resume_sdma_transfer(SDHCIState *s)
+{
+    s->sdma_boundary_paused = false;
+    sdhci_sdma_transfer(s);
+}
+
 typedef struct ADMADescr {
     hwaddr addr;
     uint16_t length;
@@ -762,7 +871,7 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
     uint32_t adma1 = 0;
     uint64_t adma2 = 0;
     hwaddr entry_addr = (hwaddr)s->admasysaddr;
-    switch (SDHC_DMA_TYPE(s->hostctl1)) {
+    switch (sdhci_get_dma_type(s)) {
     case SDHC_CTRL_ADMA2_32:
         dma_memory_read(s->dma_as, entry_addr, &adma2, sizeof(adma2),
                         MEMTXATTRS_UNSPECIFIED);
@@ -799,14 +908,16 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
                         MEMTXATTRS_UNSPECIFIED);
         dscr->addr = le64_to_cpu(dscr->addr);
         dscr->attr &= (uint8_t) ~0xC0;
-        dscr->incr = 12;
+        /* Version 4 pads 64-bit ADMA2 descriptors from 96 to 128 bits */
+        dscr->incr = FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4) ?
+                     16 : 12;
         break;
     }
 }
 
 /* Advanced DMA data transfer */
 
-static void sdhci_do_adma(SDHCIState *s)
+static void sdhci_adma_run_batch(SDHCIState *s)
 {
     unsigned int begin, length;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
@@ -912,12 +1023,15 @@ static void sdhci_do_adma(SDHCIState *s)
             }
             if (res != MEMTX_OK) {
                 s->data_count = 0;
+                s->admaerr &= ~SDHC_ADMAERR_STATE_MASK;
+                s->admaerr |= SDHC_ADMAERR_STATE_ST_TFR;
                 if (s->errintstsen & SDHC_EISEN_ADMAERR) {
                     trace_sdhci_error("Set ADMA error flag");
                     s->errintsts |= SDHC_EIS_ADMAERR;
                     s->norintsts |= SDHC_NIS_ERR;
                 }
                 sdhci_update_irq(s);
+                return;
             } else {
                 s->admasysaddr += dscr.incr;
             }
@@ -968,55 +1082,52 @@ static void sdhci_do_adma(SDHCIState *s)
     }
 
     /* we have unfinished business - reschedule to continue ADMA */
-    timer_mod(s->transfer_timer,
-                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SDHC_TRANSFER_DELAY);
+    sdhci_schedule_adma(s);
 }
 
-/* Perform data transfer according to controller configuration */
-
-static void sdhci_data_transfer(void *opaque)
+/* Run one independently scheduled, quota-bounded ADMA batch */
+static void sdhci_adma_engine(void *opaque)
 {
     SDHCIState *s = (SDHCIState *)opaque;
 
-    if (s->trnmod & SDHC_TRNS_DMA) {
-        switch (SDHC_DMA_TYPE(s->hostctl1)) {
-        case SDHC_CTRL_SDMA:
-            if (!(s->capareg & R_SDHC_CAPAB_SDMA_MASK)) {
-                trace_sdhci_error("SDMA not supported");
-                break;
-            }
+    if (!sdhci_adma_transfer_active(s)) {
+        return;
+    }
 
-            sdhci_sdma_transfer(s);
-            break;
-        case SDHC_CTRL_ADMA1_32:
-            if (!(s->capareg & R_SDHC_CAPAB_ADMA1_MASK)) {
-                trace_sdhci_error("ADMA1 not supported");
-                break;
-            }
-
-            sdhci_do_adma(s);
-            break;
-        case SDHC_CTRL_ADMA2_32:
-            if (!(s->capareg & R_SDHC_CAPAB_ADMA2_MASK)) {
-                trace_sdhci_error("ADMA2 not supported");
-                break;
-            }
-
-            sdhci_do_adma(s);
-            break;
-        case SDHC_CTRL_ADMA2_64:
-            if (!(s->capareg & R_SDHC_CAPAB_ADMA2_MASK) ||
-                    !(s->capareg & R_SDHC_CAPAB_BUS64BIT_MASK)) {
-                trace_sdhci_error("64 bit ADMA not supported");
-                break;
-            }
-
-            sdhci_do_adma(s);
-            break;
-        default:
-            trace_sdhci_error("Unsupported DMA type");
-            break;
+    switch (sdhci_get_dma_type(s)) {
+    case SDHC_CTRL_ADMA1_32:
+        if (!(s->capareg & R_SDHC_CAPAB_ADMA1_MASK)) {
+            trace_sdhci_error("ADMA1 not supported");
+            return;
         }
+        break;
+    case SDHC_CTRL_ADMA2_32:
+        if (!(s->capareg & R_SDHC_CAPAB_ADMA2_MASK)) {
+            trace_sdhci_error("ADMA2 not supported");
+            return;
+        }
+        break;
+    case SDHC_CTRL_ADMA2_64:
+        if (!(s->capareg & R_SDHC_CAPAB_ADMA2_MASK) ||
+            !(s->capareg & R_SDHC_CAPAB_BUS64BIT_MASK)) {
+            trace_sdhci_error("64 bit ADMA not supported");
+            return;
+        }
+        break;
+    default:
+        trace_sdhci_error("Unsupported ADMA type");
+        return;
+    }
+
+    sdhci_adma_run_batch(s);
+}
+
+/* Perform synchronous PIO or SDMA data transfer */
+static void sdhci_data_transfer(SDHCIState *s)
+{
+    if (s->trnmod & SDHC_TRNS_DMA) {
+        assert(sdhci_get_dma_type(s) == SDHC_CTRL_SDMA);
+        sdhci_sdma_transfer(s);
     } else {
         if ((s->trnmod & SDHC_TRNS_READ) && sdbus_data_ready(&s->sdbus)) {
             s->prnsts |= SDHC_DOING_READ | SDHC_DATA_INHIBIT |
@@ -1059,20 +1170,10 @@ sdhci_buff_access_is_sequential(SDHCIState *s, unsigned byte_num)
     return true;
 }
 
-static void sdhci_resume_pending_transfer(SDHCIState *s)
-{
-    timer_del(s->transfer_timer);
-    sdhci_data_transfer(s);
-}
-
 static uint64_t sdhci_read(void *opaque, hwaddr offset, unsigned size)
 {
     SDHCIState *s = (SDHCIState *)opaque;
     uint32_t ret = 0;
-
-    if (timer_pending(s->transfer_timer)) {
-        sdhci_resume_pending_transfer(s);
-    }
 
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
@@ -1199,14 +1300,22 @@ static inline void sdhci_reset_write(SDHCIState *s, uint8_t value)
         s->norintsts &= ~SDHC_NIS_CMDCMP;
         break;
     case SDHC_RESET_DATA:
+        timer_del(s->transfer_timer);
         s->data_count = 0;
+        s->admaerr = 0;
+        s->errintsts &= ~SDHC_EIS_ADMAERR;
         s->prnsts &= ~(SDHC_SPACE_AVAILABLE | SDHC_DATA_AVAILABLE |
                 SDHC_DOING_READ | SDHC_DOING_WRITE |
                 SDHC_DATA_INHIBIT | SDHC_DAT_LINE_ACTIVE);
         s->blkgap &= ~(SDHC_STOP_AT_GAP_REQ | SDHC_CONTINUE_REQ);
         s->stopped_state = sdhc_not_stopped;
+        s->sdma_boundary_paused = false;
         s->norintsts &= ~(SDHC_NIS_WBUFRDY | SDHC_NIS_RBUFRDY |
                 SDHC_NIS_DMA | SDHC_NIS_TRSCMP | SDHC_NIS_BLKGAP);
+        if (!s->errintsts) {
+            s->norintsts &= ~SDHC_NIS_ERR;
+        }
+        sdhci_update_irq(s);
         break;
     }
 }
@@ -1220,10 +1329,6 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     uint32_t value = val;
     value <<= shift;
 
-    if (timer_pending(s->transfer_timer)) {
-        sdhci_resume_pending_transfer(s);
-    }
-
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
         /*
@@ -1232,15 +1337,14 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
          * while the data line is still active.
          */
         if (!TRANSFERRING_DATA(s->prnsts) ||
-            ((s->trnmod & SDHC_TRNS_DMA) &&
-             SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA)) {
+            (!sdhci_version4_enabled(s) && s->sdma_boundary_paused)) {
             s->sdmasysad = (s->sdmasysad & mask) | value;
             MASKED_WRITE(s->sdmasysad, mask, value);
-            /* Writing to last byte of sdmasysad might trigger transfer */
-            if (!(mask & 0xFF000000) && s->blkcnt &&
-                (s->blksize & BLOCK_SIZE_MASK) &&
-                SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA) {
-                sdhci_sdma_transfer(s);
+            /* A completed selected-address write resumes stopped SDMA */
+            if (!sdhci_version4_enabled(s) && !(mask & 0xff000000) &&
+                s->sdma_boundary_paused &&
+                sdhci_sdma_transfer_active(s)) {
+                sdhci_resume_sdma_transfer(s);
             }
         }
         break;
@@ -1379,10 +1483,23 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     case SDHC_ADMASYSADDR:
         s->admasysaddr = (s->admasysaddr & (0xFFFFFFFF00000000ULL |
                 (uint64_t)mask)) | (uint64_t)value;
+        if (sdhci_version4_enabled(s) &&
+            !sdhci_64bit_addressing_enabled(s) &&
+            !(mask & 0xff000000) && s->sdma_boundary_paused &&
+            sdhci_sdma_transfer_active(s)) {
+            sdhci_resume_sdma_transfer(s);
+        }
         break;
     case SDHC_ADMASYSADDR + 4:
         s->admasysaddr = (s->admasysaddr & (0x00000000FFFFFFFFULL |
                 ((uint64_t)mask << 32))) | ((uint64_t)value << 32);
+        /* A completed selected-address write resumes boundary-stopped SDMA */
+        if (sdhci_version4_enabled(s) &&
+            sdhci_64bit_addressing_enabled(s) &&
+            !(mask & 0xff000000) && s->sdma_boundary_paused &&
+            sdhci_sdma_transfer_active(s)) {
+            sdhci_resume_sdma_transfer(s);
+        }
         break;
     case SDHC_FEAER:
         s->acmd12errsts |= value;
@@ -1395,11 +1512,25 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
         }
         sdhci_update_irq(s);
         break;
-    case SDHC_ACMD12ERRSTS:
-        MASKED_WRITE(s->acmd12errsts, mask, value & UINT16_MAX);
-        if (s->uhs_mode >= UHS_I) {
-            MASKED_WRITE(s->hostctl2, mask >> 16, value >> 16);
+    case SDHC_ACMD12ERRSTS: {
+        uint16_t hostctl2_mask = mask >> 16;
+        uint16_t hostctl2_value = value >> 16;
 
+        MASKED_WRITE(s->acmd12errsts, mask, value & UINT16_MAX);
+        if (s->uhs_mode < UHS_I) {
+            /*
+             * Version 4 fields are writable even without UHS-I. Preserve all
+             * other Host Control 2 bits when UHS-I is not supported.
+             */
+            uint16_t independent = R_SDHC_HOSTCTL2_VERSION4_MASK |
+                                   R_SDHC_HOSTCTL2_ADDRESSING_64_MASK;
+
+            hostctl2_mask |= ~independent;
+            hostctl2_value &= independent;
+        }
+        MASKED_WRITE(s->hostctl2, hostctl2_mask, hostctl2_value);
+
+        if (s->uhs_mode >= UHS_I) {
             if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, V18_ENA)) {
                 sdbus_set_voltage(&s->sdbus, SD_VOLTAGE_1_8V);
             } else {
@@ -1407,6 +1538,7 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
             }
         }
         break;
+    }
 
     case SDHC_CAPAB:
     case SDHC_CAPAB + 4:
@@ -1464,7 +1596,7 @@ void sdhci_initfn(SDHCIState *s)
     s->insert_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                    sdhci_raise_insertion_irq, s);
     s->transfer_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                     sdhci_data_transfer, s);
+                                     sdhci_adma_engine, s);
 
     s->io_ops = &sdhci_mmio_ops;
 }
@@ -1507,11 +1639,55 @@ void sdhci_common_unrealize(SDHCIState *s)
     s->fifo_buffer = NULL;
 }
 
+static bool sdhci_hostctl2_vmstate_needed(void *opaque)
+{
+    SDHCIState *s = opaque;
+
+    return s->hostctl2;
+}
+
+static const VMStateDescription sdhci_hostctl2_vmstate = {
+    .name = "sdhci/hostctl2",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = sdhci_hostctl2_vmstate_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16(hostctl2, SDHCIState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static bool sdhci_pending_insert_vmstate_needed(void *opaque)
 {
     SDHCIState *s = opaque;
 
     return s->pending_insert_state;
+}
+
+static bool sdhci_sdma_boundary_paused_vmstate_needed(void *opaque)
+{
+    SDHCIState *s = opaque;
+
+    return s->sdma_boundary_paused;
+}
+
+static int sdhci_pre_load(void *opaque)
+{
+    SDHCIState *s = opaque;
+
+    s->hostctl2 = 0;
+    s->sdma_boundary_paused = false;
+    return 0;
+}
+
+static int sdhci_post_load(void *opaque, int version_id)
+{
+    SDHCIState *s = opaque;
+
+    if (!s->sdma_boundary_paused) {
+        s->sdma_boundary_paused = sdhci_sdma_transfer_active(s);
+    }
+    return 0;
 }
 
 static const VMStateDescription sdhci_pending_insert_vmstate = {
@@ -1525,10 +1701,23 @@ static const VMStateDescription sdhci_pending_insert_vmstate = {
     },
 };
 
+static const VMStateDescription sdhci_sdma_boundary_paused_vmstate = {
+    .name = "sdhci/sdma_boundary_paused",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = sdhci_sdma_boundary_paused_vmstate_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BOOL(sdma_boundary_paused, SDHCIState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 const VMStateDescription sdhci_vmstate = {
     .name = "sdhci",
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_load = sdhci_pre_load,
+    .post_load = sdhci_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(sdmasysad, SDHCIState),
         VMSTATE_UINT16(blksize, SDHCIState),
@@ -1561,7 +1750,9 @@ const VMStateDescription sdhci_vmstate = {
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
+        &sdhci_hostctl2_vmstate,
         &sdhci_pending_insert_vmstate,
+        &sdhci_sdma_boundary_paused_vmstate,
         NULL
     },
 };

@@ -18,6 +18,9 @@ config M48T59
 config PL031
     bool
 
+config MCHP_PFSOC_RTC
+    bool
+
 config K230_RTC
     bool
 
