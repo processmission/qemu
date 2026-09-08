@@ -170,6 +170,7 @@ config PHYTIUM_E2000
     select PL011
     select SD
     select UNIMP
+    select USB_XHCI_SYSBUS
 
 config REALVIEW
     bool
