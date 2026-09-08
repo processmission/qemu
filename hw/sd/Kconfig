@@ -18,6 +18,11 @@ config SSI_SD
 config SD
     bool
 
+config DW_MCI
+    bool
+    select REGISTER
+    select SD
+
 config SDHCI
     bool
     select SD
