@@ -98,7 +98,6 @@ Board-specific documentation
    arm/mcimx7d-sabre
    arm/imx8m
    arm/orangepi
-   arm/phytium-pi
    arm/phytium_e2000
    arm/raspi
    arm/rk3588

@@ -13,9 +13,6 @@ system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
 system_ss.add(when: 'CONFIG_PVPANIC_COMMON', if_true: files('pvpanic.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_SYSCON', if_true: files('rockchip_syscon.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_CRYPTO_V2', if_true: files('rockchip_crypto_v2.c'))
-system_ss.add(when: 'CONFIG_PHYTIUM_DDR_CTRL', if_true: files('phytium-ddr-ctrl.c'))
-system_ss.add(when: 'CONFIG_PHYTIUM_SCP_MAILBOX', if_true: files('phytium-scp-mailbox.c'))
-
 # ARM devices
 system_ss.add(when: 'CONFIG_PL310', if_true: files('arm_l2x0.c'))
 system_ss.add(when: 'CONFIG_INTEGRATOR_DEBUG', if_true: files('arm_integrator_debug.c'))

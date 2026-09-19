@@ -20,6 +20,7 @@
 #include "exec/hwaddr.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/bsa.h"
+#include "hw/arm/machines-qom.h"
 #include "hw/arm/phytium_e2000.h"
 #include "hw/core/boards.h"
 #include "hw/core/qdev-properties.h"
@@ -364,6 +365,7 @@ static const TypeInfo phytium_e2000_base_info = {
     .class_init = phytium_e2000_class_init,
     .class_size = sizeof(PhytiumE2000MachineClass),
     .instance_size = sizeof(PhytiumE2000MachineState),
+    .interfaces = aarch64_machine_interfaces,
 };
 
 static const TypeInfo phytium_pi_info = {

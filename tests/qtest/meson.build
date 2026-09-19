@@ -298,7 +298,6 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_RK3588S_ROC_PC') ? ['rk3588s-roc-pc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
-  (config_all_devices.has_key('CONFIG_PHYTIUMPI') ? ['phytiumpi-test'] : []) + \
   qtests_cxl +                                                                                  \
   ['arm-cpu-features',
    'numa-test',

@@ -50,12 +50,6 @@ config ROCKCHIP_CRYPTO_V2
     bool
     select REGISTER
 
-config PHYTIUM_DDR_CTRL
-    bool
-
-config PHYTIUM_SCP_MAILBOX
-    bool
-
 config INTEGRATOR_DEBUG
     bool
 

@@ -42,7 +42,7 @@ The table below is the current map of machine models covered by this tree.
 | RISC-V | [`riscv-server-ref`](docs/system/riscv/riscv-server-ref.rst) | ✅ | ✅ | UP |
 | ARM | [`ardep-v2`](docs/system/arm/stm32g474.rst) | ✅ | ✅ | PM |
 | ARM | [`ax650x-pyramid`](docs/system/arm/ax650x-pyramid.rst) | ✅ | — | PM |
-| ARM | [`phytium-pi`](docs/system/arm/phytium-pi.rst) | ✅ | ✅ | PM |
+| ARM | [`phytium-pi`](docs/system/arm/phytium_e2000.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588-evb`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rk3588s-roc-pc`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
 | ARM | [`rock-5b-plus`](docs/system/arm/rk3588.rst) | ✅ | ✅ | PM |
