@@ -1109,6 +1109,9 @@ F: include/hw/misc/phytium*
 F: include/hw/sd/phytium*
 F: include/hw/ssi/phytium*
 F: tests/functional/aarch64/test_phytium_pi.py
+F: docs/system/arm/phytium_pomelo.rst
+F: hw/arm/phytium_pomelo.c
+F: include/hw/arm/phytium_pomelo.h
 
 Raspberry Pi
 M: Peter Maydell <peter.maydell@linaro.org>

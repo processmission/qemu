@@ -17,6 +17,8 @@ arm_common_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files(
   'phytium_e2000.c',
   'phytium_e2000_machine.c',
 ))
+arm_common_ss.add(when: 'CONFIG_PHYTIUM_POMELO',
+                  if_true: files('phytium_pomelo.c'))
 arm_common_ss.add(when: 'CONFIG_REALVIEW', if_true: files('realview.c'))
 arm_common_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa-ref.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588', if_true: files('rk3588.c'))

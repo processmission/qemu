@@ -99,6 +99,7 @@ Board-specific documentation
    arm/imx8m
    arm/orangepi
    arm/phytium_e2000
+   arm/phytium_pomelo
    arm/raspi
    arm/rk3588
    arm/collie
