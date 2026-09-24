@@ -1253,7 +1253,31 @@ void phytium_e2000_pbr_connect_cpu(PhytiumE2000PBRState *s,
 static void phytium_e2000_pbr_realize(DeviceState *dev, Error **errp)
 {
     PhytiumE2000PBRState *s = PHYTIUM_E2000_PBR(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    Object *obj = OBJECT(dev);
+    const char *path_component = object_get_canonical_path_component(obj);
+    g_autofree char *boot_sram_name = NULL;
+    g_autofree char *iacc_name = NULL;
     bool loaded;
+
+    /*
+     * Keep the RAMBlock names instance-specific.  The device introspection
+     * qtest creates temporary instances with `device_add ...,help`; placing
+     * RAM regions in instance_init() makes those help-only objects collide
+     * with the machine's PBR RAMBlock before they are even realized.
+     */
+    if (!path_component) {
+        path_component = "pbr";
+    }
+    boot_sram_name = g_strdup_printf("phytium-e2000.%s.boot-sram",
+                                     path_component);
+    iacc_name = g_strdup_printf("phytium-e2000.%s.iacc", path_component);
+    memory_region_init_ram(&s->boot_sram, obj, boot_sram_name,
+                           PHYTIUM_E2000_PBR_BOOT_SRAM_SIZE, &error_abort);
+    sysbus_init_mmio(sbd, &s->boot_sram);
+    memory_region_init_ram(&s->iacc, obj, iacc_name,
+                           PHYTIUM_E2000_PBR_IACC_SIZE, &error_abort);
+    sysbus_init_mmio(sbd, &s->iacc);
 
     if (!s->boot_mode) {
         error_setg(errp, "boot-mode was not configured");
@@ -1295,12 +1319,6 @@ static void phytium_e2000_pbr_init(Object *obj)
         &phytium_e2000_pbr_ops, false, PHYTIUM_E2000_PBR_MMIO_SIZE);
     sysbus_init_mmio(sbd, &reg_array->mem);
 
-    memory_region_init_ram(&s->boot_sram, obj, "phytium-e2000.boot-sram",
-                           PHYTIUM_E2000_PBR_BOOT_SRAM_SIZE, &error_abort);
-    sysbus_init_mmio(sbd, &s->boot_sram);
-    memory_region_init_ram(&s->iacc, obj, "phytium-e2000.iacc",
-                           PHYTIUM_E2000_PBR_IACC_SIZE, &error_abort);
-    sysbus_init_mmio(sbd, &s->iacc);
     s->primary_cpu = -1;
 }
 
