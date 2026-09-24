@@ -1095,6 +1095,24 @@ F: tests/functional/aarch64/test_rock5b_plus.py
 F: tests/qtest/rk3588*
 F: tests/qtest/rock5b-plus-test.c
 
+Phytium E2000Q machines
+M: Bin Meng <bin.meng@processmission.com>
+L: qemu-arm@nongnu.org
+S: Maintained
+F: docs/system/arm/phytium_e2000.rst
+F: hw/arm/phytium*
+F: include/hw/arm/phytium*
+F: hw/misc/phytium*
+F: hw/sd/phytium*
+F: hw/ssi/phytium*
+F: include/hw/misc/phytium*
+F: include/hw/sd/phytium*
+F: include/hw/ssi/phytium*
+F: tests/functional/aarch64/test_phytium_pi.py
+F: docs/system/arm/phytium_pomelo.rst
+F: hw/arm/phytium_pomelo.c
+F: include/hw/arm/phytium_pomelo.h
+
 Raspberry Pi
 M: Peter Maydell <peter.maydell@linaro.org>
 R: Philippe Mathieu-Daudé <philmd@mailo.com>
@@ -2549,10 +2567,13 @@ M: Philippe Mathieu-Daudé <philmd@mailo.com>
 M: Bin Meng <bmeng.cn@gmail.com>
 L: qemu-block@nongnu.org
 S: Odd Fixes
+F: include/hw/sd/dw_mci.h
 F: include/hw/sd/sd*
 F: hw/sd/core.c
+F: hw/sd/dw_mci.c
 F: hw/sd/sd*
 F: hw/sd/ssi-sd.c
+F: tests/qtest/dw_mci-test.c
 F: tests/qtest/fuzz-sdcard-test.c
 F: tests/qtest/sdhci-test.c
 

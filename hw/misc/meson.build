@@ -13,14 +13,15 @@ system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
 system_ss.add(when: 'CONFIG_PVPANIC_COMMON', if_true: files('pvpanic.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_SYSCON', if_true: files('rockchip_syscon.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_CRYPTO_V2', if_true: files('rockchip_crypto_v2.c'))
-system_ss.add(when: 'CONFIG_PHYTIUM_DDR_CTRL', if_true: files('phytium-ddr-ctrl.c'))
-system_ss.add(when: 'CONFIG_PHYTIUM_SCP_MAILBOX', if_true: files('phytium-scp-mailbox.c'))
-
 # ARM devices
 system_ss.add(when: 'CONFIG_PL310', if_true: files('arm_l2x0.c'))
 system_ss.add(when: 'CONFIG_INTEGRATOR_DEBUG', if_true: files('arm_integrator_debug.c'))
 system_ss.add(when: 'CONFIG_A9SCU', if_true: files('a9scu.c'))
 system_ss.add(when: 'CONFIG_ARM11SCU', if_true: files('arm11scu.c'))
+system_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files('phytium_e2000_ddr.c'))
+system_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files('phytium_e2000_mhu.c'))
+system_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files('phytium_e2000_pbr.c'))
+system_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files('phytium_e2000_rng.c'))
 
 system_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_ras.c'))
 

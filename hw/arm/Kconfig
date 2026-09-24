@@ -155,6 +155,39 @@ config OMAP
     select SD
     select SERIAL_MM
 
+config PHYTIUM_E2000
+    bool
+    default y
+    depends on TCG && AARCH64
+    imply PCI_DEVICES
+    select AHCI_SYSBUS
+    select ARM_GIC
+    select ARM_SMMUV3
+    select CADENCE
+    select DESIGNWARE_I2C
+    select DW_MCI
+    select IDE_BUS
+    select IDE_DEV
+    select PCI_EXPRESS
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select PHYTIUM_E2000_QSPI
+    select PL011
+    select SD
+    select SSI_M25P80
+    select UNIMP
+    select USB_XHCI_SYSBUS
+
+config PHYTIUM_POMELO
+    bool
+    default y
+    depends on TCG && AARCH64
+    select ARM_GIC
+    select DWMAC4
+    select PCI_EXPRESS
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select PL011
+    select UNIMP
+
 config REALVIEW
     bool
     default y
@@ -271,19 +304,6 @@ config S32K5
     select ARM_GICV5 if TCG
     select NXP_LPUART
     select NXP_S32_MC_ME
-    select UNIMP
-
-config PHYTIUMPI
-    bool
-    default y
-    depends on TCG && AARCH64
-    select ARM_GIC
-    select DEVICE_TREE
-    select PHYTIUM_DDR_CTRL
-    select PHYTIUM_MCI
-    select PHYTIUM_SCP_MAILBOX
-    select PHYTIUM_XMAC
-    select PL011 # UART
     select UNIMP
 
 config SABRELITE

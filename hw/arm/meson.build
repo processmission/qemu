@@ -13,13 +13,18 @@ arm_common_ss.add(when: 'CONFIG_NETDUINOPLUS2', if_true: files('netduinoplus2.c'
 arm_common_ss.add(when: 'CONFIG_OLIMEX_STM32_H405', if_true: files('olimex-stm32-h405.c'))
 arm_common_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx.c', 'npcm7xx_boards.c'))
 arm_common_ss.add(when: 'CONFIG_NPCM8XX', if_true: files('npcm8xx.c', 'npcm8xx_boards.c'))
+arm_common_ss.add(when: 'CONFIG_PHYTIUM_E2000', if_true: files(
+  'phytium_e2000.c',
+  'phytium_e2000_machine.c',
+))
+arm_common_ss.add(when: 'CONFIG_PHYTIUM_POMELO',
+                  if_true: files('phytium_pomelo.c'))
 arm_common_ss.add(when: 'CONFIG_REALVIEW', if_true: files('realview.c'))
 arm_common_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa-ref.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588', if_true: files('rk3588.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588_EVB', if_true: files('rk3588_evb.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588S_ROC_PC', if_true: files('rk3588s_roc_pc.c'))
 arm_common_ss.add(when: 'CONFIG_ROCK_5B_PLUS', if_true: files('rock5b_plus.c'))
-arm_common_ss.add(when: 'CONFIG_PHYTIUMPI', if_true: files('phytium-pi.c'))
 arm_common_ss.add(when: 'CONFIG_STELLARIS', if_true: files('stellaris.c'))
 arm_common_ss.add(when: 'CONFIG_STM32VLDISCOVERY', if_true: files('stm32vldiscovery.c'))
 arm_common_ss.add(when: 'CONFIG_ZYNQ', if_true: files('xilinx_zynq.c'))
