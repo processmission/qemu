@@ -367,6 +367,7 @@ config SF32LB52X
     select UNIMP
     select SF32LB52X_RTC
     select SF32LB52X_WDT
+    select SF32LB52X_CRC
 
 config SF32LB52_DEVKIT_LCD
     bool

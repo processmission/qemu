@@ -203,6 +203,7 @@ static void sf32lb52x_soc_instance_init(Object *obj)
 
     object_initialize_child(obj, "rtc", &s->rtc, TYPE_SF32LB52X_RTC);
     object_initialize_child(obj, "wdt", &s->wdt, TYPE_SF32LB52X_WDT);
+    object_initialize_child(obj, "crc", &s->crc, TYPE_SF32LB52X_CRC);
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -326,6 +327,9 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
                                          errp) ||
         !sf32lb52x_simple_device_realize(dev, DEVICE(&s->wdt),
                                          SF32LB52X_WDT_BASE, true, 26,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->crc),
+                                         SF32LB52X_CRC_BASE, false, 0,
                                          errp)) {
         return;
     }

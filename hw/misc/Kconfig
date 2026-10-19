@@ -454,3 +454,8 @@ config SF32LB52X_WDT
     select PTIMER
     depends on SF32LB52X
 
+config SF32LB52X_CRC
+    bool
+    select REGISTER
+    depends on SF32LB52X
+
