@@ -15,6 +15,7 @@
 #include "hw/display/sf32lb52x_lcdc.h"
 #include "hw/dma/sf32lb52x_dmac.h"
 #include "hw/i2c/sf32lb52x_i2c.h"
+#include "hw/misc/sf32lb52x_mailbox.h"
 #include "hw/misc/sf32lb52x_mpi.h"
 #include "hw/ssi/sf32lb52x_spi.h"
 #include "hw/misc/sf32lb52x_crc.h"
@@ -35,6 +36,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_NUM_USARTS    (3)
 #define SF32LB52X_NUM_I2C       (4)
 #define SF32LB52X_NUM_SPI       (2)
+#define SF32LB52X_NUM_MAILBOX   (2)
 
 /* The HCPU runs from the DLL1 output at 240 MHz. */
 #define SF32LB52X_SYSCLK_HZ     (240 * 1000 * 1000)
@@ -63,6 +65,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_TSEN_BASE     0x50089000
 #define SF32LB52X_LCDC_BASE     0x50008000
 #define SF32LB52X_AUDCODEC_BASE 0x50088000
+#define SF32LB52X_MAILBOX1_BASE 0x50082000
+#define SF32LB52X_MAILBOX2_BASE 0x40002000
 #define SF32LB52X_DMAC_BASE     0x50081000
 #define SF32LB52X_I2C1_BASE     0x5009c000
 #define SF32LB52X_SPI1_BASE     0x50095000
@@ -103,6 +107,7 @@ struct SF32LB52XSoCState {
     SF32LB52XMPIState mpi;
     SF32LB52XLCDCState lcdc;
     SF32LB52XAudCodecState audcodec;
+    SF32LB52XMailboxState mailbox[SF32LB52X_NUM_MAILBOX];
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;

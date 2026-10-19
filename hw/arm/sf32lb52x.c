@@ -52,6 +52,14 @@ static const int sf32lb52x_spi_irq[SF32LB52X_NUM_SPI] = {
     60, 75,
 };
 
+static const hwaddr sf32lb52x_mailbox_base[SF32LB52X_NUM_MAILBOX] = {
+    0x50082000, 0x40002000,
+};
+
+static const int sf32lb52x_mailbox_irq[SF32LB52X_NUM_MAILBOX] = {
+    58, 80,
+};
+
 /*
  * Peripheral windows that are not modeled. Accesses are logged as
  * unimplemented instead of faulting the guest, so that firmware which
@@ -229,6 +237,10 @@ static void sf32lb52x_soc_instance_init(Object *obj)
     object_initialize_child(obj, "lcdc", &s->lcdc, TYPE_SF32LB52X_LCDC);
     object_initialize_child(obj, "audcodec", &s->audcodec,
                             TYPE_SF32LB52X_AUDCODEC);
+    for (i = 0; i < SF32LB52X_NUM_MAILBOX; i++) {
+        object_initialize_child(obj, "mailbox[*]", &s->mailbox[i],
+                                TYPE_SF32LB52X_MAILBOX);
+    }
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -429,6 +441,18 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
                                          SF32LB52X_AUDCODEC_BASE, false, 0,
                                          errp)) {
         return;
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_MAILBOX; i++) {
+        /* MAILBOX1 has four channel blocks, LPSYS MAILBOX2 has two. */
+        object_property_set_uint(OBJECT(&s->mailbox[i]), "num-blocks",
+                                 i == 0 ? 4 : 2, &error_abort);
+        if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->mailbox[i]),
+                                             sf32lb52x_mailbox_base[i], true,
+                                             sf32lb52x_mailbox_irq[i],
+                                             errp)) {
+            return;
+        }
     }
 
     sf32lb52x_create_unimplemented_devices(s->memory);

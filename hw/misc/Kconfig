@@ -480,3 +480,6 @@ config SF32LB52X_MPI
     bool
     depends on SF32LB52X
 
+config SF32LB52X_MAILBOX
+    bool
+    depends on SF32LB52X
