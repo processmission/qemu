@@ -449,3 +449,8 @@ config SF32LB52X_RTC
     select PTIMER
     depends on SF32LB52X
 
+config SF32LB52X_WDT
+    bool
+    select PTIMER
+    depends on SF32LB52X
+
