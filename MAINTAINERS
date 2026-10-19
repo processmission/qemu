@@ -1225,9 +1225,11 @@ S: Maintained
 F: docs/system/arm/sf32lb52.rst
 F: hw/arm/sf32lb52*
 F: hw/char/sf32lb_usart.c
+F: hw/*/sf32lb52x*
 F: include/hw/arm/sf32lb52x.h
 F: include/hw/char/sf32lb_usart.h
-F: tests/qtest/sf32lb52x-test.c
+F: include/hw/*/sf32lb52x*
+F: tests/qtest/sf32lb52x-*
 
 Stellaris
 M: Peter Maydell <peter.maydell@linaro.org>

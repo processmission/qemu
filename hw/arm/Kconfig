@@ -365,6 +365,7 @@ config SF32LB52X
     select ARM_V7M
     select SF32LB_USART
     select UNIMP
+    select SF32LB52X_RTC
 
 config SF32LB52_DEVKIT_LCD
     bool
@@ -692,7 +693,6 @@ config NPCM8XX
     select SERIAL_MM
     select SSI
     select UNIMP
-
 
 config FSL_IMX25
     bool

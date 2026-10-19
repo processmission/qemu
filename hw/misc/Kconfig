@@ -444,3 +444,8 @@ config RK3566_RKNPU
 config ST25R100
     bool
     select SSI
+config SF32LB52X_RTC
+    bool
+    select PTIMER
+    depends on SF32LB52X
+

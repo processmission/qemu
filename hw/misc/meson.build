@@ -255,3 +255,4 @@ system_ss.add(when: 'CONFIG_AX650X_HWSPINLOCK',
 system_ss.add(when: 'CONFIG_RK3588', if_true: files(
   'rockchip_cru.c',
   'rockchip_otp.c'))
+system_ss.add(when: 'CONFIG_SF32LB52X_RTC', if_true: files('sf32lb52x_rtc.c'))

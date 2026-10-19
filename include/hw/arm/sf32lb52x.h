@@ -11,6 +11,7 @@
 
 #include "hw/arm/armv7m.h"
 #include "hw/char/sf32lb_usart.h"
+#include "hw/misc/sf32lb52x_rtc.h"
 #include "hw/core/clock.h"
 #include "qom/object.h"
 #include "system/memory.h"
@@ -40,6 +41,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_PINMUX_BASE   0x50003000
 #define SF32LB52X_CFG_BASE      0x5000b000
 #define SF32LB52X_GPIO_BASE     0x500a0000
+#define SF32LB52X_RTC_BASE      0x500cb000
 #define SF32LB52X_AON_BASE      0x500c0000
 #define SF32LB52X_PMUC_BASE     0x500ca000
 
@@ -62,6 +64,7 @@ struct SF32LB52XSoCState {
     /*< public >*/
     ARMv7MState armv7m;
     SF32LBUSARTState usart[SF32LB52X_NUM_USARTS];
+    SF32LB52XRtcState rtc;
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;

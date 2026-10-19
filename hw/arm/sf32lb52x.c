@@ -54,28 +54,8 @@ static const struct {
     hwaddr base;
     hwaddr size;
 } sf32lb52x_unimplemented[] = {
-    { "sf32lb52x.atim",    0x50004000, 0x1000 },
-    { "sf32lb52x.lcdc",    0x50008000, 0x1000 },
-    { "sf32lb52x.efuse",   0x5000c000, 0x0100 },
     { "sf32lb52x.crypto",  0x5000d000, 0x1000 },
-    { "sf32lb52x.trng",    0x5000f000, 0x1000 },
     { "sf32lb52x.mpi1",    0x50041000, 0x1000 },
-    { "sf32lb52x.mpi2",    0x50042000, 0x1000 },
-    { "sf32lb52x.crc",     0x50048000, 0x1000 },
-    { "sf32lb52x.dmac",    0x50081000, 0x1000 },
-    { "sf32lb52x.mailbox", 0x50082000, 0x1000 },
-    { "sf32lb52x.gpadc",   0x50087000, 0x1000 },
-    { "sf32lb52x.audcodec", 0x50088000, 0x0400 },
-    { "sf32lb52x.tsen",    0x50089000, 0x1000 },
-    { "sf32lb52x.wdt",     0x50094000, 0x1000 },
-    { "sf32lb52x.spi1",    0x50095000, 0x1000 },
-    { "sf32lb52x.spi2",    0x50096000, 0x1000 },
-    { "sf32lb52x.i2c1",    0x5009c000, 0x1000 },
-    { "sf32lb52x.i2c2",    0x5009d000, 0x1000 },
-    { "sf32lb52x.i2c3",    0x5009e000, 0x1000 },
-    { "sf32lb52x.i2c4",    0x5009f000, 0x1000 },
-    { "sf32lb52x.gptim2",  0x500b0000, 0x1000 },
-    { "sf32lb52x.rtc",     0x500cb000, 0x1000 },
 };
 
 static uint64_t sf32lb52x_syscon_read(void *opaque, hwaddr addr,
@@ -221,6 +201,8 @@ static void sf32lb52x_soc_instance_init(Object *obj)
                                   "chardev");
     }
 
+    object_initialize_child(obj, "rtc", &s->rtc, TYPE_SF32LB52X_RTC);
+
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
 
@@ -234,6 +216,29 @@ static void sf32lb52x_soc_reset_hold(Object *obj, ResetType type)
     memset(s->cfg.regs, 0, sizeof(s->cfg.regs));
     memset(s->pinmux.regs, 0, sizeof(s->pinmux.regs));
     memset(s->gpio.regs, 0, sizeof(s->gpio.regs));
+}
+
+/*
+ * Realize one of the small system peripherals, map its register window and
+ * route its interrupt to the NVIC when it has one.
+ */
+static bool sf32lb52x_simple_device_realize(DeviceState *soc,
+                                            DeviceState *dev, hwaddr base,
+                                            bool has_irq, int irq,
+                                            Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+    sysbus_mmio_map(sbd, 0, base);
+    if (has_irq) {
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(DEVICE(&SF32LB52X_SOC(soc)->armv7m),
+                                            irq));
+    }
+    return true;
 }
 
 static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
@@ -310,6 +315,15 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(usart, 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m),
                                             sf32lb52x_usart_irq[i]));
+    }
+
+    object_property_set_link(OBJECT(&s->rtc), "cfg", OBJECT(&s->cfg.mmio),
+                             &error_abort);
+
+    if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->rtc),
+                                         SF32LB52X_RTC_BASE, true, 49,
+                                         errp)) {
+        return;
     }
 
     sf32lb52x_create_unimplemented_devices(s->memory);
