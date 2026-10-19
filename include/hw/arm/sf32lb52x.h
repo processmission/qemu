@@ -11,6 +11,7 @@
 
 #include "hw/arm/armv7m.h"
 #include "hw/char/sf32lb_usart.h"
+#include "hw/i2c/sf32lb52x_i2c.h"
 #include "hw/misc/sf32lb52x_crc.h"
 #include "hw/misc/sf32lb52x_efuse.h"
 #include "hw/misc/sf32lb52x_gpadc.h"
@@ -27,6 +28,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 
 #define SF32LB52X_NUM_IRQS      (100)
 #define SF32LB52X_NUM_USARTS    (3)
+#define SF32LB52X_NUM_I2C       (4)
 
 /* The HCPU runs from the DLL1 output at 240 MHz. */
 #define SF32LB52X_SYSCLK_HZ     (240 * 1000 * 1000)
@@ -53,6 +55,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_RTC_BASE      0x500cb000
 #define SF32LB52X_TRNG_BASE     0x5000f000
 #define SF32LB52X_TSEN_BASE     0x50089000
+#define SF32LB52X_I2C1_BASE     0x5009c000
 #define SF32LB52X_WDT_BASE      0x50094000
 #define SF32LB52X_AON_BASE      0x500c0000
 #define SF32LB52X_PMUC_BASE     0x500ca000
@@ -83,6 +86,7 @@ struct SF32LB52XSoCState {
     SF32LB52XTsenState tsen;
     SF32LB52XGpadcState gpadc;
     SF32LB52XEfuseState efuse;
+    SF32LB52XI2CState i2c[SF32LB52X_NUM_I2C];
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;
