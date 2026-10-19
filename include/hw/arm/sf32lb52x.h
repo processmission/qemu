@@ -14,6 +14,7 @@
 #include "hw/misc/sf32lb52x_crc.h"
 #include "hw/misc/sf32lb52x_rtc.h"
 #include "hw/misc/sf32lb52x_trng.h"
+#include "hw/misc/sf32lb52x_tsen.h"
 #include "hw/misc/sf32lb52x_wdt.h"
 #include "hw/core/clock.h"
 #include "qom/object.h"
@@ -47,6 +48,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_CRC_BASE      0x50048000
 #define SF32LB52X_RTC_BASE      0x500cb000
 #define SF32LB52X_TRNG_BASE     0x5000f000
+#define SF32LB52X_TSEN_BASE     0x50089000
 #define SF32LB52X_WDT_BASE      0x50094000
 #define SF32LB52X_AON_BASE      0x500c0000
 #define SF32LB52X_PMUC_BASE     0x500ca000
@@ -74,6 +76,7 @@ struct SF32LB52XSoCState {
     SF32LB52XWdtState wdt;
     SF32LB52XCrcState crc;
     SF32LB52XTrngState trng;
+    SF32LB52XTsenState tsen;
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;
