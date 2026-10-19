@@ -11,6 +11,7 @@
 
 #include "hw/arm/armv7m.h"
 #include "hw/char/sf32lb_usart.h"
+#include "hw/display/sf32lb52x_lcdc.h"
 #include "hw/dma/sf32lb52x_dmac.h"
 #include "hw/i2c/sf32lb52x_i2c.h"
 #include "hw/misc/sf32lb52x_mpi.h"
@@ -59,6 +60,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_RTC_BASE      0x500cb000
 #define SF32LB52X_TRNG_BASE     0x5000f000
 #define SF32LB52X_TSEN_BASE     0x50089000
+#define SF32LB52X_LCDC_BASE     0x50008000
 #define SF32LB52X_DMAC_BASE     0x50081000
 #define SF32LB52X_I2C1_BASE     0x5009c000
 #define SF32LB52X_SPI1_BASE     0x50095000
@@ -97,6 +99,7 @@ struct SF32LB52XSoCState {
     SF32LB52XSPIState spi[SF32LB52X_NUM_SPI];
     SF32LB52XDMACState dmac;
     SF32LB52XMPIState mpi;
+    SF32LB52XLCDCState lcdc;
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;

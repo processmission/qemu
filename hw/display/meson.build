@@ -153,3 +153,4 @@ endif
 system_ss.add_all(when: 'CONFIG_RK3566_RGA', if_true: rk3566_rga_ss)
 
 modules += { 'hw-display': hw_display_modules }
+system_ss.add(when: 'CONFIG_SF32LB52X_LCDC', if_true: files('sf32lb52x_lcdc.c'))
