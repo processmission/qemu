@@ -75,6 +75,70 @@
 
 #define USART_ICR_TCCF (1U << 6)
 
+#define USART_CR1_TCIE (1U << 6)
+
+/* Round-1 device windows (all modeled, must not be unimp placeholders). */
+#define SF32LB52X_RTC_BASE       0x500cb000ULL
+#define SF32LB52X_WDT_BASE       0x50094000ULL
+#define SF32LB52X_CRC_BASE       0x50048000ULL
+#define SF32LB52X_TRNG_BASE      0x5000f000ULL
+#define SF32LB52X_TSEN_BASE      0x50089000ULL
+#define SF32LB52X_GPADC_BASE     0x50087000ULL
+#define SF32LB52X_EFUSE_BASE     0x5000c000ULL
+
+/* Round-2 device windows (models present in this worktree). */
+#define SF32LB52X_I2C1_BASE      0x5009c000ULL
+#define SF32LB52X_I2C_STRIDE     0x00001000ULL
+#define SF32LB52X_SPI1_BASE      0x50095000ULL
+#define SF32LB52X_SPI2_BASE      0x50096000ULL
+#define SF32LB52X_DMAC_BASE      0x50081000ULL
+#define SF32LB52X_MPI2_BASE      0x50042000ULL
+
+/* Round-3 device windows (models present in this worktree). */
+#define SF32LB52X_LCDC_BASE      0x50008000ULL
+#define SF32LB52X_AUDCODEC_BASE  0x50088000ULL
+#define SF32LB52X_MAILBOX1_BASE  0x50082000ULL
+#define SF32LB52X_MAILBOX2_BASE  0x40002000ULL
+#define SF32LB52X_ATIM1_BASE     0x50004000ULL
+#define SF32LB52X_GPTIM2_BASE    0x500b0000ULL
+
+/* External IRQ numbers (DTSI sf32lb52x.dtsi). */
+#define SF32LB52X_USART1_IRQ     59
+#define SF32LB52X_RTC_IRQ        49
+#define SF32LB52X_GPADC_IRQ      65
+
+/* RTC registers and alarm bits (round-1 model, rtc.h). */
+#define RTC_TR      0x00
+#define RTC_DR      0x04
+#define RTC_CR      0x08
+#define RTC_ISR     0x0c
+#define RTC_ALRMTR  0x18
+#define RTC_ALRMDR  0x1c
+
+#define RTC_ISR_ALRMF  (1U << 1)
+#define RTC_ISR_INIT   (1U << 10)
+#define RTC_CR_ALRME   (1U << 8)
+#define RTC_CR_ALRMIE  (1U << 11)
+
+#define RTC_ALRMDR_MSKMN (1U << 25)
+#define RTC_ALRMDR_MSKD  (1U << 27)
+#define RTC_ALRMDR_MSKM  (1U << 28)
+#define RTC_ALRMDR_MSKWD (1U << 29)
+
+/* GPADC registers and bits (round-1 model, gpadc.h/SVD). */
+#define GPADC_CFG1        0x00
+#define GPADC_SLOT(n)     (0x04 + 4 * (n))
+#define GPADC_CTRL        0x38
+#define GPADC_IRQ         0x44
+
+#define GPADC_SLOT_RESET  0x00020801U
+#define GPADC_SLOT_EN     (1U << 0)
+#define GPADC_SLOT_PCHNL(ch) ((uint32_t)(ch) << 8)
+#define GPADC_CTRL_START  (1U << 1)
+#define GPADC_IRQ_ICR     (1U << 0)
+
+#define ONE_SEC_NS 1000000000LL
+
 #define CONSOLE_TIMEOUT (5 * G_TIME_SPAN_SECOND)
 
 static QTestState *sf32lb52x_qtest_start(void)
@@ -248,7 +312,14 @@ static void test_shared_sram_read_write(void)
     qtest_quit(qts);
 }
 
-static void test_xip_flash_read_only(void)
+/*
+ * The XIP window is RAM-backed so that MPI2 program/erase and CPU XIP share
+ * one backing store (see hw/arm/sf32lb52x.c). Without -kernel the window
+ * reads as zero and is stable; direct CPU stores are a documented model
+ * simplification of the RAM backing, so this test checks the baseline, not
+ * read-only trap behaviour.
+ */
+static void test_xip_window_baseline(void)
 {
     QTestState *qts = sf32lb52x_qtest_start();
     static const uint64_t windows[] = {
@@ -443,6 +514,210 @@ static void test_kernel_load(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static uint32_t rtc_readl(QTestState *qts, uint32_t offset)
+{
+    return qtest_readl(qts, SF32LB52X_RTC_BASE + offset);
+}
+
+static void rtc_writel(QTestState *qts, uint32_t offset, uint32_t value)
+{
+    qtest_writel(qts, SF32LB52X_RTC_BASE + offset, value);
+}
+
+/* BCD encoders for the TR/DR register layout (rtc.h). */
+static uint32_t bcd_time(unsigned hour, unsigned min, unsigned sec)
+{
+    return (((hour / 10U) & 0x3U) << 29) | ((hour % 10U) << 25) |
+           (((min / 10U) & 0x7U) << 22) | ((min % 10U) << 18) |
+           (((sec / 10U) & 0x7U) << 15) | ((sec % 10U) << 11);
+}
+
+static uint32_t bcd_date(unsigned year, unsigned month, unsigned day,
+                         unsigned weekday)
+{
+    return (((year / 10U) & 0xfU) << 20) | ((year % 10U) << 16) |
+           ((weekday & 0x7U) << 13) | (((month / 10U) & 0x1U) << 12) |
+           ((month % 10U) << 8) | (((day / 10U) & 0x3U) << 4) | (day % 10U);
+}
+
+/* Driver-style ISR update: read-modify-write, INIT/flag bits as written. */
+static void rtc_isr_rmw(QTestState *qts, uint32_t set, uint32_t clear)
+{
+    uint32_t isr = rtc_readl(qts, RTC_ISR);
+
+    rtc_writel(qts, RTC_ISR, (isr | set) & ~clear);
+}
+
+static void rtc_enter_init(QTestState *qts)
+{
+    rtc_isr_rmw(qts, RTC_ISR_INIT, 0);
+    g_assert_cmphex(rtc_readl(qts, RTC_ISR) & RTC_ISR_INIT, ==, RTC_ISR_INIT);
+}
+
+static void rtc_exit_init(QTestState *qts)
+{
+    rtc_isr_rmw(qts, 0, RTC_ISR_INIT);
+    g_assert_cmphex(rtc_readl(qts, RTC_ISR) & RTC_ISR_INIT, ==, 0);
+}
+
+static void rtc_set_datetime(QTestState *qts, uint32_t tr, uint32_t dr)
+{
+    rtc_enter_init(qts);
+    rtc_writel(qts, RTC_TR, tr);
+    rtc_writel(qts, RTC_DR, dr);
+    rtc_exit_init(qts);
+}
+
+/* Observe the armv7m NVIC inputs: line index == external IRQ number. */
+static void nvic_irq_intercept(QTestState *qts)
+{
+    qtest_irq_intercept_in(qts, "/machine/soc/armv7m");
+}
+
+/*
+ * End-to-end IRQ delivery: device output level and SoC routing to the
+ * armv7m NVIC input are both exercised (round-1 re-review MINOR 6).
+ */
+static void test_nvic_usart1_delivery(void)
+{
+    QTestState *qts = sf32lb52x_qtest_start();
+
+    nvic_irq_intercept(qts);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_USART1_IRQ), ==, 0);
+
+    /* TC is set at reset; enabling TCIE must reach NVIC IRQ 59. */
+    usart1_writel(qts, USART_CR1, USART_CR1_TCIE);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_USART1_IRQ), ==, 1);
+
+    usart1_writel(qts, USART_CR1, 0);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_USART1_IRQ), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_nvic_rtc_delivery(void)
+{
+    QTestState *qts = sf32lb52x_qtest_start();
+    uint32_t isr;
+
+    nvic_irq_intercept(qts);
+    rtc_set_datetime(qts, bcd_time(12, 0, 0), bcd_date(24, 1, 7, 1));
+    rtc_writel(qts, RTC_ALRMTR, bcd_time(12, 0, 1));
+    rtc_writel(qts, RTC_ALRMDR,
+               RTC_ALRMDR_MSKD | RTC_ALRMDR_MSKM | RTC_ALRMDR_MSKWD);
+    rtc_writel(qts, RTC_CR, RTC_CR_ALRME | RTC_CR_ALRMIE);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_RTC_IRQ), ==, 0);
+
+    qtest_clock_step(qts, ONE_SEC_NS);
+    g_assert_cmphex(rtc_readl(qts, RTC_ISR) & RTC_ISR_ALRMF, ==,
+                    RTC_ISR_ALRMF);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_RTC_IRQ), ==, 1);
+
+    /* rw0c: clearing the alarm flag drops the delivered level. */
+    isr = rtc_readl(qts, RTC_ISR);
+    rtc_writel(qts, RTC_ISR, isr & ~RTC_ISR_ALRMF);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_RTC_IRQ), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_nvic_gpadc_delivery(void)
+{
+    QTestState *qts = sf32lb52x_qtest_start();
+    unsigned int i;
+
+    nvic_irq_intercept(qts);
+    /* SLOTn reset with SLOT_EN set; disable them, then enable slot 0. */
+    for (i = 0; i < 8; i++) {
+        qtest_writel(qts, SF32LB52X_GPADC_BASE + GPADC_SLOT(i),
+                     GPADC_SLOT_RESET & ~GPADC_SLOT_EN);
+    }
+    qtest_writel(qts, SF32LB52X_GPADC_BASE + GPADC_SLOT(0),
+                 GPADC_SLOT_EN | GPADC_SLOT_PCHNL(0));
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_GPADC_IRQ), ==, 0);
+
+    qtest_writel(qts, SF32LB52X_GPADC_BASE + GPADC_CTRL, GPADC_CTRL_START);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_GPADC_IRQ), ==, 1);
+
+    qtest_writel(qts, SF32LB52X_GPADC_BASE + GPADC_IRQ, GPADC_IRQ_ICR);
+    g_assert_cmpint(qtest_get_irq(qts, SF32LB52X_GPADC_IRQ), ==, 0);
+
+    qtest_quit(qts);
+}
+
+/*
+ * AC1 regression: every modeled peripheral window must be served by its
+ * device model, not by a create_unimplemented_device() placeholder.
+ */
+static void test_modeled_device_windows(void)
+{
+    static const uint64_t windows[] = {
+        SF32LB52X_RTC_BASE, SF32LB52X_WDT_BASE, SF32LB52X_CRC_BASE,
+        SF32LB52X_TRNG_BASE, SF32LB52X_TSEN_BASE, SF32LB52X_GPADC_BASE,
+        SF32LB52X_EFUSE_BASE,
+        SF32LB52X_I2C1_BASE,
+        SF32LB52X_I2C1_BASE + SF32LB52X_I2C_STRIDE,
+        SF32LB52X_I2C1_BASE + 2 * SF32LB52X_I2C_STRIDE,
+        SF32LB52X_I2C1_BASE + 3 * SF32LB52X_I2C_STRIDE,
+        SF32LB52X_SPI1_BASE, SF32LB52X_SPI2_BASE,
+        SF32LB52X_DMAC_BASE, SF32LB52X_MPI2_BASE,
+        SF32LB52X_LCDC_BASE, SF32LB52X_AUDCODEC_BASE,
+        SF32LB52X_MAILBOX1_BASE, SF32LB52X_MAILBOX2_BASE,
+        SF32LB52X_ATIM1_BASE, SF32LB52X_GPTIM2_BASE,
+    };
+    g_autofree gchar *log_path = NULL;
+    g_autofree gchar *log = NULL;
+    QTestState *qts;
+    GError *error = NULL;
+    size_t i;
+    int fd;
+
+    fd = g_file_open_tmp("sf32lb52x-unimp-XXXXXX", &log_path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    qts = qtest_initf("-machine " SF32LB52X_MACHINE
+                      " -serial null -d guest_errors,unimp -D %s",
+                      log_path);
+
+    for (i = 0; i < ARRAY_SIZE(windows); i++) {
+        (void)qtest_readl(qts, windows[i]);
+    }
+
+    /* Force the log to be written and prove the capture works. */
+    (void)qtest_readl(qts, SF32LB52X_RTC_BASE + 0xffc);
+    qtest_quit(qts);
+
+    g_assert_true(g_file_get_contents(log_path, &log, NULL, NULL));
+    g_assert_nonnull(strstr(log, "bad offset"));
+    g_assert_null(strstr(log, "unimplemented device"));
+    g_assert_cmpint(g_unlink(log_path), ==, 0);
+}
+
+/*
+ * Round-2 models expose their sysbus IRQ lines. Delivery to the NVIC is
+ * covered once the R2 devices drive those lines (tracked in the report).
+ */
+static void test_r2_irq_lines_present(void)
+{
+    static const char *const paths[] = {
+        "/machine/soc/i2c[0]",
+        "/machine/soc/i2c[3]",
+        "/machine/soc/spi[0]",
+        "/machine/soc/spi[1]",
+        "/machine/soc/dmac",
+    };
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(paths); i++) {
+        QTestState *qts = sf32lb52x_qtest_start();
+
+        /* Succeeds only if the named sysbus IRQ line exists. */
+        qtest_irq_intercept_out_named(qts, paths[i], "sysbus-irq");
+        qtest_quit(qts);
+    }
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -452,7 +727,8 @@ int main(int argc, char **argv)
     qtest_add_func("/sf32lb52x/sram/read-write", test_sram_read_write);
     qtest_add_func("/sf32lb52x/shared-sram/read-write",
                    test_shared_sram_read_write);
-    qtest_add_func("/sf32lb52x/xip/read-only", test_xip_flash_read_only);
+    qtest_add_func("/sf32lb52x/xip/window-baseline",
+                   test_xip_window_baseline);
     qtest_add_func("/sf32lb52x/rcc/store", test_rcc_store);
     qtest_add_func("/sf32lb52x/rcc/dll1-ready", test_rcc_dll1_ready);
     qtest_add_func("/sf32lb52x/aon/hxt48-ready", test_aon_hxt48_ready);
@@ -461,6 +737,16 @@ int main(int argc, char **argv)
     qtest_add_func("/sf32lb52x/usart1/console", test_usart1_console);
     qtest_add_func("/sf32lb52x/syscon/reset", test_system_reset);
     qtest_add_func("/sf32lb52x/kernel/load", test_kernel_load);
+    qtest_add_func("/sf32lb52x/nvic/usart1-delivery",
+                   test_nvic_usart1_delivery);
+    qtest_add_func("/sf32lb52x/nvic/rtc-delivery",
+                   test_nvic_rtc_delivery);
+    qtest_add_func("/sf32lb52x/nvic/gpadc-delivery",
+                   test_nvic_gpadc_delivery);
+    qtest_add_func("/sf32lb52x/modeled-windows",
+                   test_modeled_device_windows);
+    qtest_add_func("/sf32lb52x/r2-irq-lines-present",
+                   test_r2_irq_lines_present);
 
     return g_test_run();
 }
