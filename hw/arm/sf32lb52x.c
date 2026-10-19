@@ -225,6 +225,7 @@ static void sf32lb52x_soc_instance_init(Object *obj)
                                 TYPE_SF32LB52X_SPI);
     }
     object_initialize_child(obj, "dmac", &s->dmac, TYPE_SF32LB52X_DMAC);
+    object_initialize_child(obj, "mpi2", &s->mpi, TYPE_SF32LB52X_MPI);
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -281,7 +282,15 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    if (!memory_region_init_rom(&s->flash, OBJECT(dev), "sf32lb52x.flash",
+    /*
+     * RAM-backed: the MPI2 controller programs/erases this region through
+     * the NOR command engine, while the CPU still executes from it (XIP).
+     * Known simplification: a direct CPU store to the XIP window therefore
+     * succeeds (real NOR would ignore it), and a system reset re-copies the
+     * -kernel ROM blob over programmed data. Firmware programs the NOR via
+     * MPI2, and the boot ABI is unchanged.
+     */
+    if (!memory_region_init_ram(&s->flash, OBJECT(dev), "sf32lb52x.flash",
                                 SF32LB52X_FLASH_SIZE, errp)) {
         return;
     }
@@ -403,6 +412,13 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->dmac), i,
                            qdev_get_gpio_in(DEVICE(&s->armv7m), 50 + i));
     }
+
+    object_property_set_link(OBJECT(&s->mpi), "nor", OBJECT(&s->flash),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->mpi), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mpi), 0, SF32LB52X_MPI2_BASE);
 
     sf32lb52x_create_unimplemented_devices(s->memory);
 }

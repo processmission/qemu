@@ -279,6 +279,7 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_SF32LB52X_I2C') ? ['sf32lb52x-i2c-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_SPI') ? ['sf32lb52x-spi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_DMAC') ? ['sf32lb52x-dmac-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_MPI') ? ['sf32lb52x-mpi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \

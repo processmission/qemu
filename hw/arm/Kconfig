@@ -375,6 +375,7 @@ config SF32LB52X
     select SF32LB52X_I2C
     select SF32LB52X_SPI
     select SF32LB52X_DMAC
+    select SF32LB52X_MPI
 
 config SF32LB52_DEVKIT_LCD
     bool
