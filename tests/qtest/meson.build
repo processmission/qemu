@@ -272,6 +272,7 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_SF32LB52X_RTC') ? ['sf32lb52x-rtc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_WDT') ? ['sf32lb52x-wdt-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_CRC') ? ['sf32lb52x-crc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_TRNG') ? ['sf32lb52x-trng-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \

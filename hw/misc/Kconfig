@@ -459,3 +459,7 @@ config SF32LB52X_CRC
     select REGISTER
     depends on SF32LB52X
 
+config SF32LB52X_TRNG
+    bool
+    depends on SF32LB52X
+
