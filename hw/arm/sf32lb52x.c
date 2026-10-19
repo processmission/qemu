@@ -224,6 +224,7 @@ static void sf32lb52x_soc_instance_init(Object *obj)
         object_initialize_child(obj, "spi[*]", &s->spi[i],
                                 TYPE_SF32LB52X_SPI);
     }
+    object_initialize_child(obj, "dmac", &s->dmac, TYPE_SF32LB52X_DMAC);
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -392,6 +393,15 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(sbd, 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m),
                                             sf32lb52x_spi_irq[i]));
+    }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dmac), 0, SF32LB52X_DMAC_BASE);
+    for (i = 0; i < 8; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->dmac), i,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m), 50 + i));
     }
 
     sf32lb52x_create_unimplemented_devices(s->memory);
