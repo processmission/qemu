@@ -81,3 +81,6 @@ config RK3566_TIMER
     bool
     select PTIMER
     select REGISTER
+config SF32LB52X_PWM
+    bool
+    depends on SF32LB52X

@@ -60,6 +60,14 @@ static const int sf32lb52x_mailbox_irq[SF32LB52X_NUM_MAILBOX] = {
     58, 80,
 };
 
+static const hwaddr sf32lb52x_pwm_base[SF32LB52X_NUM_PWM] = {
+    0x50004000, 0x500b0000,
+};
+
+static const int sf32lb52x_pwm_irq[SF32LB52X_NUM_PWM] = {
+    94, 71,
+};
+
 /*
  * Peripheral windows that are not modeled. Accesses are logged as
  * unimplemented instead of faulting the guest, so that firmware which
@@ -240,6 +248,9 @@ static void sf32lb52x_soc_instance_init(Object *obj)
     for (i = 0; i < SF32LB52X_NUM_MAILBOX; i++) {
         object_initialize_child(obj, "mailbox[*]", &s->mailbox[i],
                                 TYPE_SF32LB52X_MAILBOX);
+    }
+    for (i = 0; i < SF32LB52X_NUM_PWM; i++) {
+        object_initialize_child(obj, "pwm[*]", &s->pwm[i], TYPE_SF32LB52X_PWM);
     }
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
@@ -451,6 +462,18 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
                                              sf32lb52x_mailbox_base[i], true,
                                              sf32lb52x_mailbox_irq[i],
                                              errp)) {
+            return;
+        }
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_PWM; i++) {
+        if (i == 1) {
+            object_property_set_bool(OBJECT(&s->pwm[i]), "gptim", true,
+                                     &error_abort);
+        }
+        if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->pwm[i]),
+                                             sf32lb52x_pwm_base[i], true,
+                                             sf32lb52x_pwm_irq[i], errp)) {
             return;
         }
     }

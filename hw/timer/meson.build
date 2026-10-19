@@ -38,3 +38,4 @@ system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
 
 system_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
 system_ss.add(when: 'CONFIG_RK3566_TIMER', if_true: files('rk3566_timer.c'))
+system_ss.add(when: 'CONFIG_SF32LB52X_PWM', if_true: files('sf32lb52x_pwm.c'))

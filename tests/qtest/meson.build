@@ -283,6 +283,7 @@ qtests_arm = \
   (config_all_devices.has_key('CONFIG_SF32LB52X_LCDC') ? ['sf32lb52x-lcdc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_AUDCODEC') ? ['sf32lb52x-audcodec-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X_MAILBOX') ? ['sf32lb52x-mailbox-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_PWM') ? ['sf32lb52x-pwm-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
