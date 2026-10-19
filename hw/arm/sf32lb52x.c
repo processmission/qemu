@@ -227,6 +227,8 @@ static void sf32lb52x_soc_instance_init(Object *obj)
     object_initialize_child(obj, "dmac", &s->dmac, TYPE_SF32LB52X_DMAC);
     object_initialize_child(obj, "mpi2", &s->mpi, TYPE_SF32LB52X_MPI);
     object_initialize_child(obj, "lcdc", &s->lcdc, TYPE_SF32LB52X_LCDC);
+    object_initialize_child(obj, "audcodec", &s->audcodec,
+                            TYPE_SF32LB52X_AUDCODEC);
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -422,7 +424,9 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->mpi), 0, SF32LB52X_MPI2_BASE);
 
     if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->lcdc),
-                                         SF32LB52X_LCDC_BASE, false, 0,
+                                         SF32LB52X_LCDC_BASE, false, 0, errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->audcodec),
+                                         SF32LB52X_AUDCODEC_BASE, false, 0,
                                          errp)) {
         return;
     }

@@ -377,6 +377,7 @@ config SF32LB52X
     select SF32LB52X_DMAC
     select SF32LB52X_MPI
     select SF32LB52X_LCDC
+    select SF32LB52X_AUDCODEC
 
 config SF32LB52_DEVKIT_LCD
     bool
