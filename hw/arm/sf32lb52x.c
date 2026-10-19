@@ -48,6 +48,10 @@ static const int sf32lb52x_i2c_irq[SF32LB52X_NUM_I2C] = {
     61, 76, 93, 78,
 };
 
+static const int sf32lb52x_spi_irq[SF32LB52X_NUM_SPI] = {
+    60, 75,
+};
+
 /*
  * Peripheral windows that are not modeled. Accesses are logged as
  * unimplemented instead of faulting the guest, so that firmware which
@@ -216,6 +220,10 @@ static void sf32lb52x_soc_instance_init(Object *obj)
         object_initialize_child(obj, "i2c[*]", &s->i2c[i],
                                 TYPE_SF32LB52X_I2C);
     }
+    for (i = 0; i < SF32LB52X_NUM_SPI; i++) {
+        object_initialize_child(obj, "spi[*]", &s->spi[i],
+                                TYPE_SF32LB52X_SPI);
+    }
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -370,6 +378,20 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(sbd, 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m),
                                             sf32lb52x_i2c_irq[i]));
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_SPI; i++) {
+        DeviceState *spi = DEVICE(&s->spi[i]);
+        SysBusDevice *sbd = SYS_BUS_DEVICE(spi);
+
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0,
+                        SF32LB52X_SPI1_BASE + i * SF32LB52X_USART_STRIDE);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            sf32lb52x_spi_irq[i]));
     }
 
     sf32lb52x_create_unimplemented_devices(s->memory);
