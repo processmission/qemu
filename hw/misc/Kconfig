@@ -468,3 +468,7 @@ config SF32LB52X_TSEN
     select PTIMER
     depends on SF32LB52X
 
+config SF32LB52X_GPADC
+    bool
+    depends on SF32LB52X
+

@@ -206,6 +206,7 @@ static void sf32lb52x_soc_instance_init(Object *obj)
     object_initialize_child(obj, "crc", &s->crc, TYPE_SF32LB52X_CRC);
     object_initialize_child(obj, "trng", &s->trng, TYPE_SF32LB52X_TRNG);
     object_initialize_child(obj, "tsen", &s->tsen, TYPE_SF32LB52X_TSEN);
+    object_initialize_child(obj, "gpadc", &s->gpadc, TYPE_SF32LB52X_GPADC);
 
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
@@ -338,6 +339,9 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
                                          errp) ||
         !sf32lb52x_simple_device_realize(dev, DEVICE(&s->tsen),
                                          SF32LB52X_TSEN_BASE, false, 0,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->gpadc),
+                                         SF32LB52X_GPADC_BASE, true, 65,
                                          errp)) {
         return;
     }
