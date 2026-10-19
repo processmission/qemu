@@ -12,6 +12,7 @@
 #include "hw/arm/armv7m.h"
 #include "hw/char/sf32lb_usart.h"
 #include "hw/misc/sf32lb52x_crc.h"
+#include "hw/misc/sf32lb52x_efuse.h"
 #include "hw/misc/sf32lb52x_gpadc.h"
 #include "hw/misc/sf32lb52x_rtc.h"
 #include "hw/misc/sf32lb52x_trng.h"
@@ -47,6 +48,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF32LB52XSoCState, SF32LB52X_SOC)
 #define SF32LB52X_CFG_BASE      0x5000b000
 #define SF32LB52X_GPIO_BASE     0x500a0000
 #define SF32LB52X_CRC_BASE      0x50048000
+#define SF32LB52X_EFUSE_BASE    0x5000c000
 #define SF32LB52X_GPADC_BASE    0x50087000
 #define SF32LB52X_RTC_BASE      0x500cb000
 #define SF32LB52X_TRNG_BASE     0x5000f000
@@ -80,6 +82,7 @@ struct SF32LB52XSoCState {
     SF32LB52XTrngState trng;
     SF32LB52XTsenState tsen;
     SF32LB52XGpadcState gpadc;
+    SF32LB52XEfuseState efuse;
 
     SF32LB52XRegBank rcc;
     SF32LB52XRegBank aon;

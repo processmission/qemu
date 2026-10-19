@@ -371,6 +371,7 @@ config SF32LB52X
     select SF32LB52X_TRNG
     select SF32LB52X_TSEN
     select SF32LB52X_GPADC
+    select SF32LB52X_EFUSE
 
 config SF32LB52_DEVKIT_LCD
     bool
