@@ -29,6 +29,7 @@
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-clock.h"
 
 static uint64_t serial_mm_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -123,6 +124,7 @@ static void serial_mm_instance_init(Object *o)
     object_initialize_child(o, "serial", &smm->serial, TYPE_SERIAL);
 
     qdev_alias_all_properties(DEVICE(&smm->serial), o);
+    qdev_alias_clock(DEVICE(&smm->serial), "uartclk", DEVICE(smm), "uartclk");
 }
 
 static const Property serial_mm_properties[] = {
