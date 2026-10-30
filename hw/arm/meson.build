@@ -1,4 +1,5 @@
 arm_common_ss = ss.source_set()
+subdir('rk3566')
 arm_common_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c'))
 arm_common_ss.add(when: 'CONFIG_AX650X_PYRAMID',
                   if_true: files('ax650x.c', 'ax650x-dwmac.c'))

@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Process Mission
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config RK3566
+    bool
+    default y
+    depends on TCG && AARCH64
+    select ARM_GIC
+    select CPU_CLUSTER
+    select DEVICE_TREE
+    select DW8250
+    select RK3X_I2C
+    select ROCKCHIP_GPIO
+    select ROCKCHIP_DWCMSHC
+    select ROCKCHIP_SYSCON
+    select RK3588_SCMI
+    select SDHCI
+    select SERIAL_MM
+    select PTIMER
+    select PL330
+    select OR_IRQ
+    select DWC3_UDC
+    select K230_WDT
+    select ROCKCHIP_SPI
+    select DW_MMC
+    select VIRTIO_MMIO
+    select RK3588_RKNPU
+    select ROCKCHIP_IOMMU
