@@ -12,6 +12,7 @@
 #include "qapi/error.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "system/address-spaces.h"
@@ -47,11 +48,13 @@ enum {
 #define IRQ_WRITE_ERROR BIT(6)
 #define IRQ_READ_ERROR BIT(7)
 #define IRQ_TIMEOUT BIT(8)
+#define VENC_NR_REGS (CACHE_CLEAR / 4 + 1)
 #define REG(s, offset) ((s)->regs[(offset) / 4])
 
 struct RK3566VENCState {
     SysBusDevice parent_obj;
-    MemoryRegion mmio;
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[VENC_NR_REGS];
     MemoryRegion *dma;
     MemoryRegion *source_dma;
     AddressSpace dma_as;
@@ -400,17 +403,157 @@ done:
     venc_finish(s, interrupt);
 }
 
+static RegisterInfo *venc_find_register(RegisterInfoArray *reg_array,
+                                        hwaddr offset)
+{
+    for (unsigned i = 0; i < reg_array->num_elements; i++) {
+        RegisterInfo *reg = reg_array->r[i];
+
+        if (reg->access->addr == offset) {
+            return reg;
+        }
+    }
+    return NULL;
+}
+
+static void venc_start_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+
+    if (((val >> 8) & 3) == 1 && !s->busy) {
+        s->busy = true;
+        REG(s, ENCODE_STATUS) = 1;
+        REG(s, STREAM_LENGTH) = 0;
+        REG(s, INT_STATUS) = 0;
+        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
+    } else if ((val >> 8) & 3) {
+        REG(s, INT_STATUS) |= IRQ_TIMEOUT;
+    }
+}
+
+static uint64_t venc_clear_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+
+    timer_del(s->timer);
+    s->busy = false;
+    REG(s, ENCODE_STATUS) = 0;
+    REG(s, START) &= ~(3 << 8);
+    if (val & BIT(1)) {
+        venc_close_codecs(s);
+    }
+    if (val & BIT(0)) {
+        REG(s, INT_STATUS) |= IRQ_CLEAR;
+    }
+    return 0;
+}
+
+static uint64_t venc_int_clear_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+
+    REG(s, INT_STATUS) &= ~val;
+    return 0;
+}
+
+static uint64_t venc_int_status_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+
+    if (!val) {
+        return 0;
+    }
+    return REG(s, INT_STATUS) & ~val;
+}
+
+static uint64_t venc_l2_write_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+    unsigned index = (REG(s, L2_ADDRESS) & ~1u) / 4;
+
+    if (index < ARRAY_SIZE(s->l2)) {
+        s->l2[index] = val;
+    }
+    return 0;
+}
+
+static uint64_t venc_l2_read_post_read(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+    unsigned index = (REG(s, L2_ADDRESS) & ~1u) / 4;
+
+    return index < ARRAY_SIZE(s->l2) ? s->l2[index] : 0;
+}
+
+static uint64_t venc_slice_length_post_read(RegisterInfo *reg, uint64_t val)
+{
+    RK3566VENCState *s = RK3566_VENC(reg->opaque);
+
+    REG(s, SLICE_COUNT) = 0;
+    return val;
+}
+
+/*
+ * The encoder-owned register range keeps its original no-op write
+ * behaviour through the read-only entries, and the L2 window reaches
+ * l2[] through the pre_write and post_read hooks.
+ */
+static const RegisterAccessInfo venc_regs_info[] = {
+    /* VEPU5 register layout, H.264, 1920x1088, no OSD/filter/AFBC. */
+    { .name = "VERSION", .addr = VERSION, .ro = UINT32_MAX,
+      .reset = 0x500f1111 },
+    { .name = "START", .addr = START,
+      .post_write = venc_start_post_write },
+    { .name = "CLEAR", .addr = CLEAR,
+      .pre_write = venc_clear_pre_write },
+    { .name = "INT_EN", .addr = INT_EN },
+    { .name = "INT_MASK", .addr = INT_MASK },
+    { .name = "INT_CLEAR", .addr = INT_CLEAR,
+      .pre_write = venc_int_clear_pre_write },
+    { .name = "INT_STATUS", .addr = INT_STATUS,
+      .pre_write = venc_int_status_pre_write },
+    { .name = "RESOLUTION", .addr = RESOLUTION },
+    { .name = "PICTURE", .addr = PICTURE },
+    { .name = "SOURCE_FORMAT", .addr = SOURCE_FORMAT },
+    { .name = "SOURCE_PROCESS", .addr = SOURCE_PROCESS },
+    { .name = "SOURCE_OFFSET", .addr = SOURCE_OFFSET },
+    { .name = "SOURCE_STRIDE", .addr = SOURCE_STRIDE },
+    { .name = "SOURCE0", .addr = SOURCE0 },
+    { .name = "SOURCE1", .addr = SOURCE1 },
+    { .name = "SOURCE2", .addr = SOURCE2 },
+    { .name = "STREAM_TOP", .addr = STREAM_TOP },
+    { .name = "STREAM_BOTTOM", .addr = STREAM_BOTTOM },
+    { .name = "STREAM_READ", .addr = STREAM_READ },
+    { .name = "STREAM_START", .addr = STREAM_START },
+    { .name = "SLICE_SPLIT", .addr = SLICE_SPLIT },
+    { .name = "SYNTAX_NAL", .addr = SYNTAX_NAL },
+    { .name = "SYNTAX_PPS", .addr = SYNTAX_PPS },
+    { .name = "SYNTAX_SLICE", .addr = SYNTAX_SLICE },
+    { .name = "STREAM_LENGTH", .addr = STREAM_LENGTH, .ro = UINT32_MAX },
+    { .name = "SSE_LOW", .addr = SSE_LOW, .ro = UINT32_MAX },
+    { .name = "SSE_QP", .addr = SSE_QP, .ro = UINT32_MAX },
+    { .name = "ENCODE_STATUS", .addr = ENCODE_STATUS, .ro = UINT32_MAX },
+    { .name = "STREAM_WRITE", .addr = STREAM_WRITE, .ro = UINT32_MAX },
+    { .name = "BUS_STATUS", .addr = BUS_STATUS, .ro = UINT32_MAX,
+      .reset = 0x7e },
+    { .name = "SLICE_COUNT", .addr = SLICE_COUNT, .ro = UINT32_MAX },
+    { .name = "SLICE_LENGTH", .addr = SLICE_LENGTH, .ro = UINT32_MAX,
+      .post_read = venc_slice_length_post_read },
+    { .name = "L2_ADDRESS", .addr = L2_ADDRESS },
+    { .name = "L2_WRITE", .addr = L2_WRITE,
+      .pre_write = venc_l2_write_pre_write },
+    { .name = "L2_READ", .addr = L2_READ,
+      .post_read = venc_l2_read_post_read },
+    { .name = "CACHE_CLEAR", .addr = CACHE_CLEAR, .ro = UINT32_MAX },
+};
+
 static uint64_t venc_read(void *opaque, hwaddr offset, unsigned size)
 {
-    RK3566VENCState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566VENCState *s = RK3566_VENC(register_array_get_owner(reg_array));
 
-    if (offset == L2_READ) {
-        unsigned index = (REG(s, L2_ADDRESS) & ~1u) / 4;
-
-        return index < ARRAY_SIZE(s->l2) ? s->l2[index] : 0;
-    }
-    if (offset == SLICE_LENGTH) {
-        REG(s, SLICE_COUNT) = 0;
+    if (venc_find_register(reg_array, offset)) {
+        return register_read_memory(reg_array, offset, size);
     }
     return REG(s, offset);
 }
@@ -418,60 +561,18 @@ static uint64_t venc_read(void *opaque, hwaddr offset, unsigned size)
 static void venc_write(void *opaque, hwaddr offset, uint64_t value,
                        unsigned size)
 {
-    RK3566VENCState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566VENCState *s = RK3566_VENC(register_array_get_owner(reg_array));
 
-    if (offset == VERSION || (offset >= STREAM_LENGTH && offset <= 0x2fc)) {
+    if (venc_find_register(reg_array, offset)) {
+        register_write_memory(reg_array, offset, value, size);
+        venc_update_irq(s);
         return;
     }
-    switch (offset) {
-    case INT_CLEAR:
-        REG(s, INT_STATUS) &= ~value;
-        break;
-    case INT_STATUS:
-        if (!value) {
-            REG(s, INT_STATUS) = 0;
-        } else {
-            REG(s, INT_STATUS) &= ~value;
-        }
-        break;
-    case CLEAR:
-        timer_del(s->timer);
-        s->busy = false;
-        REG(s, ENCODE_STATUS) = 0;
-        REG(s, START) &= ~(3 << 8);
-        if (value & BIT(1)) {
-            venc_close_codecs(s);
-        }
-        if (value & BIT(0)) {
-            REG(s, INT_STATUS) |= IRQ_CLEAR;
-        }
-        break;
-    case START:
-        REG(s, START) = value;
-        if (((value >> 8) & 3) == 1 && !s->busy) {
-            s->busy = true;
-            REG(s, ENCODE_STATUS) = 1;
-            REG(s, STREAM_LENGTH) = 0;
-            REG(s, INT_STATUS) = 0;
-            timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
-        } else if ((value >> 8) & 3) {
-            REG(s, INT_STATUS) |= IRQ_TIMEOUT;
-        }
-        break;
-    case L2_WRITE: {
-        unsigned index = (REG(s, L2_ADDRESS) & ~1u) / 4;
-
-        if (index < ARRAY_SIZE(s->l2)) {
-            s->l2[index] = value;
-        }
-        break;
+    if (offset >= STREAM_LENGTH && offset <= 0x2fc) {
+        return;
     }
-    case CACHE_CLEAR:
-        break;
-    default:
-        REG(s, offset) = value;
-        break;
-    }
+    REG(s, offset) = value;
     venc_update_irq(s);
 }
 
@@ -489,9 +590,9 @@ static void venc_reset(DeviceState *dev)
     venc_close_codecs(s);
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->l2, 0, sizeof(s->l2));
-    /* VEPU5 register layout, H.264, 1920x1088, no OSD/filter/AFBC. */
-    REG(s, VERSION) = 0x500f1111;
-    REG(s, BUS_STATUS) = 0x7e;
+    for (unsigned i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        register_reset(&s->regs_info[i]);
+    }
     s->busy = false;
     s->completed = s->failed = s->encoded_bytes = 0;
     venc_update_irq(s);
@@ -501,9 +602,11 @@ static void venc_init(Object *obj)
 {
     RK3566VENCState *s = RK3566_VENC(obj);
 
-    memory_region_init_io(&s->mmio, obj, &venc_ops, s, TYPE_RK3566_VENC,
-                          0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
+    s->reg_array = register_init_block32(DEVICE(obj), venc_regs_info,
+                                         ARRAY_SIZE(venc_regs_info),
+                                         s->regs_info, s->regs, &venc_ops,
+                                         false, 0x1000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->reg_array->mem);
     sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, venc_encode, s);
 }

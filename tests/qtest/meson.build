@@ -306,7 +306,8 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_RK3566') ? ['rk3566-machine-test',
                                                  'rk3566-rga2-test',
                                                  'rk3566-system-test',
-                                                 'rk3566-audio-test'] : []) + \
+                                                 'rk3566-audio-test',
+                                                 'rk3566-venc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   qtests_cxl +                                                                                  \
