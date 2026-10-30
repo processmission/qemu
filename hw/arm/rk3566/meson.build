@@ -13,6 +13,7 @@ rk3566_ss.add(files(
   'rk3566-system.c',
   'lsm6dsv16x.c',
   'rk3566-saradc.c',
+  'rk3566-media-audio.c',
 ))
 
 arm_common_ss.add_all(when: 'CONFIG_RK3566', if_true: rk3566_ss)
