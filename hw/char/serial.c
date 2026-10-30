@@ -222,6 +222,47 @@ static void serial_tx_load(SerialState *s)
     s->tx_busy = true;
 }
 
+/*
+ * Complete the pending transfer when the functional clock is gated.
+ *
+ * In hardware the shifter stalls until the clock returns, but software that
+ * polls LSR for THRE|TEMT in order to reprogram that very clock (the early
+ * console being the common case) would then never make progress and hang the
+ * machine.  Report the transmitter as idle again and hand the queued bytes to
+ * the backend, keeping the clock-driven pacing for the enabled case.
+ */
+static void serial_tx_flush_gated(SerialState *s)
+{
+    uint8_t byte;
+    int sent;
+
+    while (s->tx_busy || serial_tx_queued(s)) {
+        if (!s->tx_busy) {
+            serial_tx_load(s);
+        }
+        byte = s->tsr;
+        sent = (s->mcr & UART_MCR_LOOP) ? 1 :
+               qemu_chr_fe_write(&s->chr, &byte, 1);
+        if (sent != 1) {
+            if (sent < 0 && errno == EAGAIN) {
+                s->watch_tag = qemu_chr_fe_add_watch(
+                    &s->chr, G_IO_OUT | G_IO_HUP, serial_watch_cb, s);
+                return;
+            }
+            /* Drop the byte rather than wedge the transmitter. */
+        }
+        if (s->mcr & UART_MCR_LOOP) {
+            serial_receive1(s, &byte, 1);
+        }
+        s->tx_busy = false;
+        s->tx_ticks = 0;
+        s->tx_subns = 0;
+    }
+    if (!s->tx_busy) {
+        s->lsr |= UART_LSR_THRE | UART_LSR_TEMT;
+    }
+}
+
 static void serial_rx_timeout_restart(SerialState *s, uint64_t now)
 {
     s->rx_timeout_ticks = 0;
@@ -246,7 +287,14 @@ void serial_update_tx(SerialState *s)
         return;
     }
     timer_del(s->xmit_timer);
-    if (clock_is_enabled(s->uartclk)) {
+    if (!clock_is_enabled(s->uartclk)) {
+        s->tx_last_ns = now;
+        serial_tx_flush_gated(s);
+        serial_update_irq(s);
+        return;
+    }
+    /* Clock is running: pace the transfer from the clock ticks. */
+    {
         uint64_t period = clock_get(s->uartclk);
         uint64_t low, high;
 
