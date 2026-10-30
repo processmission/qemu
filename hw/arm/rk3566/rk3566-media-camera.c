@@ -38,16 +38,21 @@ enum {
     MI_ICR = 0x1504, MI_ISR = 0x1508,
 };
 
+#define ISP_REG_WINDOW 0x10000
+#define ISP_REG_BANK_SIZE 0x1600
+#define ISP_NUM_REGS (ISP_REG_BANK_SIZE / 4)
+
 struct RK3566ISPState {
     SysBusDevice parent_obj;
-    MemoryRegion mmio;
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[ISP_NUM_REGS];
     MemoryRegion *dma;
     AddressSpace dma_as;
     CharFrontend camera;
     qemu_irq irq[3];
     QEMUTimer *frame_end;
-    uint32_t regs[0x10000 / 4];
-    uint32_t active[0x1600 / 4];
+    uint32_t regs[ISP_REG_WINDOW / 4];
+    uint32_t active[ISP_REG_BANK_SIZE / 4];
     uint32_t width, height;
     uint32_t input_size, input_count;
     uint64_t input_frames;
@@ -357,80 +362,210 @@ static void isp_camera_event(void *opaque, QEMUChrEvent event)
     }
 }
 
+static void isp_sys_reset_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+
+    if (!val) {
+        return;
+    }
+    timer_del(s->frame_end);
+    s->busy = false;
+    memset(s->regs, 0, sizeof(s->regs));
+    memset(s->active, 0, sizeof(s->active));
+}
+
+static uint64_t isp_ctrl_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+    uint32_t old = *(uint32_t *)reg->data;
+
+    if (!(val & 1) && (old & 1)) {
+        REG(s, ISP_RIS) |= BIT(0);
+        timer_del(s->frame_end);
+        s->busy = false;
+    }
+    return val;
+}
+
+static void isp_ctrl_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+
+    *(uint32_t *)reg->data = val & ~(BIT(9) | BIT(10));
+    if (val & (BIT(9) | BIT(10))) {
+        isp_latch(s);
+    }
+}
+
+static void isp_ris_clear_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+    hwaddr status = reg->access->addr == ISP_ICR ? ISP_RIS : MI_RIS;
+
+    REG(s, status) &= ~(uint32_t)val;
+}
+
+static void isp_ris_set_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+    hwaddr status = reg->access->addr == ISP_ISR ? ISP_RIS : MI_RIS;
+
+    REG(s, status) |= (uint32_t)val;
+}
+
+static uint64_t isp_write_only_post_read(RegisterInfo *reg, uint64_t val)
+{
+    return 0;
+}
+
+static void isp_mi_ctrl_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+
+    if (!s->busy) {
+        isp_latch(s);
+    }
+}
+
+static void isp_mi_init_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566ISPState *s = RK3566_ISP(reg->opaque);
+
+    if (val & BIT(4)) {
+        isp_latch(s);
+    }
+}
+
+#define ISP_REG(off) { .name = "ISP_REG_" #off, .addr = (off) }
+
+static const RegisterAccessInfo isp_regs_info[] = {
+    { .name = "SYS_RESET", .addr = 0x014,
+      .post_write = isp_sys_reset_post_write },
+    { .name = "ISP_CTRL", .addr = ISP_CTRL,
+      .pre_write = isp_ctrl_pre_write,
+      .post_write = isp_ctrl_post_write },
+    { .name = "ISP_RIS", .addr = ISP_RIS, .ro = UINT32_MAX },
+    { .name = "ISP_MIS", .addr = ISP_MIS, .ro = UINT32_MAX },
+    { .name = "ISP_ICR", .addr = ISP_ICR,
+      .post_write = isp_ris_clear_post_write,
+      .post_read = isp_write_only_post_read },
+    { .name = "ISP_ISR", .addr = ISP_ISR,
+      .post_write = isp_ris_set_post_write,
+      .post_read = isp_write_only_post_read },
+    { .name = "ISP_FRAME_COUNT", .addr = ISP_FRAME_COUNT, .ro = UINT32_MAX },
+    { .name = "MI_CTRL", .addr = MI_CTRL,
+      .post_write = isp_mi_ctrl_post_write },
+    { .name = "MI_INIT", .addr = MI_INIT,
+      .post_write = isp_mi_init_post_write,
+      .post_read = isp_write_only_post_read },
+    { .name = "MI_RIS", .addr = MI_RIS, .ro = UINT32_MAX },
+    { .name = "MI_MIS", .addr = MI_MIS, .ro = UINT32_MAX },
+    { .name = "MI_ICR", .addr = MI_ICR,
+      .post_write = isp_ris_clear_post_write,
+      .post_read = isp_write_only_post_read },
+    { .name = "MI_ISR", .addr = MI_ISR,
+      .post_write = isp_ris_set_post_write,
+      .post_read = isp_write_only_post_read },
+    /* Capture configuration, shadow pairs and shadow write-back ranges. */
+    ISP_REG(0x0410), ISP_REG(0x0414), ISP_REG(0x0594), ISP_REG(0x0598),
+    ISP_REG(0x059c), ISP_REG(0x05a0), ISP_REG(0x05ac), ISP_REG(0x05b0),
+    ISP_REG(0x05b4), ISP_REG(0x05b8), ISP_REG(0x05bc),
+    ISP_REG(0x0880), ISP_REG(0x0884), ISP_REG(0x0888), ISP_REG(0x088c),
+    ISP_REG(0x0890),
+    ISP_REG(0x0c00), ISP_REG(0x0c04), ISP_REG(0x0c08), ISP_REG(0x0c0c),
+    ISP_REG(0x0c10), ISP_REG(0x0c14), ISP_REG(0x0c18), ISP_REG(0x0c1c),
+    ISP_REG(0x0c20), ISP_REG(0x0c24), ISP_REG(0x0c30), ISP_REG(0x0c34),
+    ISP_REG(0x0c38), ISP_REG(0x0c3c), ISP_REG(0x0c40), ISP_REG(0x0c44),
+    ISP_REG(0x0c48), ISP_REG(0x0c4c), ISP_REG(0x0c50), ISP_REG(0x0c54),
+    ISP_REG(0x1000), ISP_REG(0x1004), ISP_REG(0x1008), ISP_REG(0x100c),
+    ISP_REG(0x1010), ISP_REG(0x1014), ISP_REG(0x1018), ISP_REG(0x101c),
+    ISP_REG(0x1020), ISP_REG(0x1024), ISP_REG(0x1030), ISP_REG(0x1034),
+    ISP_REG(0x1038), ISP_REG(0x103c), ISP_REG(0x1040), ISP_REG(0x1044),
+    ISP_REG(0x1048), ISP_REG(0x104c), ISP_REG(0x1050), ISP_REG(0x1054),
+    ISP_REG(0x1408), ISP_REG(0x140c), ISP_REG(0x1410), ISP_REG(0x1418),
+    ISP_REG(0x141c), ISP_REG(0x1420), ISP_REG(0x1424), ISP_REG(0x142c),
+    ISP_REG(0x1430), ISP_REG(0x1434), ISP_REG(0x143c), ISP_REG(0x1440),
+    ISP_REG(0x1444), ISP_REG(0x1450), ISP_REG(0x1454), ISP_REG(0x1458),
+    ISP_REG(0x1460), ISP_REG(0x1464), ISP_REG(0x1468),
+    ISP_REG(0x1474), ISP_REG(0x1478), ISP_REG(0x147c), ISP_REG(0x1480),
+    ISP_REG(0x1484), ISP_REG(0x1488), ISP_REG(0x148c), ISP_REG(0x1490),
+    ISP_REG(0x1494), ISP_REG(0x1498), ISP_REG(0x149c), ISP_REG(0x14a0),
+    ISP_REG(0x14a4), ISP_REG(0x14a8), ISP_REG(0x14b0), ISP_REG(0x14b4),
+    ISP_REG(0x14b8), ISP_REG(0x14bc), ISP_REG(0x14c0), ISP_REG(0x14c4),
+    ISP_REG(0x14f8), ISP_REG(0x1514), ISP_REG(0x1518), ISP_REG(0x1548),
+};
+
+#undef ISP_REG
+
+static RegisterInfo *isp_find_register(RegisterInfoArray *reg_array,
+                                       hwaddr offset)
+{
+    for (unsigned i = 0; i < reg_array->num_elements; i++) {
+        RegisterInfo *reg = reg_array->r[i];
+
+        if (reg->access->addr == offset) {
+            return reg;
+        }
+    }
+    return NULL;
+}
+
 static uint64_t isp_read(void *opaque, hwaddr address, unsigned size)
 {
-    return REG(RK3566_ISP(opaque), address);
+    RegisterInfoArray *reg_array = opaque;
+    RK3566ISPState *s = RK3566_ISP(register_array_get_owner(reg_array));
+
+    if (isp_find_register(reg_array, address)) {
+        return register_read_memory(reg_array, address, size);
+    }
+    return s->regs[address / 4];
 }
 
 static void isp_write(void *opaque, hwaddr address, uint64_t value,
                       unsigned size)
 {
-    RK3566ISPState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566ISPState *s = RK3566_ISP(register_array_get_owner(reg_array));
+
+    if (isp_find_register(reg_array, address)) {
+        register_write_memory(reg_array, address, value, size);
+    } else {
+        s->regs[address / 4] = value;
+    }
     switch (address) {
-    case ISP_ICR:
-        REG(s, ISP_RIS) &= ~value;
-        break;
-    case MI_ICR:
-        REG(s, MI_RIS) &= ~value;
-        break;
-    case ISP_ISR:
-        REG(s, ISP_RIS) |= value;
-        break;
-    case MI_ISR:
-        REG(s, MI_RIS) |= value;
-        break;
-    case ISP_RIS: case ISP_MIS: case MI_RIS: case MI_MIS:
+    case ISP_RIS:
+    case ISP_MIS:
+    case MI_RIS:
+    case MI_MIS:
     case ISP_FRAME_COUNT:
         return;
-    case 0x14:
-        if (value) {
-            timer_del(s->frame_end);
-            s->busy = false;
-            memset(s->regs, 0, sizeof(s->regs));
-            memset(s->active, 0, sizeof(s->active));
-        }
-        break;
-    case ISP_CTRL:
-        if (!(value & 1) && (REG(s, ISP_CTRL) & 1)) {
-            REG(s, ISP_RIS) |= BIT(0);
-            timer_del(s->frame_end);
-            s->busy = false;
-        }
-        REG(s, address) = value & ~(BIT(9) | BIT(10));
-        if (value & (BIT(9) | BIT(10))) {
-            isp_latch(s);
-        }
-        break;
-    case MI_INIT:
-        if (value & BIT(4)) {
-            isp_latch(s);
-        }
-        break;
-    case MI_CTRL:
-        REG(s, address) = value;
-        if (!s->busy) {
-            isp_latch(s);
-        }
-        break;
     default:
-        REG(s, address) = value;
+        isp_update_irq(s);
     }
-    isp_update_irq(s);
 }
 
 static const MemoryRegionOps isp_ops = {
-    .read = isp_read, .write = isp_write, .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 1, .valid.max_access_size = 8,
+    .read = isp_read,
+    .write = isp_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 8,
     .valid.unaligned = true,
-    .impl.min_access_size = 4, .impl.max_access_size = 4,
+    .impl.min_access_size = 4,
+    .impl.max_access_size = 4,
 };
 
 static void isp_reset(DeviceState *device)
 {
     RK3566ISPState *s = RK3566_ISP(device);
+
     timer_del(s->frame_end);
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->active, 0, sizeof(s->active));
+    for (unsigned i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        register_reset(&s->regs_info[i]);
+    }
     s->input_count = 0;
     s->input_frames = 0;
     s->busy = false;
@@ -458,10 +593,13 @@ static void isp_realize(DeviceState *device, Error **errp)
 static void isp_init(Object *object)
 {
     RK3566ISPState *s = RK3566_ISP(object);
+
     s->frame_end = timer_new_ns(QEMU_CLOCK_VIRTUAL, isp_frame_end, s);
-    memory_region_init_io(&s->mmio, object, &isp_ops, s,
-                          TYPE_RK3566_ISP, 0x10000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
+    s->reg_array = register_init_block32(DEVICE(object), isp_regs_info,
+                                         ARRAY_SIZE(isp_regs_info),
+                                         s->regs_info, s->regs,
+                                         &isp_ops, false, ISP_REG_WINDOW);
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->reg_array->mem);
     for (unsigned i = 0; i < 3; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq[i]);
     }

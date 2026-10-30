@@ -308,6 +308,7 @@ qtests_aarch64 = \
                                                  'rk3566-system-test',
                                                  'rk3566-audio-test',
                                                  'rk3566-venc-test',
+                                                 'rk3566-isp-test',
                                                  'rk3566-csi-dphy-test',
                                                  'rk3566-otp-test',
                                                  'rk3566-pwm-test',
