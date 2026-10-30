@@ -16,6 +16,7 @@ rk3566_ss.add(files(
   'rk3566-media-audio.c',
   'rk3566-media-npu.c',
   'st25r100.c',
+  'vl53l8cx.c',
 ))
 
 arm_common_ss.add_all(when: 'CONFIG_RK3566', if_true: rk3566_ss)
