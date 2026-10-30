@@ -10,6 +10,7 @@
 #include "qemu/units.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "system/address-spaces.h"
@@ -18,12 +19,23 @@
 #include <libswscale/swscale.h>
 
 #define TYPE_RK3566_RGA "rk3566-rga2"
+#define RK3566_RGA_MMIO_SIZE 0x1000
+#define RK3566_RGA_VERSION 0x02000000
+#define RK3566_RGA_NUM_WORDS (RK3566_RGA_MMIO_SIZE / 4)
+
 OBJECT_DECLARE_SIMPLE_TYPE(RK3566RGAState, RK3566_RGA)
 
-enum {
-    SYS_CTRL = 0x00, CMD_CTRL = 0x04, CMD_BASE = 0x08, STATUS = 0x0c,
-    INTERRUPT = 0x10, VERSION = 0x28, COMMAND = 0x100,
-};
+REG32(SYS_CTRL, 0x00)
+REG32(CMD_CTRL, 0x04)
+REG32(CMD_BASE, 0x08)
+REG32(STATUS, 0x0c)
+REG32(INTERRUPT, 0x10)
+REG32(VERSION, 0x28)
+REG32(COMMAND, 0x100)
+
+#define RK3566_RGA_COMMAND_WORDS 32
+#define RK3566_RGA_NUM_REGS ((A_COMMAND / 4) + RK3566_RGA_COMMAND_WORDS)
+
 enum {
     MODE = 0x00, SRC_INFO = 0x04, SRC_BASE = 0x08, SRC_VIR = 0x18,
     SRC_ACT = 0x1c, SRC_X_FACTOR = 0x20, SRC_Y_FACTOR = 0x24,
@@ -31,15 +43,17 @@ enum {
     DST_ACT = 0x4c, ALPHA = 0x50, MMU_CTRL = 0x6c,
     MMU_SRC = 0x70, MMU_DST = 0x78,
 };
-#define REG(s, address) ((s)->regs[(address) / 4])
-#define CMD(s, address) REG(s, COMMAND + (address))
+#define CMD(s, address) ((s)->regs[(A_COMMAND + (address)) / 4])
 
 struct RK3566RGAState {
     SysBusDevice parent_obj;
-    MemoryRegion mmio;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[RK3566_RGA_NUM_REGS];
+    uint32_t regs[RK3566_RGA_NUM_WORDS];
+
     qemu_irq irq;
     QEMUTimer *timer;
-    uint32_t regs[0x1000 / 4];
     uint64_t completed;
     uint64_t failed;
     uint64_t max_bytes;
@@ -58,7 +72,7 @@ typedef struct RGAImage {
 
 static void rga_update_irq(RK3566RGAState *s)
 {
-    uint32_t value = REG(s, INTERRUPT);
+    uint32_t value = s->regs[R_INTERRUPT];
     qemu_set_irq(s->irq, (value & (value >> 8) & 7) != 0);
 }
 
@@ -264,19 +278,20 @@ static void rga_complete(void *opaque)
     RK3566RGAState *s = opaque;
     uint32_t command[32];
     bool success = false;
-    if (rga_dma(REG(s, CMD_BASE), command, sizeof(command), 0, false, false)) {
+    if (rga_dma(s->regs[R_CMD_BASE], command, sizeof(command), 0, false,
+                false)) {
         for (unsigned i = 0; i < ARRAY_SIZE(command); i++) {
             CMD(s, i * 4) = le32_to_cpu(command[i]);
         }
         success = rga_execute(s);
     }
     s->busy = false;
-    REG(s, CMD_CTRL) &= ~1;
+    s->regs[R_CMD_CTRL] &= ~1;
     if (success) {
-        REG(s, INTERRUPT) |= BIT(2) | BIT(3);
+        s->regs[R_INTERRUPT] |= BIT(2) | BIT(3);
         s->completed++;
     } else {
-        REG(s, INTERRUPT) |= BIT(0);
+        s->regs[R_INTERRUPT] |= BIT(0);
         s->failed++;
         qemu_log_mask(LOG_GUEST_ERROR,
                       "rk3566-rga2: DMA failure or unsupported image operation "
@@ -286,72 +301,157 @@ static void rga_complete(void *opaque)
     rga_update_irq(s);
 }
 
-static uint64_t rga_read(void *opaque, hwaddr address, unsigned size)
+static uint64_t rga_sys_ctrl_pre_write(RegisterInfo *reg, uint64_t val)
 {
-    RK3566RGAState *s = opaque;
-    switch (address) {
-    case SYS_CTRL:
-        return (REG(s, SYS_CTRL) & ~1u) | s->busy;
-    case STATUS:
-        return s->busy;
-    case VERSION:
-        return 0x02000000;
-    default:
-        return REG(s, address);
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+
+    if (val & BIT(3)) {
+        timer_del(s->timer);
+        s->busy = false;
+        s->regs[R_CMD_CTRL] = 0;
+        s->regs[R_INTERRUPT] &= ~0xf;
+        rga_update_irq(s);
+    }
+    return val & ~BIT(3);
+}
+
+static uint64_t rga_sys_ctrl_post_read(RegisterInfo *reg, uint64_t val)
+{
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+
+    return (val & ~1u) | s->busy;
+}
+
+static uint64_t rga_status_post_read(RegisterInfo *reg, uint64_t val)
+{
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+
+    return s->busy;
+}
+
+static void rga_cmd_ctrl_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+
+    if (!(val & 1)) {
+        return;
+    }
+    if (s->busy) {
+        s->regs[R_INTERRUPT] |= BIT(0);
+        rga_update_irq(s);
+    } else {
+        s->busy = true;
+        timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
     }
 }
 
-static void rga_write(void *opaque, hwaddr address, uint64_t value,
-                      unsigned size)
+static uint64_t rga_interrupt_pre_write(RegisterInfo *reg, uint64_t val)
 {
-    RK3566RGAState *s = opaque;
-    switch (address) {
-    case INTERRUPT:
-        REG(s, INTERRUPT) &= ~(extract32(value, 4, 4));
-        REG(s, INTERRUPT) = (REG(s, INTERRUPT) & 15) | (value & 0x700);
-        rga_update_irq(s);
-        return;
-    case SYS_CTRL:
-        if (value & BIT(3)) {
-            timer_del(s->timer);
-            s->busy = false;
-            REG(s, CMD_CTRL) = 0;
-            REG(s, INTERRUPT) &= ~15;
-            rga_update_irq(s);
-        }
-        REG(s, SYS_CTRL) = value & ~BIT(3);
-        return;
-    case CMD_CTRL:
-        REG(s, CMD_CTRL) = value;
-        if (value & 1) {
-            if (s->busy) {
-                REG(s, INTERRUPT) |= BIT(0);
-                rga_update_irq(s);
-            } else {
-                s->busy = true;
-                timer_mod_ns(s->timer,
-                             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
-            }
-        }
-        return;
-    case STATUS:
-    case VERSION:
-        return;
-    default:
-        REG(s, address) = value;
-    }
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+    uint32_t status = s->regs[R_INTERRUPT];
+    uint32_t clear = extract32(val, 4, 4);
+
+    /* Bits 4..7 are write-one-to-clear for status bits 0..3. */
+    return (status & 0xf & ~clear) | (val & 0x700);
 }
+
+static void rga_interrupt_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566RGAState *s = RK3566_RGA(reg->opaque);
+
+    rga_update_irq(s);
+}
+
+/*
+ * The 32 words at 0x100 are the command block that the DMA engine loads before
+ * execution.  They stay plain storage for the guest.
+ */
+#define RGA_COMMAND_REG(_index) \
+    { .name = "COMMAND" #_index, .addr = A_COMMAND + ((_index) * 4) }
+
+static const RegisterAccessInfo rga_regs_info[] = {
+    {
+        .name = "SYS_CTRL",
+        .addr = A_SYS_CTRL,
+        .pre_write = rga_sys_ctrl_pre_write,
+        .post_read = rga_sys_ctrl_post_read,
+    }, {
+        .name = "CMD_CTRL",
+        .addr = A_CMD_CTRL,
+        .post_write = rga_cmd_ctrl_post_write,
+    }, {
+        .name = "CMD_BASE",
+        .addr = A_CMD_BASE,
+    }, {
+        .name = "STATUS",
+        .addr = A_STATUS,
+        .ro = UINT32_MAX,
+        .post_read = rga_status_post_read,
+    }, {
+        .name = "INTERRUPT",
+        .addr = A_INTERRUPT,
+        .pre_write = rga_interrupt_pre_write,
+        .post_write = rga_interrupt_post_write,
+    }, {
+        .name = "VERSION",
+        .addr = A_VERSION,
+        .reset = RK3566_RGA_VERSION,
+        .ro = UINT32_MAX,
+    },
+    RGA_COMMAND_REG(0),
+    RGA_COMMAND_REG(1),
+    RGA_COMMAND_REG(2),
+    RGA_COMMAND_REG(3),
+    RGA_COMMAND_REG(4),
+    RGA_COMMAND_REG(5),
+    RGA_COMMAND_REG(6),
+    RGA_COMMAND_REG(7),
+    RGA_COMMAND_REG(8),
+    RGA_COMMAND_REG(9),
+    RGA_COMMAND_REG(10),
+    RGA_COMMAND_REG(11),
+    RGA_COMMAND_REG(12),
+    RGA_COMMAND_REG(13),
+    RGA_COMMAND_REG(14),
+    RGA_COMMAND_REG(15),
+    RGA_COMMAND_REG(16),
+    RGA_COMMAND_REG(17),
+    RGA_COMMAND_REG(18),
+    RGA_COMMAND_REG(19),
+    RGA_COMMAND_REG(20),
+    RGA_COMMAND_REG(21),
+    RGA_COMMAND_REG(22),
+    RGA_COMMAND_REG(23),
+    RGA_COMMAND_REG(24),
+    RGA_COMMAND_REG(25),
+    RGA_COMMAND_REG(26),
+    RGA_COMMAND_REG(27),
+    RGA_COMMAND_REG(28),
+    RGA_COMMAND_REG(29),
+    RGA_COMMAND_REG(30),
+    RGA_COMMAND_REG(31),
+};
+
+#undef RGA_COMMAND_REG
 
 static const MemoryRegionOps rga_ops = {
-    .read = rga_read, .write = rga_write, .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 4, .valid.max_access_size = 4,
+    .read = register_read_memory,
+    .write = register_write_memory,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
 };
 
 static void rga_reset(DeviceState *device)
 {
     RK3566RGAState *s = RK3566_RGA(device);
+    unsigned int i;
+
     timer_del(s->timer);
     memset(s->regs, 0, sizeof(s->regs));
+    for (i = 0; i < ARRAY_SIZE(rga_regs_info); i++) {
+        register_reset(&s->regs_info[rga_regs_info[i].addr / 4]);
+    }
     s->busy = false;
     s->completed = s->failed = 0;
     rga_update_irq(s);
@@ -360,11 +460,15 @@ static void rga_reset(DeviceState *device)
 static void rga_init(Object *object)
 {
     RK3566RGAState *s = RK3566_RGA(object);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(object);
+
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rga_complete, s);
-    memory_region_init_io(&s->mmio, object, &rga_ops, s,
-                          TYPE_RK3566_RGA, 0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
-    sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
+    s->reg_array = register_init_block32(DEVICE(object), rga_regs_info,
+                                         ARRAY_SIZE(rga_regs_info),
+                                         s->regs_info, s->regs, &rga_ops,
+                                         false, RK3566_RGA_MMIO_SIZE);
+    sysbus_init_mmio(sbd, &s->reg_array->mem);
+    sysbus_init_irq(sbd, &s->irq);
 }
 
 static void rga_finalize(Object *object)
@@ -375,7 +479,7 @@ static void rga_finalize(Object *object)
 static const VMStateDescription rga_vmstate = {
     .name = TYPE_RK3566_RGA, .version_id = 1, .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(regs, RK3566RGAState, 0x1000 / 4),
+        VMSTATE_UINT32_ARRAY(regs, RK3566RGAState, RK3566_RGA_NUM_WORDS),
         VMSTATE_BOOL(busy, RK3566RGAState),
         VMSTATE_UINT64(completed, RK3566RGAState),
         VMSTATE_UINT64(failed, RK3566RGAState),
