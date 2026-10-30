@@ -15,6 +15,7 @@
 
 #define RK3566_MACHINE_NAME "microduck-beta"
 #define RK3566_MACHINE_TYPE "microduck-beta-machine"
+#define RK3566_GIC_QOM "/machine/gic"
 
 /*
  * Memory windows from the MicroDuck beta board map.  Only the windows and
@@ -23,8 +24,15 @@
  */
 #define RK3566_DRAM_BASE        0x00000000ULL
 #define RK3566_UART0_BASE       0xfdd50000ULL
+#define RK3566_UART2_BASE       0xfe660000ULL
+#define RK3566_CRU_BASE         0xfdd20000ULL
 #define RK3566_GICD_BASE        0xfd400000ULL
 #define RK3566_TIMER0_BASE      0xfe5f0000ULL
+#define RK3566_PWM_4_7_BASE     0xfe6e0000ULL
+#define RK3566_PWM_8_11_BASE    0xfe6f0000ULL
+#define RK3566_TSADC_BASE       0xfe710000ULL
+#define RK3566_SARADC_BASE      0xfe720000ULL
+#define RK3566_DPHY_BASE        0xfe870000ULL
 #define RK3566_OTP_BASE         0xfe38c000ULL
 
 /* DW8250 line status register (5 << 2). */
@@ -36,6 +44,8 @@
 /* RK3566 timer registers. */
 #define RK3566_TIMER_LOAD       0x000
 #define RK3566_TIMER_LOAD_HI    0x004
+#define RK3566_TIMER_CUR        0x008
+#define RK3566_TIMER_CUR_HI     0x00c
 #define RK3566_TIMER_CONTROL    0x010
 #define RK3566_TIMER_STATUS     0x018
 
@@ -47,6 +57,21 @@
 #define RK3566_OTP_STATUS       0x304
 #define RK3566_OTP_STATUS_READ_DONE (1u << 2)
 #define RK3566_OTP_FUSE_BYTE_ADDR 2
+
+/*
+ * Several RK3566 models take the write mask in the upper half-word of the
+ * value written below 0x120: the lower half carries the data.
+ */
+#define RK3566_REG_WRITE_MASK(value) \
+    ((uint32_t)(value) | ((uint32_t)(value) << 16))
+
+/* Clear the selected bits through the same half-word write mask. */
+#define RK3566_REG_WRITE_MASK_CLEAR(value) \
+    ((uint32_t)(value) << 16)
+
+/* CRU clock gate registers; bit per functional clock. */
+#define RK3566_CRU_CLKGATE_CON(n) (0x300 + 4 * (n))
+#define RK3566_CRU_CLKGATE_UART2  RK3566_CRU_CLKGATE_CON(28)
 
 /*
  * Start the MicroDuck beta machine without a guest payload.  The machine

@@ -307,7 +307,14 @@ qtests_aarch64 = \
                                                  'rk3566-rga2-test',
                                                  'rk3566-system-test',
                                                  'rk3566-audio-test',
-                                                 'rk3566-venc-test'] : []) + \
+                                                 'rk3566-venc-test',
+                                                 'rk3566-csi-dphy-test',
+                                                 'rk3566-otp-test',
+                                                 'rk3566-pwm-test',
+                                                 'rk3566-saradc-test',
+                                                 'rk3566-serial-test',
+                                                 'rk3566-timer-test',
+                                                 'rk3566-tsadc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   qtests_cxl +                                                                                  \

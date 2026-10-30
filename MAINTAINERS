@@ -1083,6 +1083,7 @@ L: qemu-arm@nongnu.org
 S: Maintained
 F: docs/system/arm/rk3566.rst
 F: hw/arm/rk3566/
+F: tests/qtest/rk3566-*
 
 Rockchip RK3588 boards
 M: Chao Liu <chao.liu@processmission.com>
