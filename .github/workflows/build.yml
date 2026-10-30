@@ -136,7 +136,9 @@ jobs:
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -156,7 +158,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -299,7 +303,9 @@ jobs:
             image: ubuntu-24.04-arm
     runs-on: ${{ matrix.image }}
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - name: Build MCS-51 targets
         run: >
@@ -425,7 +431,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       # Sphinx maps -j auto to Python's CPU count; keep its workers serial.
       - run: >
@@ -439,7 +447,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -450,7 +460,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -465,7 +477,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -476,7 +490,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -487,7 +503,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -498,7 +516,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       # bypass package signature check by faking sqv binary
       # Documentation is covered elsewhere; keep this a compiler-only build.
@@ -515,7 +535,9 @@ jobs:
         arch: [arm64, amd64, ppc64el, s390x]
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -526,7 +548,9 @@ jobs:
     needs: checkapply
     runs-on: ubuntu-24.04
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -545,7 +569,9 @@ jobs:
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       - run: >
           podman run --pull newer --init --rm -it -v $(pwd):$(pwd) -w $(pwd)
@@ -571,7 +597,9 @@ jobs:
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       # we use image with download cache filled. Solves servers flakiness.
       - run: >
@@ -601,7 +629,9 @@ jobs:
     needs: checkapply
     runs-on: ${{matrix.image}}
     steps:
-      - run: sudo rm -rf /opt/ /usr/local/.ghcup /usr/local/lib/android
+      - run: |
+          sudo find /opt -mindepth 1 -maxdepth 1 ! -name runner-cache -exec rm -rf {} +
+          sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
       - uses: actions/checkout@v6
       # we use image with download cache filled. Solves servers flakiness.
       - run: >
