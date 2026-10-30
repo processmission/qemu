@@ -486,8 +486,9 @@ static const MemoryRegionOps rockchip_iommu_reg_ops = {
         .max_access_size = 4,
     },
     .valid = {
-        .min_access_size = 4,
-        .max_access_size = 4,
+        .min_access_size = 1,
+        .max_access_size = 8,
+        .unaligned = true,
     },
 };
 
