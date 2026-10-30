@@ -59,6 +59,8 @@ struct RK3588SCMIState {
     SysBusDevice parent_obj;
 
     MemoryRegion shmem;
+    char *soc;
+    bool rk3566;
 
     /* Backing store for the 0x100 shmem MMIO region. */
     uint8_t shmem_buf[RK3588_SCMI_SHMEM_SIZE];
