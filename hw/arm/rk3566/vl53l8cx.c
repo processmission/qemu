@@ -32,6 +32,7 @@ struct VL53L8CXState {
     unsigned input_length;
     uint8_t frame[FRAME_LIMIT], snapshot[FRAME_LIMIT];
     unsigned frame_length;
+    unsigned zones;
 };
 
 static void swap_words(uint8_t *bytes, size_t size)
@@ -119,6 +120,7 @@ static void ui_execute(VL53L8CXState *s)
             return;
         }
         s->frame_length = size;
+        s->zones = zones;
         stw_le_p(&s->dci[0x5448], size);
         s->ranging = true;
         s->frame[0] = 255;
@@ -161,9 +163,14 @@ static void depth_frame(VL53L8CXState *s)
     if (!s->ranging || !s->firmware_valid || !s->frame_length) {
         return;
     }
+    if (s->zones != 16 && s->zones != 64) {
+        ui_status(s, 0, 0, 0x80);
+        s->ranging = false;
+        return;
+    }
     memset(s->frame, 0, s->frame_length);
     unsigned position = 16;
-    unsigned zones = s->dci[0x5450] * s->dci[0x5451];
+    unsigned zones = s->zones;
     unsigned count = MIN(ldl_le_p(&s->dci[0xd96c]), 12);
     for (unsigned i = 0; i < count; i++) {
         uint32_t header = ldl_le_p(&s->dci[0xd980 + i * 4]);
