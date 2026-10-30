@@ -5,67 +5,113 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/irq.h"
+#include "hw/core/register.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 
 #define TYPE_RK3566_SARADC "rk3566-saradc"
 OBJECT_DECLARE_SIMPLE_TYPE(RK3566SARADCState, RK3566_SARADC)
+
+REG32(DATA, 0x00)
+REG32(STATUS, 0x04)
+REG32(CONTROL, 0x08)
+REG32(DELAY, 0x0c)
+
+#define RK3566_SARADC_NUM_REGS (A_DELAY / 4 + 1)
+
 struct RK3566SARADCState {
     SysBusDevice parent_obj;
-    MemoryRegion io;
+
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[RK3566_SARADC_NUM_REGS];
+    uint32_t regs[RK3566_SARADC_NUM_REGS];
+
     QEMUTimer *timer;
     qemu_irq irq;
-    uint32_t data, control, delay;
     uint32_t inputs_uv[8];
     uint32_t reference_uv;
 };
+
 static void saradc_complete(void *opaque)
 {
     RK3566SARADCState *s = opaque;
-    s->data = MIN((uint64_t)s->inputs_uv[s->control & 7] * 1023 /
-                  s->reference_uv, 1023);
-    s->control |= 0x40;
-    qemu_set_irq(s->irq, (s->control & 0x20) != 0);
+
+    s->regs[R_DATA] =
+        MIN((uint64_t)s->inputs_uv[s->regs[R_CONTROL] & 7] * 1023 /
+            s->reference_uv, 1023);
+    s->regs[R_CONTROL] |= 0x40;
+    qemu_set_irq(s->irq, (s->regs[R_CONTROL] & 0x20) != 0);
 }
-static uint64_t saradc_read(void *opaque, hwaddr offset, unsigned size)
+
+static uint64_t saradc_status_post_read(RegisterInfo *reg, uint64_t val)
 {
-    RK3566SARADCState *s = opaque;
-    switch (offset) {
-    case 0: return s->data;
-    case 4: return timer_pending(s->timer);
-    case 8: return s->control;
-    case 12: return s->delay;
-    default: return 0;
+    RK3566SARADCState *s = RK3566_SARADC(reg->opaque);
+
+    return timer_pending(s->timer);
+}
+
+static uint64_t saradc_control_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    return val & 0x2f;
+}
+
+static void saradc_control_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566SARADCState *s = RK3566_SARADC(reg->opaque);
+
+    qemu_set_irq(s->irq, 0);
+    timer_del(s->timer);
+    if (val & 8) {
+        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  (s->regs[R_DELAY] + 12) * 1000);
     }
 }
-static void saradc_write(void *opaque, hwaddr offset, uint64_t value,
-                         unsigned size)
+
+static uint64_t saradc_delay_pre_write(RegisterInfo *reg, uint64_t val)
 {
-    RK3566SARADCState *s = opaque;
-    if (offset == 8) {
-        s->control = value & 0x2f;
-        qemu_set_irq(s->irq, 0);
-        timer_del(s->timer);
-        if (value & 8) {
-            timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      (s->delay + 12) * 1000);
-        }
-    } else if (offset == 12) {
-        s->delay = value & 0x3f;
-    }
+    return val & 0x3f;
 }
+
+static const RegisterAccessInfo saradc_regs_info[] = {
+    {
+        .name = "DATA",
+        .addr = A_DATA,
+        .ro = UINT32_MAX,
+    }, {
+        .name = "STATUS",
+        .addr = A_STATUS,
+        .ro = UINT32_MAX,
+        .post_read = saradc_status_post_read,
+    }, {
+        .name = "CONTROL",
+        .addr = A_CONTROL,
+        .pre_write = saradc_control_pre_write,
+        .post_write = saradc_control_post_write,
+    }, {
+        .name = "DELAY",
+        .addr = A_DELAY,
+        .pre_write = saradc_delay_pre_write,
+    },
+};
+
 static const MemoryRegionOps saradc_ops = {
-    .read = saradc_read, .write = saradc_write,
+    .read = register_read_memory,
+    .write = register_write_memory,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid.min_access_size = 4, .valid.max_access_size = 4,
 };
+
 static void saradc_init(Object *obj)
 {
     RK3566SARADCState *s = RK3566_SARADC(obj);
-    memory_region_init_io(&s->io, obj, &saradc_ops, s, TYPE_RK3566_SARADC,
-                          0x100);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->io);
-    sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+
+    s->reg_array = register_init_block32(DEVICE(obj), saradc_regs_info,
+                                         ARRAY_SIZE(saradc_regs_info),
+                                         s->regs_info, s->regs,
+                                         &saradc_ops, false, 0x100);
+    sysbus_init_mmio(sbd, &s->reg_array->mem);
+    sysbus_init_irq(sbd, &s->irq);
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, saradc_complete, s);
 }
 
@@ -83,7 +129,9 @@ static void saradc_reset(DeviceState *dev)
     RK3566SARADCState *s = RK3566_SARADC(dev);
 
     timer_del(s->timer);
-    s->data = s->control = s->delay = 0;
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        register_reset(&s->regs_info[i]);
+    }
     qemu_set_irq(s->irq, 0);
 }
 
@@ -96,7 +144,7 @@ static int saradc_post_load(void *opaque, int version_id)
 {
     RK3566SARADCState *s = opaque;
 
-    qemu_set_irq(s->irq, (s->control & 0x60) == 0x60);
+    qemu_set_irq(s->irq, (s->regs[R_CONTROL] & 0x60) == 0x60);
     return 0;
 }
 
@@ -104,9 +152,7 @@ static const VMStateDescription vmstate_saradc = {
     .name = TYPE_RK3566_SARADC, .version_id = 1, .minimum_version_id = 1,
     .post_load = saradc_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(data, RK3566SARADCState),
-        VMSTATE_UINT32(control, RK3566SARADCState),
-        VMSTATE_UINT32(delay, RK3566SARADCState),
+        VMSTATE_UINT32_ARRAY(regs, RK3566SARADCState, RK3566_SARADC_NUM_REGS),
         VMSTATE_TIMER_PTR(timer, RK3566SARADCState),
         VMSTATE_END_OF_LIST()
     },
