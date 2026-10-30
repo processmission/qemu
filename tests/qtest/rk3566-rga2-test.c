@@ -47,7 +47,13 @@
 #define RK3566_RGA2_IMAGE_ACT      0x00030003
 #define RK3566_RGA2_IMAGE_STRIDE   4
 
-#define RK3566_RGA2_RESERVED       0x20
+/*
+ * Offsets outside the described register bank.  The device keeps the plain
+ * storage fallback of the original model for these addresses.
+ */
+static const uint32_t rk3566_rga2_unlisted[] = {
+    0x14, 0x2c, 0xfc, 0x180, 0x400, 0xffc,
+};
 
 static bool rk3566_rga2_start(QTestState **qts)
 {
@@ -112,11 +118,10 @@ static void test_rk3566_rga2_reset_values(void)
     g_assert_cmphex(rk3566_mmio_read32_at(qts, RK3566_RGA2_BASE,
                                         RK3566_RGA2_COMMAND), ==, 0x55aa55aa);
 
-    /* Reserved offsets are not modelled by the register table. */
-    rk3566_mmio_write32_at(qts, RK3566_RGA2_BASE, RK3566_RGA2_RESERVED,
-                           0xa5a5a5a5);
-    g_assert_cmphex(rk3566_mmio_read32_at(qts, RK3566_RGA2_BASE,
-                                        RK3566_RGA2_RESERVED), ==, 0);
+    /* Unlisted offsets keep their plain storage. */
+    rk3566_mmio_write32_at(qts, RK3566_RGA2_BASE, 0x20, 0xa5a5a5a5);
+    g_assert_cmphex(rk3566_mmio_read32_at(qts, RK3566_RGA2_BASE, 0x20), ==,
+                    0xa5a5a5a5);
 
     qtest_quit(qts);
 }
@@ -239,6 +244,27 @@ static void test_rk3566_rga2_command_copy(void)
     qtest_quit(qts);
 }
 
+static void test_rk3566_rga2_storage_fallback(void)
+{
+    QTestState *qts;
+
+    if (!rk3566_rga2_start(&qts)) {
+        return;
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rk3566_rga2_unlisted); i++) {
+        rk3566_mmio_write32_at(qts, RK3566_RGA2_BASE,
+                               rk3566_rga2_unlisted[i], 0xdeadbeef);
+    }
+    for (unsigned int i = 0; i < ARRAY_SIZE(rk3566_rga2_unlisted); i++) {
+        g_assert_cmphex(rk3566_mmio_read32_at(qts, RK3566_RGA2_BASE,
+                                            rk3566_rga2_unlisted[i]), ==,
+                        0xdeadbeef);
+    }
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -254,6 +280,8 @@ int main(int argc, char **argv)
                    test_rk3566_rga2_command_error_irq);
     qtest_add_func("/rk3566/rga2-command-copy",
                    test_rk3566_rga2_command_copy);
+    qtest_add_func("/rk3566/rga2-storage-fallback",
+                   test_rk3566_rga2_storage_fallback);
 
     return g_test_run();
 }

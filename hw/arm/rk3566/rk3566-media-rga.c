@@ -434,9 +434,48 @@ static const RegisterAccessInfo rga_regs_info[] = {
 
 #undef RGA_COMMAND_REG
 
+static RegisterInfo *rga_find_register(RegisterInfoArray *reg_array,
+                                       hwaddr addr)
+{
+    for (unsigned int i = 0; i < reg_array->num_elements; i++) {
+        RegisterInfo *reg = reg_array->r[i];
+
+        if (reg->access->addr == addr) {
+            return reg;
+        }
+    }
+    return NULL;
+}
+
+static uint64_t rga_read(void *opaque, hwaddr addr, unsigned size)
+{
+    RegisterInfoArray *reg_array = opaque;
+    RK3566RGAState *s = RK3566_RGA(register_array_get_owner(reg_array));
+
+    if (rga_find_register(reg_array, addr)) {
+        return register_read_memory(reg_array, addr, size);
+    }
+    return extract64(s->regs[addr / sizeof(uint32_t)], 0, size * 8);
+}
+
+static void rga_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    RegisterInfoArray *reg_array = opaque;
+    RK3566RGAState *s = RK3566_RGA(register_array_get_owner(reg_array));
+    uint32_t *reg = &s->regs[addr / sizeof(uint32_t)];
+    uint64_t mask;
+
+    if (rga_find_register(reg_array, addr)) {
+        register_write_memory(reg_array, addr, value, size);
+        return;
+    }
+    mask = MAKE_64BIT_MASK(0, size * 8);
+    *reg = (*reg & ~mask) | (value & mask);
+}
+
 static const MemoryRegionOps rga_ops = {
-    .read = register_read_memory,
-    .write = register_write_memory,
+    .read = rga_read,
+    .write = rga_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid.min_access_size = 4,
     .valid.max_access_size = 4,
