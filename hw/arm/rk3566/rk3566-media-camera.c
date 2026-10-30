@@ -12,6 +12,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "hw/i2c/i2c.h"
 #include "migration/vmstate.h"
@@ -64,11 +65,17 @@ struct GC2093State {
     bool powered, resetn;
 };
 
+enum {
+    DPHY_REG_CTRL,
+    DPHY_REG_MAX,
+};
+
 struct RK3566DPHYState {
     SysBusDevice parent_obj;
-    MemoryRegion mmio;
     qemu_irq enabled;
     uint32_t regs[0x1000 / 4];
+    RegisterInfo regs_info[DPHY_REG_MAX];
+    RegisterInfoArray *reg_array;
 };
 
 static void isp_update_irq(RK3566ISPState *s)
@@ -601,19 +608,40 @@ static void gc2093_class_init(ObjectClass *class, const void *data)
     slave->recv = gc2093_recv;
 }
 
+static void dphy_ctrl_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566DPHYState *s = RK3566_DPHY(reg->opaque);
+
+    qemu_set_irq(s->enabled, (val & 0x4c) == 0x4c);
+}
+
+static const RegisterAccessInfo dphy_regs_info[] = {
+    { .name = "LANE_ENABLE", .addr = 0, .reset = 1,
+      .post_write = dphy_ctrl_post_write },
+};
+
 static uint64_t dphy_read(void *opaque, hwaddr address, unsigned size)
 {
-    return REG(RK3566_DPHY(opaque), address);
+    RegisterInfoArray *reg_array = opaque;
+    RK3566DPHYState *s = RK3566_DPHY(register_array_get_owner(reg_array));
+
+    if (address == 0) {
+        return register_read_memory(reg_array, address, size);
+    }
+    return s->regs[address / 4];
 }
 
 static void dphy_write(void *opaque, hwaddr address, uint64_t value,
                        unsigned size)
 {
-    RK3566DPHYState *s = RK3566_DPHY(opaque);
-    REG(s, address) = value;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566DPHYState *s = RK3566_DPHY(register_array_get_owner(reg_array));
+
     if (address == 0) {
-        qemu_set_irq(s->enabled, (value & 0x4c) == 0x4c);
+        register_write_memory(reg_array, address, value, size);
+        return;
     }
+    s->regs[address / 4] = value;
 }
 
 static const MemoryRegionOps dphy_ops = {
@@ -624,17 +652,21 @@ static const MemoryRegionOps dphy_ops = {
 static void dphy_reset(DeviceState *device)
 {
     RK3566DPHYState *s = RK3566_DPHY(device);
+
     memset(s->regs, 0, sizeof(s->regs));
-    s->regs[0] = 1;
+    register_reset(&s->regs_info[DPHY_REG_CTRL]);
     qemu_set_irq(s->enabled, 0);
 }
 
 static void dphy_init(Object *object)
 {
     RK3566DPHYState *s = RK3566_DPHY(object);
-    memory_region_init_io(&s->mmio, object, &dphy_ops, s,
-                          TYPE_RK3566_DPHY, 0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
+
+    s->reg_array = register_init_block32(DEVICE(object), dphy_regs_info,
+                                         ARRAY_SIZE(dphy_regs_info),
+                                         s->regs_info, s->regs,
+                                         &dphy_ops, false, 0x1000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->reg_array->mem);
     qdev_init_gpio_out_named(DEVICE(s), &s->enabled, "link-enabled", 1);
 }
 
