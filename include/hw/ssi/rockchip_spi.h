@@ -9,6 +9,7 @@
 #ifndef HW_SSI_ROCKCHIP_SPI_H
 #define HW_SSI_ROCKCHIP_SPI_H
 
+#include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "hw/ssi/ssi.h"
 #include "qom/object.h"
@@ -20,11 +21,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(RockchipSPIState, ROCKCHIP_SPI)
 
 #define ROCKCHIP_SPI_MMIO_SIZE 0x1000
 #define ROCKCHIP_SPI_FIFO_DEPTH 64
+#define ROCKCHIP_SPI_REG_BANK_SIZE 0x4c
+#define ROCKCHIP_SPI_REG_COUNT (ROCKCHIP_SPI_REG_BANK_SIZE / 4)
 
 struct RockchipSPIState {
     SysBusDevice parent_obj;
 
-    MemoryRegion iomem;
     SSIBus *spi;
     qemu_irq irq;
     qemu_irq dma_busy[2];
@@ -33,19 +35,32 @@ struct RockchipSPIState {
     Clock *clock;
     uint32_t clock_hz;
 
-    uint32_t ctrlr0;
-    uint32_t ctrlr1;
-    uint32_t ssi_enr;
-    uint32_t baudr;
-    uint32_t txftlr;
-    uint32_t rxftlr;
-    uint32_t imr;
-    uint32_t isr;
-    uint32_t ser;
-    uint32_t dmacr;
-    uint32_t dmatdlr;
-    uint32_t dmardlr;
-    uint32_t ipr;
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[ROCKCHIP_SPI_REG_COUNT];
+    union {
+        uint32_t regs[ROCKCHIP_SPI_REG_COUNT];
+        struct {
+            uint32_t ctrlr0;
+            uint32_t ctrlr1;
+            uint32_t ssi_enr;
+            uint32_t ser;
+            uint32_t baudr;
+            uint32_t txftlr;
+            uint32_t rxftlr;
+            uint32_t txflr;
+            uint32_t rxflr;
+            uint32_t sr;
+            uint32_t ipr;
+            uint32_t imr;
+            uint32_t isr;
+            uint32_t risr;
+            uint32_t icr;
+            uint32_t dmacr;
+            uint32_t dmatdlr;
+            uint32_t dmardlr;
+            uint32_t version;
+        };
+    };
     uint32_t remaining;
     uint32_t scheduled_frames;
 

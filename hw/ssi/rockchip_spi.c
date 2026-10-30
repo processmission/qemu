@@ -10,6 +10,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/register.h"
 #include "hw/ssi/rockchip_spi.h"
 #include "migration/vmstate.h"
 #include "system/qtest.h"
@@ -150,49 +151,207 @@ static void rockchip_spi_transfer(void *opaque)
     rockchip_spi_update(s);
 }
 
+static uint32_t rockchip_spi_status(RockchipSPIState *s)
+{
+    uint32_t value = 0;
+
+    if ((s->ssi_enr & 1) &&
+        (s->tx_level || (CR0_XFM(s) == CR0_XFM_RO && s->remaining))) {
+        value |= SR_BUSY;
+    }
+    if (!s->tx_level) {
+        value |= SR_TF_EMPTY;
+    }
+    if (s->tx_level == ROCKCHIP_SPI_FIFO_DEPTH) {
+        value |= SR_TF_FULL;
+    }
+    if (!s->rx_level) {
+        value |= SR_RF_EMPTY;
+    }
+    if (s->rx_level == ROCKCHIP_SPI_FIFO_DEPTH) {
+        value |= SR_RF_FULL;
+    }
+    return value;
+}
+
+static uint64_t rockchip_spi_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RockchipSPIState *s = ROCKCHIP_SPI(reg->opaque);
+
+    switch (reg->access->addr) {
+    case SPI_CTRLR1:
+        return val & 0xffff;
+    case SPI_SSIENR:
+        if (!(s->ssi_enr & 1) && (val & 1)) {
+            s->remaining = s->ctrlr1 + 1;
+        }
+        return val & 1;
+    case SPI_SER:
+        return val & 3;
+    case SPI_BAUDR:
+        return val & 0xfffe;
+    case SPI_TXFTLR:
+    case SPI_RXFTLR:
+    case SPI_DMATDLR:
+    case SPI_DMARDLR:
+        return MIN(val, ROCKCHIP_SPI_FIFO_DEPTH - 1);
+    case SPI_DMACR:
+        return val & 3;
+    default:
+        return val;
+    }
+}
+
+static void rockchip_spi_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RockchipSPIState *s = ROCKCHIP_SPI(reg->opaque);
+
+    if (device_is_in_reset(DEVICE(s))) {
+        return;
+    }
+    switch (reg->access->addr) {
+    case SPI_SSIENR:
+        if (!(val & 1)) {
+            timer_del(s->timer);
+            s->tx_level = s->rx_level = 0;
+            s->tx_pos = s->rx_pos = 0;
+            s->remaining = 0;
+            s->scheduled_frames = 0;
+            s->isr = 0;
+        }
+        break;
+    case SPI_ICR:
+        s->isr &= ~(val & INT_ERRORS);
+        break;
+    default:
+        break;
+    }
+    rockchip_spi_update(s);
+}
+
+static uint64_t rockchip_spi_post_read(RegisterInfo *reg, uint64_t val)
+{
+    RockchipSPIState *s = ROCKCHIP_SPI(reg->opaque);
+
+    switch (reg->access->addr) {
+    case SPI_TXFLR:
+        return s->tx_level;
+    case SPI_RXFLR:
+        return s->rx_level;
+    case SPI_SR:
+        return rockchip_spi_status(s);
+    case SPI_ISR:
+        return s->isr & s->imr;
+    case SPI_RISR:
+        return s->isr;
+    case SPI_ICR:
+        return 0;
+    case SPI_VERSION:
+        return SPI_VERSION_RK3588;
+    default:
+        return val;
+    }
+}
+
+static const RegisterAccessInfo rockchip_spi_regs_info[] = {
+    { .name = "CTRLR0", .addr = SPI_CTRLR0,
+      .post_write = rockchip_spi_post_write },
+    { .name = "CTRLR1", .addr = SPI_CTRLR1,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "SSIENR", .addr = SPI_SSIENR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "SER", .addr = SPI_SER,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "BAUDR", .addr = SPI_BAUDR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "TXFTLR", .addr = SPI_TXFTLR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "RXFTLR", .addr = SPI_RXFTLR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "TXFLR", .addr = SPI_TXFLR, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "RXFLR", .addr = SPI_RXFLR, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "SR", .addr = SPI_SR, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "IPR", .addr = SPI_IPR,
+      .post_write = rockchip_spi_post_write },
+    { .name = "IMR", .addr = SPI_IMR,
+      .post_write = rockchip_spi_post_write },
+    { .name = "ISR", .addr = SPI_ISR, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "RISR", .addr = SPI_RISR, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "ICR", .addr = SPI_ICR,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+    { .name = "DMACR", .addr = SPI_DMACR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "DMATDLR", .addr = SPI_DMATDLR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "DMARDLR", .addr = SPI_DMARDLR,
+      .pre_write = rockchip_spi_pre_write,
+      .post_write = rockchip_spi_post_write },
+    { .name = "VERSION", .addr = SPI_VERSION, .ro = UINT32_MAX,
+      .post_read = rockchip_spi_post_read,
+      .post_write = rockchip_spi_post_write },
+};
+
+static bool rockchip_spi_is_readonly(hwaddr offset)
+{
+    switch (offset) {
+    case SPI_TXFLR:
+    case SPI_RXFLR:
+    case SPI_SR:
+    case SPI_ISR:
+    case SPI_RISR:
+    case SPI_VERSION:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static RegisterInfo *rockchip_spi_find_register(RegisterInfoArray *reg_array,
+                                                hwaddr offset)
+{
+    for (unsigned i = 0; i < reg_array->num_elements; i++) {
+        RegisterInfo *reg = reg_array->r[i];
+
+        if (reg->access->addr == offset) {
+            return reg;
+        }
+    }
+    return NULL;
+}
+
+static void rockchip_spi_log_unimplemented(hwaddr offset, uint64_t value)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "%s: write at 0x%" HWADDR_PRIx " = 0x%" PRIx64 "\n",
+                  TYPE_ROCKCHIP_SPI, offset, value);
+}
+
 static uint64_t rockchip_spi_read(void *opaque, hwaddr offset, unsigned size)
 {
-    RockchipSPIState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RockchipSPIState *s = ROCKCHIP_SPI(register_array_get_owner(reg_array));
     uint32_t value;
 
-    switch (offset) {
-    case SPI_CTRLR0: return s->ctrlr0;
-    case SPI_CTRLR1: return s->ctrlr1;
-    case SPI_SSIENR: return s->ssi_enr;
-    case SPI_SER: return s->ser;
-    case SPI_BAUDR: return s->baudr;
-    case SPI_TXFTLR: return s->txftlr;
-    case SPI_RXFTLR: return s->rxftlr;
-    case SPI_TXFLR: return s->tx_level;
-    case SPI_RXFLR: return s->rx_level;
-    case SPI_DMACR: return s->dmacr;
-    case SPI_DMATDLR: return s->dmatdlr;
-    case SPI_DMARDLR: return s->dmardlr;
-    case SPI_IPR: return s->ipr;
-    case SPI_SR:
-        value = 0;
-        if ((s->ssi_enr & 1) &&
-            (s->tx_level || (CR0_XFM(s) == CR0_XFM_RO && s->remaining))) {
-            value |= SR_BUSY;
-        }
-        if (!s->tx_level) {
-            value |= SR_TF_EMPTY;
-        }
-        if (s->tx_level == ROCKCHIP_SPI_FIFO_DEPTH) {
-            value |= SR_TF_FULL;
-        }
-        if (!s->rx_level) {
-            value |= SR_RF_EMPTY;
-        }
-        if (s->rx_level == ROCKCHIP_SPI_FIFO_DEPTH) {
-            value |= SR_RF_FULL;
-        }
-        return value;
-    case SPI_IMR: return s->imr;
-    case SPI_ISR: return s->isr & s->imr;
-    case SPI_RISR: return s->isr;
-    case SPI_VERSION: return SPI_VERSION_RK3588;
-    case SPI_RXDR:
+    if (offset == SPI_RXDR) {
         value = 0;
         if (s->rx_level) {
             value = s->rx_fifo[s->rx_pos];
@@ -203,67 +362,22 @@ static uint64_t rockchip_spi_read(void *opaque, hwaddr offset, unsigned size)
         }
         rockchip_spi_update(s);
         return value;
-    default: return 0;
     }
+
+    if (rockchip_spi_find_register(reg_array, offset)) {
+        return register_read_memory(reg_array, offset, size);
+    }
+
+    return 0;
 }
 
 static void rockchip_spi_write(void *opaque, hwaddr offset, uint64_t value,
                                unsigned size)
 {
-    RockchipSPIState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RockchipSPIState *s = ROCKCHIP_SPI(register_array_get_owner(reg_array));
 
-    switch (offset) {
-    case SPI_CTRLR0:
-        s->ctrlr0 = value;
-        break;
-    case SPI_CTRLR1:
-        s->ctrlr1 = value & 0xffff;
-        break;
-    case SPI_SSIENR:
-        if (!(s->ssi_enr & 1) && (value & 1)) {
-            s->remaining = s->ctrlr1 + 1;
-        }
-        s->ssi_enr = value & 1;
-        if (!s->ssi_enr) {
-            timer_del(s->timer);
-            s->tx_level = s->rx_level = 0;
-            s->tx_pos = s->rx_pos = 0;
-            s->remaining = 0;
-            s->scheduled_frames = 0;
-            s->isr = 0;
-        }
-        break;
-    case SPI_SER:
-        s->ser = value & 3;
-        break;
-    case SPI_BAUDR:
-        s->baudr = value & 0xfffe;
-        break;
-    case SPI_TXFTLR:
-        s->txftlr = MIN(value, ROCKCHIP_SPI_FIFO_DEPTH - 1);
-        break;
-    case SPI_RXFTLR:
-        s->rxftlr = MIN(value, ROCKCHIP_SPI_FIFO_DEPTH - 1);
-        break;
-    case SPI_IMR:
-        s->imr = value;
-        break;
-    case SPI_ICR:
-        s->isr &= ~(value & INT_ERRORS);
-        break;
-    case SPI_DMACR:
-        s->dmacr = value & 3;
-        break;
-    case SPI_DMATDLR:
-        s->dmatdlr = MIN(value, ROCKCHIP_SPI_FIFO_DEPTH - 1);
-        break;
-    case SPI_DMARDLR:
-        s->dmardlr = MIN(value, ROCKCHIP_SPI_FIFO_DEPTH - 1);
-        break;
-    case SPI_IPR:
-        s->ipr = value;
-        break;
-    case SPI_TXDR:
+    if (offset == SPI_TXDR) {
         if (s->tx_level == ROCKCHIP_SPI_FIFO_DEPTH) {
             s->isr |= INT_TF_OVER;
         } else {
@@ -271,13 +385,24 @@ static void rockchip_spi_write(void *opaque, hwaddr offset, uint64_t value,
                         ROCKCHIP_SPI_FIFO_DEPTH] = value;
             s->tx_level++;
         }
-        break;
-    default:
-        qemu_log_mask(LOG_UNIMP,
-                      "%s: write at 0x%" HWADDR_PRIx " = 0x%" PRIx64 "\n",
-                      TYPE_ROCKCHIP_SPI, offset, value);
-        break;
+        rockchip_spi_update(s);
+        return;
     }
+
+    if (rockchip_spi_find_register(reg_array, offset)) {
+        if (rockchip_spi_is_readonly(offset)) {
+            rockchip_spi_log_unimplemented(offset, value);
+        }
+        /*
+         * The previous model stored the whole register word for every
+         * access width; keep that behaviour instead of merging sub-word
+         * writes into the register file.
+         */
+        register_write_memory(reg_array, offset, value, 4);
+        return;
+    }
+
+    rockchip_spi_log_unimplemented(offset, value);
     rockchip_spi_update(s);
 }
 
@@ -315,19 +440,23 @@ static void rockchip_spi_realize(DeviceState *dev, Error **errp)
 
     s->spi = ssi_create_bus(dev, "spi");
     sysbus_init_irq(sbd, &s->irq);
-    memory_region_init_io(&s->iomem, OBJECT(dev), &rockchip_spi_ops, s,
-                          TYPE_ROCKCHIP_SPI, ROCKCHIP_SPI_MMIO_SIZE);
-    sysbus_init_mmio(sbd, &s->iomem);
+    s->reg_array = register_init_block32(dev, rockchip_spi_regs_info,
+                                         ARRAY_SIZE(rockchip_spi_regs_info),
+                                         s->regs_info, s->regs,
+                                         &rockchip_spi_ops, false,
+                                         ROCKCHIP_SPI_MMIO_SIZE);
+    sysbus_init_mmio(sbd, &s->reg_array->mem);
 }
 
 static void rockchip_spi_reset(DeviceState *dev)
 {
     RockchipSPIState *s = ROCKCHIP_SPI(dev);
+    unsigned i;
 
     timer_del(s->timer);
-    s->ctrlr0 = s->ctrlr1 = s->ssi_enr = s->ser = s->baudr = 0;
-    s->txftlr = s->rxftlr = s->imr = s->isr = 0;
-    s->dmacr = s->dmatdlr = s->dmardlr = s->ipr = 0;
+    for (i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        register_reset(&s->regs_info[i]);
+    }
     s->remaining = s->tx_level = s->tx_pos = s->rx_level = s->rx_pos = 0;
     s->scheduled_frames = 0;
     rockchip_spi_update(s);
