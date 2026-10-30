@@ -31,6 +31,7 @@ if (rk3566_libavcodec.found() and rk3566_libavutil.found() and
     rk3566_libswscale.found() and rk3566_x264.found())
   rk3566_ss.add(files(
     'rk3566-media-camera.c',
+    'rk3566-media-codec.c',
     'rk3566-media-rga.c',
   ), rk3566_libavcodec, rk3566_libavutil, rk3566_libswscale, rk3566_x264)
 endif
