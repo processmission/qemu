@@ -14,6 +14,8 @@
 #include "qemu/module.h"
 #include "qemu/bswap.h"
 #include "exec/hwaddr.h"
+#include "qapi/error.h"
+#include "hw/core/qdev-properties.h"
 
 /* shmem layout offsets (struct scmi_shared_mem, 24-byte fixed header). */
 #define SHMEM_RESERVED          0x00
@@ -79,6 +81,26 @@
 #define SCMI_CCLK_SD_RATE      50000000ULL
 #define SCMI_HCLK_SD_RATE      100000000ULL
 
+static const struct {
+    const char *name;
+    uint64_t initial_rate;
+    uint64_t rates[8];
+    unsigned count;
+} rk3566_clocks[] = {
+    { "armclk", 1104000000, { 408000000, 600000000, 816000000, 1104000000,
+                              1416000000, 1608000000, 1800000000 }, 7 },
+    { "clk_gpu", 200000000, { 200000000, 300000000, 400000000, 600000000,
+                             700000000, 800000000 }, 6 },
+    { "clk_npu", 600000000, { 200000000, 300000000, 400000000, 600000000,
+                             700000000, 800000000, 900000000, 1000000000 }, 8 },
+    { "clk_ddr", 1560000000, { 1560000000 }, 1 },
+};
+
+static unsigned scmi_num_clocks(RK3588SCMIState *s)
+{
+    return s->rk3566 ? ARRAY_SIZE(rk3566_clocks) : RK3588_SCMI_NUM_CLOCKS;
+}
+
 static uint32_t shmem_get_status_off(void)
 {
     /* First 4 bytes of the payload are the status. */
@@ -108,11 +130,14 @@ static void shmem_write_u64(RK3588SCMIState *s, unsigned off, uint64_t v)
  */
 static uint64_t rk3588_scmi_clock_rate(RK3588SCMIState *s, uint32_t clk_id)
 {
-    if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+    if (clk_id >= scmi_num_clocks(s)) {
         return 0;
     }
     if (s->rate[clk_id]) {
         return s->rate[clk_id];
+    }
+    if (s->rk3566) {
+        return rk3566_clocks[clk_id].initial_rate;
     }
     switch (clk_id) {
     case SCMI_CCLK_SD:
@@ -143,7 +168,7 @@ static bool rk3588_scmi_base_msg_supported(uint32_t msg_id)
     }
 }
 
-static bool rk3588_scmi_clock_msg_supported(uint32_t msg_id)
+static bool rk3588_scmi_clock_msg_supported(RK3588SCMIState *s, uint32_t msg_id)
 {
     switch (msg_id) {
     case MSG_PROTOCOL_VERSION:
@@ -156,6 +181,8 @@ static bool rk3588_scmi_clock_msg_supported(uint32_t msg_id)
     case CLOCK_CONFIG_GET:
     case MSG_NEGOTIATE_PROTOCOL_VERSION:
         return true;
+    case CLOCK_DESCRIBE_RATES:
+        return s->rk3566;
     default:
         return false;
     }
@@ -249,7 +276,8 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
             break;
         case BASE_DISCOVER_SUB_VENDOR:
             memset(s->shmem_buf + status_off + 4, 0, 16);
-            strcpy((char *)(s->shmem_buf + status_off + 4), "RK3588");
+            strcpy((char *)(s->shmem_buf + status_off + 4),
+                   s->rk3566 ? "RK3566" : "RK3588");
             extra_payload = 16;
             break;
         case BASE_DISCOVER_IMPLEMENT_VERSION:
@@ -306,13 +334,13 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
             break;
         case MSG_PROTOCOL_ATTRIBUTES: {
             /* num_clocks[15:0]=24, max_async_req[23:16]=0 */
-            uint32_t attrs = RK3588_SCMI_NUM_CLOCKS;
+            uint32_t attrs = scmi_num_clocks(s);
             shmem_write_u32(s, status_off + 4, attrs);
             extra_payload = 4;
             break;
         }
         case MSG_PROTOCOL_MESSAGE_ATTRIBUTES:
-            if (rk3588_scmi_clock_msg_supported(
+            if (rk3588_scmi_clock_msg_supported(s,
                     shmem_read_u32(s, SHMEM_MSG_PAYLOAD))) {
                 shmem_write_u32(s, status_off + 4, 0);
                 extra_payload = 4;
@@ -323,41 +351,77 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
             break;
         case CLOCK_ATTRIBUTES: {
             uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD);
-            if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+            if (clk_id >= scmi_num_clocks(s)) {
                 status = SCMI_ERR_NOT_FOUND;
                 extra_payload = 0;
                 break;
             }
-            /*
-             * attributes=0: no extended-name, no notifications, no parents.
-             * This makes Linux skip CLOCK_NAME_GET / DESCRIBE_RATES /
-             * POSSIBLE_PARENTS for this clock (clock.c:382-402).
-             */
-            shmem_write_u32(s, status_off + 4, 0);
+            if (s->rk3566) {
+                /* Bit zero reports enable state; names fit the base reply. */
+                shmem_write_u32(s, status_off + 4, s->enabled[clk_id] ? 1 : 0);
+            } else {
+                /*
+                 * attributes=0: no extended-name, no notifications, no
+                 * parents.  This makes Linux skip CLOCK_NAME_GET,
+                 * DESCRIBE_RATES and POSSIBLE_PARENTS for this clock.
+                 */
+                shmem_write_u32(s, status_off + 4, 0);
+            }
             /* 16-byte ASCII name (NUL-padded). */
             memset(s->shmem_buf + status_off + 8, 0, 16);
-            switch (clk_id) {
-            case SCMI_CCLK_SD:
-                strcpy((char *)(s->shmem_buf + status_off + 8), "cclk_sd");
-                break;
-            case SCMI_HCLK_SD:
-                strcpy((char *)(s->shmem_buf + status_off + 8), "hclk_sd");
-                break;
-            default: {
-                char nm[8];
-                snprintf(nm, sizeof(nm), "clk%u", clk_id);
-                strcpy((char *)(s->shmem_buf + status_off + 8), nm);
-                break;
-            }
+            if (s->rk3566) {
+                strcpy((char *)(s->shmem_buf + status_off + 8),
+                       rk3566_clocks[clk_id].name);
+            } else {
+                switch (clk_id) {
+                case SCMI_CCLK_SD:
+                    strcpy((char *)(s->shmem_buf + status_off + 8), "cclk_sd");
+                    break;
+                case SCMI_HCLK_SD:
+                    strcpy((char *)(s->shmem_buf + status_off + 8), "hclk_sd");
+                    break;
+                default: {
+                    char nm[8];
+                    snprintf(nm, sizeof(nm), "clk%u", clk_id);
+                    strcpy((char *)(s->shmem_buf + status_off + 8), nm);
+                    break;
+                }
+                }
             }
             /* clock_enable_latency=0. */
             shmem_write_u32(s, status_off + 24, 0);
             extra_payload = 4 + 16 + 4;
             break;
         }
+        case CLOCK_DESCRIBE_RATES: {
+            uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD);
+            uint32_t index = shmem_read_u32(s, SHMEM_MSG_PAYLOAD + 4);
+            unsigned count;
+
+            if (!s->rk3566) {
+                status = SCMI_ERR_SUPPORT;
+                break;
+            }
+            if (clk_id >= scmi_num_clocks(s)) {
+                status = SCMI_ERR_NOT_FOUND;
+                break;
+            }
+            count = rk3566_clocks[clk_id].count;
+            if (index >= count) {
+                status = SCMI_ERR_INVALID_PARAMS;
+                break;
+            }
+            shmem_write_u32(s, status_off + 4, count - index);
+            for (unsigned i = index; i < count; i++) {
+                uint64_t rate = rk3566_clocks[clk_id].rates[i];
+                shmem_write_u64(s, status_off + 8 + (i - index) * 8, rate);
+            }
+            extra_payload = 4 + (count - index) * 8;
+            break;
+        }
         case CLOCK_RATE_GET: {
             uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD);
-            if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+            if (clk_id >= scmi_num_clocks(s)) {
                 status = SCMI_ERR_NOT_FOUND;
                 extra_payload = 0;
                 break;
@@ -372,7 +436,7 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
             uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD + 4);
             uint32_t rate_lo = shmem_read_u32(s, SHMEM_MSG_PAYLOAD + 8);
             uint32_t rate_hi = shmem_read_u32(s, SHMEM_MSG_PAYLOAD + 12);
-            if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+            if (clk_id >= scmi_num_clocks(s)) {
                 status = SCMI_ERR_NOT_FOUND;
             } else {
                 s->rate[clk_id] = ((uint64_t)rate_hi << 32) | rate_lo;
@@ -384,7 +448,7 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
             /* payload: {u32 clk_id; u32 attributes} */
             uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD);
             uint32_t attrs = shmem_read_u32(s, SHMEM_MSG_PAYLOAD + 4);
-            if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+            if (clk_id >= scmi_num_clocks(s)) {
                 status = SCMI_ERR_NOT_FOUND;
             } else {
                 s->enabled[clk_id] = (attrs & 0x1) != 0;
@@ -395,7 +459,7 @@ bool rk3588_scmi_handle_smc(RK3588SCMIState *s)
         case CLOCK_CONFIG_GET: {
             /* payload: {u32 clk_id; u32 flags}; v3 response has 3 u32s. */
             uint32_t clk_id = shmem_read_u32(s, SHMEM_MSG_PAYLOAD);
-            if (clk_id >= RK3588_SCMI_NUM_CLOCKS) {
+            if (clk_id >= scmi_num_clocks(s)) {
                 status = SCMI_ERR_NOT_FOUND;
                 extra_payload = 0;
                 break;
@@ -507,16 +571,31 @@ static void rk3588_scmi_reset(DeviceState *dev)
     shmem_write_u32(s, SHMEM_CHANNEL_STATUS, SHMEM_CHANNEL_FREE);
     memset(s->rate, 0, sizeof(s->rate));
     memset(s->enabled, 0, sizeof(s->enabled));
+    if (s->rk3566) {
+        for (unsigned i = 0; i < ARRAY_SIZE(rk3566_clocks); i++) {
+            s->rate[i] = rk3566_clocks[i].initial_rate;
+            s->enabled[i] = true;
+        }
+    }
 }
 
 static void rk3588_scmi_realize(DeviceState *dev, Error **errp)
 {
     RK3588SCMIState *s = RK3588_SCMI(dev);
 
+    if (s->soc && strcmp(s->soc, "rk3566") && strcmp(s->soc, "rk3588")) {
+        error_setg(errp, "Unsupported SCMI SoC '%s'", s->soc);
+        return;
+    }
+    s->rk3566 = s->soc && !strcmp(s->soc, "rk3566");
     memory_region_init_io(&s->shmem, OBJECT(s), &rk3588_scmi_shmem_ops, s,
                           "rk3588-scmi-shmem", RK3588_SCMI_SHMEM_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->shmem);
 }
+
+static const Property rk3588_scmi_properties[] = {
+    DEFINE_PROP_STRING("soc", RK3588SCMIState, soc),
+};
 
 static void rk3588_scmi_class_init(ObjectClass *oc, const void *data)
 {
@@ -525,6 +604,7 @@ static void rk3588_scmi_class_init(ObjectClass *oc, const void *data)
     dc->realize = rk3588_scmi_realize;
     device_class_set_legacy_reset(dc, rk3588_scmi_reset);
     dc->user_creatable = false;
+    device_class_set_props(dc, rk3588_scmi_properties);
 }
 
 static const TypeInfo rk3588_scmi_info = {

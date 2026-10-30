@@ -12,10 +12,13 @@
 #include "hw/char/dw8250.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/core/qdev-clock.h"
 
 #define DW_UART_REGION_SIZE 0x100
 
 #define DW_UART_USR   (0x7C >> 2) /* UART Status Register */
+#define DW_UART_TFL   (0x80 >> 2) /* Transmit FIFO Level */
+#define DW_UART_RFL   (0x84 >> 2) /* Receive FIFO Level */
 #define DW_UART_RE_EN (0xB4 >> 2) /* Receiver Output Enable Register */
 #define DW_UART_DLF   (0xC0 >> 2) /* Divisor Latch Fraction Register */
 #define DW_UART_CPR   (0xF4 >> 2) /* Component Parameter Register */
@@ -45,6 +48,7 @@ static uint64_t dw8250_ext_read(void *opaque, hwaddr addr, unsigned int size)
     DW8250State *s = opaque;
     SerialState *serial = &s->serial_mm.serial;
 
+    serial_update_tx(serial);
     switch (addr >> s->regshift) {
     case DW_UART_USR: {
         bool fifo_enabled = serial->fcr & DW_UART_FCR_FIFO_EN;
@@ -74,7 +78,14 @@ static uint64_t dw8250_ext_read(void *opaque, hwaddr addr, unsigned int size)
     case DW_UART_UCV:
         return DW_UART_UCV_VALUE;
     case DW_UART_CPR:
-        return 0x00000000; /* No advanced features (DMA, extra FIFOs) */
+        return serial->fifo_size == UART_FIFO_LENGTH ? 0 :
+               ((serial->fifo_size / 16) << 16) | BIT(10);
+    case DW_UART_TFL:
+        return serial->fifo_size == UART_FIFO_LENGTH ? 0 :
+               fifo8_num_used(&serial->xmit_fifo);
+    case DW_UART_RFL:
+        return serial->fifo_size == UART_FIFO_LENGTH ? 0 :
+               fifo8_num_used(&serial->recv_fifo);
     case DW_UART_CTR:
         return DW_UART_CTR_VALUE;
 
@@ -119,6 +130,9 @@ static void dw8250_instance_init(Object *obj)
     object_property_add_alias(obj, "chardev", OBJECT(&s->serial_mm), "chardev");
     object_property_add_alias(obj, "baudbase", OBJECT(&s->serial_mm),
                               "baudbase");
+    object_property_add_alias(obj, "fifo-size", OBJECT(&s->serial_mm),
+                              "fifo-size");
+    qdev_alias_clock(DEVICE(&s->serial_mm), "uartclk", DEVICE(obj), "uartclk");
 }
 
 static void dw8250_realize(DeviceState *dev, Error **errp)

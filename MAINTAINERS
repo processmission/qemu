@@ -1077,6 +1077,17 @@ F: roms/vbootrom
 F: docs/system/arm/nuvoton.rst
 F: tests/functional/arm/test_quanta_gsj.py
 
+Rockchip RK3566 boards
+M: Chao Liu <chao.liu@processmission.com>
+L: qemu-arm@nongnu.org
+S: Maintained
+F: docs/system/arm/rk3566.rst
+F: hw/arm/rk3566/
+F: hw/ssi/rockchip_spi.c
+F: include/hw/ssi/rockchip_spi.h
+F: tests/qtest/rk3566-*
+F: tests/qtest/rockchip-spi-test.c
+
 Rockchip RK3588 boards
 M: Chao Liu <chao.liu@processmission.com>
 L: qemu-arm@nongnu.org

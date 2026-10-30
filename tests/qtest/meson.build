@@ -303,6 +303,21 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-evb-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588_EVB') ? ['rk3588-rknpu-test'] : []) + \
   (config_all_devices.has_key('CONFIG_RK3588S_ROC_PC') ? ['rk3588s-roc-pc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_RK3566') ? ['rk3566-machine-test',
+                                                 'rk3566-rga2-test',
+                                                 'rk3566-system-test',
+                                                 'rk3566-audio-test',
+                                                 'rk3566-venc-test',
+                                                 'rk3566-isp-test',
+                                                 'rk3566-cru-test',
+                                                 'rk3566-csi-dphy-test',
+                                                 'rk3566-otp-test',
+                                                 'rk3566-pwm-test',
+                                                 'rk3566-saradc-test',
+                                                 'rk3566-serial-test',
+                                                 'rk3566-timer-test',
+                                                 'rk3566-tsadc-test',
+                                                 'rockchip-spi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   qtests_cxl +                                                                                  \

@@ -37,6 +37,7 @@
 #include "trace.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/core/qdev-clock.h"
 
 #define UART_LCR_DLAB   0x80    /* Divisor latch access bit */
 #define UART_LCR_SB     0x40    /* Set break */
@@ -109,6 +110,8 @@
 
 static void serial_receive1(void *opaque, const uint8_t *buf, int size);
 static void serial_xmit(SerialState *s);
+static gboolean serial_watch_cb(void *do_not_use, GIOCondition cond,
+                                void *opaque);
 
 static inline void recv_fifo_put(SerialState *s, uint8_t chr)
 {
@@ -176,6 +179,14 @@ static void serial_update_parameters(SerialState *s)
 
     data_bits = (s->lcr & UART_LCR_WLS) + 5;
     frame_size += data_bits + stop_bits;
+    if (clock_has_source(s->uartclk)) {
+        s->baudbase = clock_get_hz(s->uartclk) / 16;
+        s->frame_ticks = 16ULL * s->divider * frame_size;
+        if (!s->baudbase || !s->divider) {
+            s->char_transmit_time = 0;
+            return;
+        }
+    }
     /* Zero divisor should give about 3500 baud */
     speed = (s->divider == 0) ? 3500 : (float) s->baudbase / s->divider;
     ssp.speed = speed;
@@ -183,8 +194,236 @@ static void serial_update_parameters(SerialState *s)
     ssp.data_bits = data_bits;
     ssp.stop_bits = stop_bits;
     s->char_transmit_time =  (NANOSECONDS_PER_SECOND / speed) * frame_size;
+    if (clock_has_source(s->uartclk)) {
+        s->char_transmit_time =
+            clock_ticks_to_ns(s->uartclk, s->frame_ticks) + 1;
+    }
     qemu_chr_fe_ioctl(&s->chr, CHR_IOCTL_SERIAL_SET_PARAMS, &ssp);
     trace_serial_update_parameters(speed, parity, data_bits, stop_bits);
+}
+
+static unsigned serial_tx_queued(SerialState *s)
+{
+    return (s->fcr & UART_FCR_FE) ? fifo8_num_used(&s->xmit_fifo) :
+                                   !(s->lsr & UART_LSR_THRE);
+}
+
+static void serial_tx_load(SerialState *s)
+{
+    if (s->fcr & UART_FCR_FE) {
+        s->tsr = fifo8_pop(&s->xmit_fifo);
+        if (fifo8_is_empty(&s->xmit_fifo)) {
+            s->lsr |= UART_LSR_THRE;
+        }
+    } else {
+        s->tsr = s->thr;
+        s->lsr |= UART_LSR_THRE;
+    }
+    s->tx_busy = true;
+}
+
+/*
+ * Complete the pending transfer when the functional clock is gated.
+ *
+ * In hardware the shifter stalls until the clock returns, but software that
+ * polls LSR for THRE|TEMT in order to reprogram that very clock (the early
+ * console being the common case) would then never make progress and hang the
+ * machine.  Report the transmitter as idle again and hand the queued bytes to
+ * the backend, keeping the clock-driven pacing for the enabled case.
+ */
+static void serial_tx_flush_gated(SerialState *s)
+{
+    uint8_t byte;
+    int sent;
+
+    while (s->tx_busy || serial_tx_queued(s)) {
+        if (!s->tx_busy) {
+            serial_tx_load(s);
+        }
+        byte = s->tsr;
+        sent = (s->mcr & UART_MCR_LOOP) ? 1 :
+               qemu_chr_fe_write(&s->chr, &byte, 1);
+        if (sent != 1) {
+            if (sent < 0 && errno == EAGAIN) {
+                s->watch_tag = qemu_chr_fe_add_watch(
+                    &s->chr, G_IO_OUT | G_IO_HUP, serial_watch_cb, s);
+                return;
+            }
+            /* Drop the byte rather than wedge the transmitter. */
+        }
+        if (s->mcr & UART_MCR_LOOP) {
+            serial_receive1(s, &byte, 1);
+        }
+        s->tx_busy = false;
+        s->tx_ticks = 0;
+        s->tx_subns = 0;
+    }
+    if (!s->tx_busy) {
+        s->lsr |= UART_LSR_THRE | UART_LSR_TEMT;
+    }
+}
+
+static void serial_rx_timeout_restart(SerialState *s, uint64_t now)
+{
+    s->rx_timeout_ticks = 0;
+    if (clock_has_source(s->uartclk) && !clock_is_enabled(s->uartclk)) {
+        s->rx_timeout_ticks = 4 * s->frame_ticks;
+        timer_del(s->fifo_timeout_timer);
+    } else {
+        timer_mod(s->fifo_timeout_timer, now + 4 * s->char_transmit_time);
+    }
+}
+
+/* Complete elapsed frames in one backend write, at FIFO/IRQ boundaries. */
+void serial_update_tx(SerialState *s)
+{
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint8_t bytes[257];
+    bool was_empty;
+    unsigned count, queued;
+    int sent;
+
+    if (!clock_has_source(s->uartclk) || !s->xmit_timer) {
+        return;
+    }
+    timer_del(s->xmit_timer);
+    if (!clock_is_enabled(s->uartclk)) {
+        s->tx_last_ns = now;
+        serial_tx_flush_gated(s);
+        serial_update_irq(s);
+        return;
+    }
+    /* Clock is running: pace the transfer from the clock ticks. */
+    {
+        uint64_t period = clock_get(s->uartclk);
+        uint64_t low, high;
+
+        if (s->tx_period && s->tx_period != period) {
+            mulu64(&low, &high, s->tx_subns, period);
+            divu128(&low, &high, s->tx_period);
+            s->tx_subns = low;
+        }
+        s->tx_period = period;
+        if (s->tx_busy && !s->watch_tag && now > s->tx_last_ns) {
+            uint64_t elapsed = now - s->tx_last_ns;
+
+            low = (elapsed << 32) + s->tx_subns;
+            high = (elapsed >> 32) + (low < s->tx_subns);
+            s->tx_subns = divu128(&low, &high, period);
+            s->tx_ticks += low;
+        }
+    }
+    s->tx_last_ns = now;
+    was_empty = s->lsr & UART_LSR_THRE;
+    if (!s->tx_busy && serial_tx_queued(s)) {
+        serial_tx_load(s);
+        s->tx_ticks = 0;
+        s->tx_subns = 0;
+    }
+    if (!s->tx_busy || !s->frame_ticks || !clock_is_enabled(s->uartclk)) {
+        goto status;
+    }
+    queued = serial_tx_queued(s);
+    count = MIN(s->tx_ticks / s->frame_ticks, queued + 1);
+    if (!count || s->watch_tag) {
+        goto schedule;
+    }
+    bytes[0] = s->tsr;
+    if (count > 1) {
+        if (s->fcr & UART_FCR_FE) {
+            fifo8_peek_buf(&s->xmit_fifo, bytes + 1, count - 1);
+        } else {
+            bytes[1] = s->thr;
+        }
+    }
+    sent = (s->mcr & UART_MCR_LOOP) ? count :
+           qemu_chr_fe_write(&s->chr, bytes, count);
+    if (sent < 0 && errno != EAGAIN) {
+        sent = count;
+    }
+    if (sent > 0) {
+        s->tx_ticks -= s->frame_ticks * sent;
+        s->last_xmit_ts = now - clock_ticks_to_ns(s->uartclk, s->tx_ticks);
+        if (sent > 1 && (s->fcr & UART_FCR_FE)) {
+            fifo8_drop(&s->xmit_fifo, sent - 1);
+        } else if (sent > 1) {
+            s->lsr |= UART_LSR_THRE;
+        }
+        if (s->mcr & UART_MCR_LOOP) {
+            serial_receive1(s, bytes, sent);
+            serial_rx_timeout_restart(s, s->last_xmit_ts);
+        }
+        s->tx_busy = false;
+        if (serial_tx_queued(s)) {
+            serial_tx_load(s);
+        } else {
+            s->tx_ticks = 0;
+            s->tx_subns = 0;
+        }
+    }
+    if (sent < (int)count) {
+        /* A full host transport holds the current shift register. */
+        s->tx_ticks = MIN(s->tx_ticks, s->frame_ticks);
+        s->tx_subns = 0;
+        s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP,
+                                            serial_watch_cb, s);
+    }
+schedule:
+    if (s->tx_busy && !s->watch_tag && clock_is_enabled(s->uartclk)) {
+        uint64_t ticks = s->frame_ticks * MAX(1, serial_tx_queued(s));
+
+        ticks -= MIN(ticks, s->tx_ticks);
+        uint64_t delay = clock_ticks_to_ns(s->uartclk, ticks);
+
+        delay -= MIN(delay, s->tx_subns >> 32);
+        timer_mod(s->xmit_timer, now + delay + 1);
+    }
+status:
+    if (!serial_tx_queued(s)) {
+        s->lsr |= UART_LSR_THRE;
+        if (!was_empty) {
+            s->thr_ipending = 1;
+        }
+    }
+    if (!s->tx_busy && (s->lsr & UART_LSR_THRE)) {
+        s->lsr |= UART_LSR_TEMT;
+    }
+    serial_update_irq(s);
+}
+
+static void serial_xmit_timer(void *opaque)
+{
+    serial_update_tx(opaque);
+}
+
+static void serial_clock_update(void *opaque, ClockEvent event)
+{
+    SerialState *s = opaque;
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (!s->xmit_timer) {
+        return;
+    }
+    if (event == ClockPreUpdate) {
+        serial_update_tx(s);
+        if (timer_pending(s->fifo_timeout_timer)) {
+            int64_t remaining =
+                timer_expire_time_ns(s->fifo_timeout_timer) - now;
+
+            s->rx_timeout_ticks =
+                clock_ns_to_ticks(s->uartclk, MAX(0, remaining));
+            timer_del(s->fifo_timeout_timer);
+        }
+        return;
+    }
+    serial_update_parameters(s);
+    if (clock_is_enabled(s->uartclk) && s->rx_timeout_ticks) {
+        timer_mod(s->fifo_timeout_timer, now +
+                  clock_ticks_to_ns(s->uartclk, s->rx_timeout_ticks) + 1);
+        s->rx_timeout_ticks = 0;
+    }
+    serial_update_tx(s);
+    qemu_chr_fe_accept_input(&s->chr);
 }
 
 static void serial_update_msl(SerialState *s)
@@ -229,6 +468,9 @@ static gboolean serial_watch_cb(void *do_not_use, GIOCondition cond,
                                 void *opaque)
 {
     SerialState *s = opaque;
+    if (clock_has_source(s->uartclk)) {
+        s->tx_last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    }
     s->watch_tag = 0;
     serial_xmit(s);
     return G_SOURCE_REMOVE;
@@ -236,6 +478,10 @@ static gboolean serial_watch_cb(void *do_not_use, GIOCondition cond,
 
 static void serial_xmit(SerialState *s)
 {
+    if (clock_has_source(s->uartclk)) {
+        serial_update_tx(s);
+        return;
+    }
     do {
         assert(!(s->lsr & UART_LSR_TEMT));
         if (s->tsr_retry == 0) {
@@ -299,13 +545,13 @@ static void serial_write_fcr(SerialState *s, uint8_t val)
             s->recv_fifo_itl = 1;
             break;
         case UART_FCR_ITL_2:
-            s->recv_fifo_itl = 4;
+            s->recv_fifo_itl = s->fifo_size / 4;
             break;
         case UART_FCR_ITL_3:
-            s->recv_fifo_itl = 8;
+            s->recv_fifo_itl = s->fifo_size / 2;
             break;
         case UART_FCR_ITL_4:
-            s->recv_fifo_itl = 14;
+            s->recv_fifo_itl = s->fifo_size - 2;
             break;
         }
     } else {
@@ -337,6 +583,7 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
     SerialState *s = opaque;
 
     assert(size == 1 && addr < 8);
+    serial_update_tx(s);
     trace_serial_write(addr, val);
     switch(addr) {
     default:
@@ -474,6 +721,7 @@ static uint64_t serial_ioport_read(void *opaque, hwaddr addr, unsigned size)
     uint32_t ret;
 
     assert(size == 1 && addr < 8);
+    serial_update_tx(s);
     switch(addr) {
     default:
     case 0:
@@ -486,7 +734,8 @@ static uint64_t serial_ioport_read(void *opaque, hwaddr addr, unsigned size)
                 if (fifo8_is_empty(&s->recv_fifo)) {
                     s->lsr &= ~(UART_LSR_DR | UART_LSR_BI);
                 } else {
-                    timer_mod(s->fifo_timeout_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->char_transmit_time * 4);
+                    serial_rx_timeout_restart(
+                        s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
                 }
                 s->timeout_ipending = 0;
             } else {
@@ -556,11 +805,14 @@ static uint64_t serial_ioport_read(void *opaque, hwaddr addr, unsigned size)
 
 static int serial_can_receive(SerialState *s)
 {
+    if (clock_has_source(s->uartclk) && !clock_is_enabled(s->uartclk)) {
+        return 0;
+    }
     if(s->fcr & UART_FCR_FE) {
         if (!fifo8_is_full(&s->recv_fifo)) {
             /*
              * Advertise (fifo.itl - fifo.count) bytes when count < ITL, and 1
-             * if above. If UART_FIFO_LENGTH - fifo.count is advertised the
+             * if above. If fifo_size - fifo.count is advertised the
              * effect will be to almost always fill the fifo completely before
              * the guest has a chance to respond, effectively overriding the ITL
              * that the guest has set.
@@ -613,7 +865,7 @@ static void serial_receive1(void *opaque, const uint8_t *buf, int size)
         }
         s->lsr |= UART_LSR_DR;
         /* call the timeout receive callback in 4 char transmit time */
-        timer_mod(s->fifo_timeout_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->char_transmit_time * 4);
+        serial_rx_timeout_restart(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     } else {
         if (s->lsr & UART_LSR_DR)
             s->lsr |= UART_LSR_OE;
@@ -672,7 +924,7 @@ static int serial_post_load(void *opaque, int version_id)
         assert(s->watch_tag == 0);
         s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP,
                                              serial_watch_cb, s);
-    } else {
+    } else if (!clock_has_source(s->uartclk)) {
         /* tsr_retry == 0 implies LSR.TEMT = 1 (transmitter empty).  */
         if (!(s->lsr & UART_LSR_TEMT)) {
             error_report("inconsistent state in serial device "
@@ -685,6 +937,7 @@ static int serial_post_load(void *opaque, int version_id)
     /* Initialize fcr via setter to perform essential side-effects */
     serial_write_fcr(s, s->fcr_vmstate);
     serial_update_parameters(s);
+    serial_update_tx(s);
     return 0;
 }
 
@@ -740,6 +993,23 @@ static bool serial_recv_fifo_needed(void *opaque)
     return !fifo8_is_empty(&s->recv_fifo);
 
 }
+
+static bool serial_fifo_size_needed(void *opaque)
+{
+    SerialState *s = opaque;
+    return s->fifo_size != UART_FIFO_LENGTH;
+}
+
+static const VMStateDescription vmstate_serial_fifo_size = {
+    .name = "serial/fifo_size",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = serial_fifo_size_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_EQUAL(fifo_size, SerialState),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static const VMStateDescription vmstate_serial_recv_fifo = {
     .name = "serial/recv_fifo",
@@ -821,6 +1091,32 @@ static const VMStateDescription vmstate_serial_poll = {
     }
 };
 
+static bool serial_clock_needed(void *opaque)
+{
+    SerialState *s = opaque;
+    return clock_has_source(s->uartclk);
+}
+
+static const VMStateDescription vmstate_serial_clock = {
+    .name = "serial/clock",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = serial_clock_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_CLOCK(uartclk, SerialState),
+        VMSTATE_TIMER_PTR(xmit_timer, SerialState),
+        VMSTATE_UINT64(tx_ticks, SerialState),
+        VMSTATE_UINT64(tx_subns, SerialState),
+        VMSTATE_UINT64(tx_period, SerialState),
+        VMSTATE_UINT64(tx_last_ns, SerialState),
+        VMSTATE_UINT64(rx_timeout_ticks, SerialState),
+        VMSTATE_BOOL(tx_busy, SerialState),
+        VMSTATE_UINT8(thr, SerialState),
+        VMSTATE_UINT8(tsr, SerialState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 const VMStateDescription vmstate_serial = {
     .name = "serial",
     .version_id = 3,
@@ -842,6 +1138,7 @@ const VMStateDescription vmstate_serial = {
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
+        &vmstate_serial_fifo_size,
         &vmstate_serial_thr_ipending,
         &vmstate_serial_tsr,
         &vmstate_serial_recv_fifo,
@@ -849,6 +1146,7 @@ const VMStateDescription vmstate_serial = {
         &vmstate_serial_fifo_timeout_timer,
         &vmstate_serial_timeout_ipending,
         &vmstate_serial_poll,
+        &vmstate_serial_clock,
         NULL
     }
 };
@@ -873,6 +1171,13 @@ static void serial_reset(void *opaque)
     s->poll_msl = 0;
 
     s->timeout_ipending = 0;
+    s->tx_busy = false;
+    s->tx_ticks = 0;
+    s->tx_subns = 0;
+    s->tx_period = 0;
+    s->rx_timeout_ticks = 0;
+    s->tx_last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    timer_del(s->xmit_timer);
     timer_del(s->fifo_timeout_timer);
     timer_del(s->modem_status_poll);
 
@@ -887,6 +1192,9 @@ static void serial_reset(void *opaque)
 
     serial_update_msl(s);
     s->msr &= ~UART_MSR_ANY_DELTA;
+    if (clock_has_source(s->uartclk)) {
+        serial_update_parameters(s);
+    }
 }
 
 static int serial_be_change(void *opaque)
@@ -921,15 +1229,23 @@ static void serial_realize(DeviceState *dev, Error **errp)
 {
     SerialState *s = SERIAL(dev);
 
+    if (s->fifo_size < 16 || s->fifo_size > 256 ||
+        !is_power_of_2(s->fifo_size)) {
+        error_setg(errp,
+                   "serial fifo-size must be a power of two from 16 to 256");
+        return;
+    }
+
     s->modem_status_poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, (QEMUTimerCB *) serial_update_msl, s);
 
     s->fifo_timeout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, (QEMUTimerCB *) fifo_timeout_int, s);
+    s->xmit_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, serial_xmit_timer, s);
     qemu_register_reset(serial_reset, s);
 
     qemu_chr_fe_set_handlers(&s->chr, serial_can_receive1, serial_receive1,
                              serial_event, serial_be_change, s, NULL, true);
-    fifo8_create(&s->recv_fifo, UART_FIFO_LENGTH);
-    fifo8_create(&s->xmit_fifo, UART_FIFO_LENGTH);
+    fifo8_create(&s->recv_fifo, s->fifo_size);
+    fifo8_create(&s->xmit_fifo, s->fifo_size);
 }
 
 static void serial_unrealize(DeviceState *dev)
@@ -941,6 +1257,7 @@ static void serial_unrealize(DeviceState *dev)
     timer_free(s->modem_status_poll);
 
     timer_free(s->fifo_timeout_timer);
+    timer_free(s->xmit_timer);
 
     fifo8_destroy(&s->recv_fifo);
     fifo8_destroy(&s->xmit_fifo);
@@ -964,6 +1281,7 @@ const MemoryRegionOps serial_io_ops = {
 static const Property serial_properties[] = {
     DEFINE_PROP_CHR("chardev", SerialState, chr),
     DEFINE_PROP_UINT32("baudbase", SerialState, baudbase, 115200),
+    DEFINE_PROP_UINT32("fifo-size", SerialState, fifo_size, UART_FIFO_LENGTH),
     DEFINE_PROP_BOOL("wakeup", SerialState, wakeup, false),
 };
 
@@ -978,11 +1296,20 @@ static void serial_class_init(ObjectClass *klass, const void *data)
     device_class_set_props(dc, serial_properties);
 }
 
+static void serial_instance_init(Object *obj)
+{
+    SerialState *s = SERIAL(obj);
+
+    s->uartclk = qdev_init_clock_in(DEVICE(obj), "uartclk", serial_clock_update,
+                                    s, ClockPreUpdate | ClockUpdate);
+}
+
 static const TypeInfo serial_info = {
     .name = TYPE_SERIAL,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(SerialState),
     .class_init = serial_class_init,
+    .instance_init = serial_instance_init,
 };
 
 static void serial_register_types(void)

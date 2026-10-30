@@ -1,0 +1,88 @@
+.. Copyright (c) 2026 Process Mission
+.. SPDX-License-Identifier: GPL-2.0-or-later
+
+Rockchip RK3566 Boards
+======================
+
+The ``microduck-beta`` machine models the MicroDuck beta board built
+around the Rockchip RK3566 SoC.  It contains four Cortex-A55 CPUs, a
+GICv3 interrupt controller and 1 GiB of RAM.
+
+The machine boots a Linux kernel and device tree passed with ``-kernel``
+and ``-dtb``.  The machine implementation does not model the BootROM, DDR
+training, SPL, TF-A, OP-TEE or U-Boot boot stages.  The raw eMMC image is
+attached as an SD card:
+
+.. code-block:: bash
+
+  $ qemu-system-aarch64 -M microduck-beta -m 1G \
+        -kernel Image -dtb rk3566-microduck-beta.dtb \
+        -drive if=sd,index=0,format=raw,file=microduck-beta.img \
+        -serial mon:stdio
+
+The first serial port is the Linux FIQ console and the second serial port
+connects to the Dynamixel control bus.  The optional ``bluetooth`` chardev
+serves the H4 Bluetooth transport on the third serial port.
+
+The ToF and camera inputs are provided by dedicated chardevs.  The
+``tof-data`` chardev receives 192-byte depth frames for the VL53L8CX
+sensor: 64 little-endian ``uint16`` millimetre values followed by 64
+target status bytes.  The ``camera`` chardev receives complete 640x360
+UYVY frames; the GC2093 sensor, CSI DPHY and ISP models convert them
+according to the guest format configuration and write them through the
+ISP IOMMU.
+
+.. list-table:: Modeled devices
+   :header-rows: 1
+   :widths: 24 20 56
+
+   * - Device
+     - Address
+     - Interface
+   * - GICv3
+     - ``0xfd400000``
+     - CPU interrupts, ITS and timers
+   * - eMMC
+     - ``0xfe310000``
+     - Boot partitions and root filesystem
+   * - UART1
+     - ``0xfe650000``
+     - H4 Bluetooth controller
+   * - UART2
+     - ``0xfe660000``
+     - FIQ console
+   * - UART3
+     - ``0xfe670000``
+     - Dynamixel control bus
+   * - I2C3
+     - ``0xfe5c0000``
+     - LSM6DSV16X head IMU
+   * - SPI1
+     - ``0xfe620000``
+     - ST25R100 NFC controller
+   * - SPI3
+     - ``0xfe640000``
+     - VL53L8CX ToF sensor
+   * - ISP
+     - ``0xfdff0000``
+     - Image capture and format conversion
+   * - RGA2
+     - ``0xfdeb0000``
+     - Image scaling and conversion
+   * - RKVENC
+     - ``0xfdf40000``
+     - H.264 encoding
+   * - RKNPU
+     - ``0xfde40000``
+     - Single-core command processor
+   * - virtio-mmio
+     - ``0xffe00000``
+     - Management network device
+
+The camera, RGA2 and VENC models use libswscale, libavutil, libavcodec
+and x264.  These devices are only built when the libraries are available
+at configure time.
+
+The models implement functional device behaviour and approximate timing.
+The GPU, display subsystem, video decoder and the wireless SDIO data path
+are not modeled.

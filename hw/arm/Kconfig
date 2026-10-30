@@ -239,6 +239,8 @@ config SBSA_REF
     select IDE_BUS
     select IDE_DEV
 
+source rk3566/Kconfig
+
 config RK3588
     bool
     select ARM_GIC
