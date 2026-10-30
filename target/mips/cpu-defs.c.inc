@@ -570,6 +570,40 @@ const mips_def_t mips_defs[] =
         .mmu_type = MMU_TYPE_R4000,
     },
     {
+        /*
+         * The Sony/Toshiba R5900, the Emotion Engine core of the
+         * PlayStation 2. The Toshiba TX System RISC TX79 Core Architecture
+         * manual (https://wiki.qemu.org/File:C790.pdf) describes the C790,
+         * a follow-up to the R5900. The R5900 FPU
+         *
+         * - is not IEEE 754-1985 compliant: no NaN, no infinities, no
+         *   denormals, and only rounding towards zero (FCR31 RM is
+         *   hardwired to 01),
+         * - does not implement double format, and
+         * - its machine code is nonstandard.
+         *
+         * Note: Config1 is only used internally, the R5900 has only Config0.
+         */
+        .name = "R5900",
+        .CP0_PRid = 0x00002E20,
+        /* No L2 cache, icache size 16k, dcache size 8k, uncached coherency. */
+        .CP0_Config0 = (0x2 << 9) | (0x1 << 6) | (0x2 << CP0C0_K0),
+        .CP0_Config1 = (1 << CP0C1_FP) | (47 << CP0C1_MMU),
+        .CP0_LLAddr_rw_bitmask = 0xFFFFFFFF,
+        .CP0_LLAddr_shift = 4,
+        .SYNCI_Step = 64,
+        /* Count increments at the CPU clock. */
+        .CCRes = 1,
+        .CP0_Status_rw_bitmask = 0xF4C79C1F,
+        .CP1_fcr0 = (0x2E << FCR0_PRID) | (0x30 << FCR0_REV),
+        .CP1_fcr31 = 0x1,
+        .CP1_fcr31_rw_bitmask = 0x0083FFFC,
+        .SEGBITS = 32,
+        .PABITS = 32,
+        .insn_flags = CPU_R5900 | ASE_MMI,
+        .mmu_type = MMU_TYPE_R4000,
+    },
+    {
         .name = "VR5432",
         .CP0_PRid = 0x00005400,
         /* No L2 cache, icache size 8k, dcache size 8k, uncached coherency. */

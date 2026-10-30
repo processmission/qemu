@@ -142,5 +142,7 @@ if config_all_devices.has_key('CONFIG_VIRTIO_VGA')
 endif
 
 system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_lcdc.c'))
+system_ss.add(when: 'CONFIG_PS2_GS', if_true: files('ps2_gs.c'))
+system_ss.add(when: 'CONFIG_PS2_VU1', if_true: files('ps2_vu1.c'))
 
 modules += { 'hw-display': hw_display_modules }

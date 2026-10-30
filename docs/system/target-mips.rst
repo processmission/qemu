@@ -15,6 +15,9 @@ machine types are emulated:
 -  A MIPS Magnum R4000 machine \"magnum\". This machine needs the
    64-bit emulator.
 
+-  A Sony PlayStation 2 \"ps2\". This machine needs the 64-bit little
+   endian emulator, ``qemu-system-mips64el``.
+
 The Malta emulation supports the following devices:
 
 -  Core board with MIPS 24Kf CPU and Galileo system controller
@@ -75,6 +78,59 @@ The Loongson-3 virtual platform emulation supports:
 -  LIOINTC as interrupt controller
 
 -  GPEX and virtio as peripheral devices
+
+Sony PlayStation 2 (``ps2``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``ps2`` machine models the PlayStation 2 as far as the Linux kernel
+for it needs, such as the one built by the meta-playstation2 layer
+(``linux-ps2``, ``ps2_defconfig``), with its OpenGL library and the
+games that draw through it.
+
+There is no BIOS.  QEMU builds a ROM with a ROM directory, a ROMVER
+file and empty IOP modules, whose reset code jumps to the ELF kernel
+given with ``-kernel``.  The I/O processor (IOP) does not run code
+either: the SIF answers the remote procedure calls that the kernel makes
+to the IOP modules, as PCSX2 does when it emulates the IOP BIOS.
+
+The PlayStation 2 emulation supports:
+
+-  Emotion Engine with an R5900 CPU and 32 MiB of RAM
+
+-  Interrupt and DMA controllers, timers and the serial port (``ttyS0``)
+
+-  Vector unit 1 and its interface VIF1, which load and run VU1
+   microprograms that pass their GIF packets to the GS (``XGKICK``)
+
+-  Graphics Synthesizer and GIF, with a graphic console showing the
+   frame buffer.  Drawing covers points, lines, triangles and sprites,
+   with textures, colour lookup tables, fog, alpha and depth tests and
+   alpha blending, and the transfers between host and local memory in
+   both directions.  There is no antialiasing, mipmapping or bilinear
+   filtering.
+
+-  CDVD S-commands for the real time clock and the console model
+
+-  SIF with the RPC servers of the IOP modules that Linux loads its own
+   IOP modules through
+
+-  USB OHCI host controller of the IOP, with two ports
+
+-  Expansion bay with the SPEED chip and an ATA hard disk, given with
+   ``-drive if=ide``
+
+The kernel must be a 32-bit little endian ELF file.  As there is no way to
+pass a command line or an initial RAM disk to it, build them into the
+kernel with ``CONFIG_CMDLINE`` and ``CONFIG_INITRAMFS_SOURCE``.  For both
+the frame buffer and the serial port as consoles, with the shell on the
+serial port, use ``console=tty0 console=ttyS0``.
+
+Example::
+
+   qemu-system-mips64el -M ps2 -kernel vmlinux -serial stdio \
+       -drive file=hdd.img,if=ide,format=raw \
+       -device usb-kbd -device usb-storage,drive=usbd \
+       -drive file=usb.img,if=none,id=usbd,format=raw
 
 .. include:: cpu-models-mips.rst.inc
 

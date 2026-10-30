@@ -157,3 +157,10 @@ config MAC_PVG_PCI
     bool
     depends on MAC_PVG && PCI
     default y if PCI_DEVICES
+
+config PS2_GS
+    bool
+
+config PS2_VU1
+    bool
+    depends on PS2_GS

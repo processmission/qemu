@@ -59,6 +59,7 @@
 #define CPU_MIPS3       (CPU_MIPS2 | ISA_MIPS3)
 #define CPU_MIPS4       (CPU_MIPS3 | ISA_MIPS4)
 #define CPU_MIPS5       (CPU_MIPS4 | ISA_MIPS5)
+#define CPU_R5900       (CPU_MIPS3 | INSN_R5900)
 
 #define CPU_MIPS64      (ISA_MIPS3)
 

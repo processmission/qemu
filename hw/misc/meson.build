@@ -221,6 +221,9 @@ system_ss.add(when: 'CONFIG_AX650X_DWMAC_GLUE',
 system_ss.add(when: 'CONFIG_AX650X_HWSPINLOCK',
               if_true: files('ax650x-hwspinlock.c'))
 
+system_ss.add(when: 'CONFIG_PS2_DEV9', if_true: files('ps2_dev9.c'))
+system_ss.add(when: 'CONFIG_PS2_SCMD', if_true: files('ps2_scmd.c'))
+system_ss.add(when: 'CONFIG_PS2_SIF', if_true: files('ps2_sif.c'))
 system_ss.add(when: 'CONFIG_RK3588', if_true: files(
   'rockchip_cru.c',
   'rockchip_otp.c'))

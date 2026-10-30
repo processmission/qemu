@@ -412,3 +412,12 @@ config AX650X_DWMAC_GLUE
 
 config AX650X_HWSPINLOCK
     bool
+
+config PS2_SCMD
+    bool
+
+config PS2_DEV9
+    bool
+
+config PS2_SIF
+    bool

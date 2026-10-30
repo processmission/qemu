@@ -171,6 +171,9 @@ static inline bool cpu_mips_hw_interrupts_enabled(CPUMIPSState *env)
         !(env->CP0_Status & (1 << CP0St_EXL)) &&
         !(env->CP0_Status & (1 << CP0St_ERL)) &&
         !(env->hflags & MIPS_HFLAG_DM) &&
+        /* The R5900 has an extra master interrupt enable, Status.EIE. */
+        (!(env->insn_flags & INSN_R5900) ||
+         (env->CP0_Status & (1 << CP0St_R5900_EIE))) &&
         /*
          * Note that the TCStatus IXMT field is initialized to zero,
          * and only MT capable cores can set it to one. So we don't
@@ -322,7 +325,9 @@ static inline void compute_hflags(CPUMIPSState *env)
     if ((env->insn_flags & ISA_MIPS3) &&
         (((env->hflags & MIPS_HFLAG_KSU) != MIPS_HFLAG_UM) ||
          (env->CP0_Status & (1 << CP0St_PX)) ||
-         (env->CP0_Status & (1 << CP0St_UX)))) {
+         (env->CP0_Status & (1 << CP0St_UX)) ||
+         /* The R5900 has 64-bit operations in all modes. */
+         (env->insn_flags & INSN_R5900))) {
         env->hflags |= MIPS_HFLAG_64;
     }
 

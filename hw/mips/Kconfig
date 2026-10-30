@@ -47,6 +47,23 @@ config FULOONG
     select SMBUS_EEPROM
     select VT82C686
 
+config PLAYSTATION2
+    bool
+    default y
+    depends on MIPS64 && !TARGET_BIG_ENDIAN
+    select IDE_MMIO
+    select PS2_DEV9
+    select PS2_DMAC
+    select PS2_GS
+    select PS2_VU1
+    select PS2_INTC
+    select PS2_SCMD
+    select PS2_SIF
+    select PS2_SIO
+    select PS2_TIMER
+    select UNIMP
+    select USB_OHCI_SYSBUS
+
 config LOONGSON3V
     bool
     default y

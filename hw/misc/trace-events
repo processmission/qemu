@@ -575,3 +575,20 @@ rockchip_iommu_dte_addr(uint32_t core, uint32_t bank, uint64_t dte_addr) "core=%
 rockchip_iommu_command(uint32_t core, uint32_t bank, uint64_t command) "core=%u bank=%u command=%" PRIu64
 rockchip_iommu_zap_one_line(uint32_t core, uint32_t bank, uint64_t iova) "core=%u bank=%u iova=0x%08" PRIx64
 rockchip_iommu_int_mask(uint32_t core, uint32_t bank, uint64_t mask, uint32_t status) "core=%u bank=%u mask=0x%08" PRIx64 " status=0x%08x"
+
+# ps2_dev9.c
+ps2_dev9_read(uint64_t addr, uint16_t value) "addr 0x%02" PRIx64 " value 0x%04x"
+ps2_dev9_write(uint64_t addr, uint64_t value) "addr 0x%02" PRIx64 " value 0x%04" PRIx64
+ps2_speed_read(uint64_t addr, uint16_t value) "addr 0x%02" PRIx64 " value 0x%04x"
+ps2_speed_write(uint64_t addr, uint64_t value) "addr 0x%02" PRIx64 " value 0x%04" PRIx64
+
+# ps2_sif.c
+ps2_sif_command(uint32_t cmd, uint32_t opt, uint32_t len) "cmd 0x%08" PRIx32 " opt 0x%" PRIx32 " payload %" PRIu32
+ps2_sif_send(uint32_t cmd, uint32_t opt, uint32_t len) "cmd 0x%08" PRIx32 " opt 0x%" PRIx32 " payload %" PRIu32
+ps2_sif_rpc_bind(uint32_t sid, uint32_t server) "sid 0x%08" PRIx32 " server 0x%" PRIx32
+ps2_sif_rpc_call(uint32_t sid, uint32_t rpc_id, uint32_t send_size, uint32_t recv_size) "sid 0x%08" PRIx32 " rpc %" PRIu32 " send %" PRIu32 " recv %" PRIu32
+ps2_sif_heap_alloc(uint32_t size, uint32_t addr) "size 0x%" PRIx32 " addr 0x%" PRIx32
+ps2_sif_heap_free(uint32_t addr) "addr 0x%" PRIx32
+ps2_sif_link_module(const char *name) "%s"
+ps2_sif_iop_access(bool write, uint32_t addr, unsigned size, uint32_t value) "write %d addr 0x%08" PRIx32 " size %u value 0x%" PRIx32
+ps2_sif_irq_relay(uint32_t rpc_id, unsigned iop, unsigned map) "rpc %" PRIu32 " iop irq %u map %u"

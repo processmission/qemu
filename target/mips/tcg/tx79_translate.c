@@ -273,7 +273,7 @@ static bool trans_parallel_compare(DisasContext *ctx, arg_r *a,
 /* Parallel Compare for Greater Than Byte */
 static bool trans_PCGTB(DisasContext *ctx, arg_r *a)
 {
-    return trans_parallel_compare(ctx, a, TCG_COND_GE, 8);
+    return trans_parallel_compare(ctx, a, TCG_COND_LT, 8);
 }
 
 /* Parallel Compare for Equal Byte */
@@ -285,7 +285,7 @@ static bool trans_PCEQB(DisasContext *ctx, arg_r *a)
 /* Parallel Compare for Greater Than Halfword */
 static bool trans_PCGTH(DisasContext *ctx, arg_r *a)
 {
-    return trans_parallel_compare(ctx, a, TCG_COND_GE, 16);
+    return trans_parallel_compare(ctx, a, TCG_COND_LT, 16);
 }
 
 /* Parallel Compare for Equal Halfword */
@@ -297,7 +297,7 @@ static bool trans_PCEQH(DisasContext *ctx, arg_r *a)
 /* Parallel Compare for Greater Than Word */
 static bool trans_PCGTW(DisasContext *ctx, arg_r *a)
 {
-    return trans_parallel_compare(ctx, a, TCG_COND_GE, 32);
+    return trans_parallel_compare(ctx, a, TCG_COND_LT, 32);
 }
 
 /* Parallel Compare for Equal Word */
@@ -638,5 +638,55 @@ static bool trans_PROT3W(DisasContext *ctx, arg_r *a)
 
     tcg_gen_deposit_i64(cpu_gpr[a->rd], cpu_gpr[a->rt], ax, 0, 32);
     tcg_gen_rotri_i64(cpu_gpr[a->rd], cpu_gpr[a->rd], 32);
+    return true;
+}
+
+/*
+ * The SA register holds a byte count, 0 to 15, as PCSX2 models it. MTSAB
+ * and MTSAH compute a byte and a halfword count, QFSRV uses it in bits.
+ */
+static void gen_store_sa(TCGv_i64 t)
+{
+    tcg_gen_andi_i64(t, t, 0xf);
+    tcg_gen_st_i64(t, tcg_env, offsetof(CPUMIPSState, active_tc.sa));
+}
+
+static bool trans_MFSA(DisasContext *ctx, arg_r *a)
+{
+    if (a->rd != 0) {
+        tcg_gen_ld_i64(cpu_gpr[a->rd], tcg_env,
+                       offsetof(CPUMIPSState, active_tc.sa));
+    }
+    return true;
+}
+
+static bool trans_MTSA(DisasContext *ctx, arg_r *a)
+{
+    TCGv_i64 t0 = tcg_temp_new_i64();
+
+    gen_load_gpr(t0, a->rs);
+    gen_store_sa(t0);
+    return true;
+}
+
+static bool trans_MTSAB(DisasContext *ctx, arg_MTSAB *a)
+{
+    TCGv_i64 t0 = tcg_temp_new_i64();
+
+    gen_load_gpr(t0, a->rs);
+    tcg_gen_xori_i64(t0, t0, a->imm & 0xf);
+    gen_store_sa(t0);
+    return true;
+}
+
+static bool trans_MTSAH(DisasContext *ctx, arg_MTSAH *a)
+{
+    TCGv_i64 t0 = tcg_temp_new_i64();
+
+    gen_load_gpr(t0, a->rs);
+    tcg_gen_xori_i64(t0, t0, a->imm & 0x7);
+    tcg_gen_andi_i64(t0, t0, 0x7);
+    tcg_gen_shli_i64(t0, t0, 1);
+    gen_store_sa(t0);
     return true;
 }

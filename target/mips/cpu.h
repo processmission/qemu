@@ -67,6 +67,8 @@ struct CPUMIPSFPUContext {
     /* fcsr */
     uint32_t fcr31_rw_bitmask;
     uint32_t fcr31;
+    /* R5900 FPU accumulator, for ADDA/MULA/MADD and their kind */
+    uint32_t r5900_acc;
 #define FCR31_FS 24
 #define FCR31_ABS2008 19
 #define FCR31_NAN2008 18
@@ -476,6 +478,8 @@ struct TCState {
      * and the upper halves in gpr_hi[].
      */
     uint64_t gpr_hi[32];
+    /* R5900 shift amount register, for the QFSRV funnel shift. */
+    uint64_t sa;
 #endif /* TARGET_MIPS64 */
     target_ulong PC;
     target_ulong HI[MIPS_DSP_ACC];
@@ -818,6 +822,7 @@ typedef struct CPUArchState {
 #define CP0St_TS    21
 #define CP0St_SR    20
 #define CP0St_NMI   19
+#define CP0St_R5900_EIE 16
 #define CP0St_IM    8
 #define CP0St_KX    7
 #define CP0St_SX    6

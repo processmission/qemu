@@ -372,6 +372,27 @@ static const VMStateDescription mips_vmstate_octeon_crypto = {
     }
 };
 
+#if defined(TARGET_MIPS64)
+static bool mips_r5900_needed(void *opaque)
+{
+    MIPSCPU *cpu = opaque;
+
+    return cpu->env.insn_flags & INSN_R5900;
+}
+
+static const VMStateDescription mips_vmstate_r5900 = {
+    .name = "cpu/r5900",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = mips_r5900_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(env.active_tc.sa, MIPSCPU),
+        VMSTATE_UINT32(env.active_fpu.r5900_acc, MIPSCPU),
+        VMSTATE_END_OF_LIST()
+    }
+};
+#endif /* TARGET_MIPS64 */
+
 const VMStateDescription vmstate_mips_cpu = {
     .name = "cpu",
     .version_id = 21,
@@ -490,6 +511,9 @@ const VMStateDescription vmstate_mips_cpu = {
         &mips_vmstate_timer,
         &mips_vmstate_octeon_multiplier,
         &mips_vmstate_octeon_crypto,
+#if defined(TARGET_MIPS64)
+        &mips_vmstate_r5900,
+#endif
         NULL
     }
 };

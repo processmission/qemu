@@ -76,3 +76,6 @@ config STC8G_PCA
 
 config AVR_TIMER16
     bool
+
+config PS2_TIMER
+    bool

@@ -1697,6 +1697,21 @@ F: hw/mips/boston.c
 F: hw/pci-host/xilinx-pcie.c
 F: include/hw/pci-host/xilinx-pcie.h
 
+PlayStation 2
+M: yangweipeng <yangweipeng@kimkyli.com>
+S: Maintained
+F: hw/mips/ps2.c
+F: hw/char/ps2_sio.c
+F: hw/display/ps2_gs.c
+F: hw/display/ps2_vu1.c
+F: hw/dma/ps2_dmac.c
+F: hw/intc/ps2_intc.c
+F: hw/misc/ps2_dev9.c
+F: hw/misc/ps2_scmd.c
+F: hw/misc/ps2_sif.c
+F: hw/timer/ps2_timer.c
+F: include/hw/*/ps2_*.h
+
 OpenRISC Machines
 -----------------
 or1k-sim
