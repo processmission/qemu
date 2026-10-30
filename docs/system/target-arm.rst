@@ -102,6 +102,7 @@ Board-specific documentation
    arm/phytium_e2000
    arm/phytium_pomelo
    arm/raspi
+   arm/rk3566
    arm/rk3588
    arm/collie
    arm/sx1
