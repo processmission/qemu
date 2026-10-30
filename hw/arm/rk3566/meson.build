@@ -19,4 +19,19 @@ rk3566_ss.add(files(
   'vl53l8cx.c',
 ))
 
+# The camera, RGA2 and VENC models convert image formats with libswscale and
+# libavutil, decode H.264 frames with libavcodec and encode them with x264.
+# Keep the machine buildable when the optional libraries are not available.
+rk3566_libavcodec = dependency('libavcodec', required: false)
+rk3566_libavutil = dependency('libavutil', required: false)
+rk3566_libswscale = dependency('libswscale', required: false)
+rk3566_x264 = dependency('x264', required: false)
+
+if (rk3566_libavcodec.found() and rk3566_libavutil.found() and
+    rk3566_libswscale.found() and rk3566_x264.found())
+  rk3566_ss.add(files(
+    'rk3566-media-rga.c',
+  ), rk3566_libavcodec, rk3566_libavutil, rk3566_libswscale, rk3566_x264)
+endif
+
 arm_common_ss.add_all(when: 'CONFIG_RK3566', if_true: rk3566_ss)
