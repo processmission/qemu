@@ -166,8 +166,10 @@ static bool isp_capture_path(RK3566ISPState *s, bool selfpath)
     int output_stride[4] = {};
     struct SwsContext *scaler = NULL;
     unsigned width, height;
+    unsigned source_width = s->width, source_height = s->height;
+    unsigned source_x = 0, source_y = 0;
     unsigned base = selfpath ? 0x143c : 0x1408;
-    unsigned sizes[3], addresses[3];
+    unsigned sizes[3] = {}, addresses[3];
     unsigned offset[] = {0, 0x14, 0x24};
     unsigned guest_stride;
     bool result = false;
@@ -184,10 +186,22 @@ static bool isp_capture_path(RK3566ISPState *s, bool selfpath)
         unsigned input_width = s->active[(crop ? 0x88c : ISP_H_SIZE) / 4];
         unsigned input_height = s->active[(crop ? 0x890 : ISP_V_SIZE) / 4];
         uint32_t resize = s->active[0xc00 / 4];
+        if (crop) {
+            source_x = s->active[0x884 / 4];
+            source_y = s->active[0x888 / 4];
+            source_width = input_width;
+            source_height = input_height;
+        }
         width = isp_scaled_size(input_width, s->active[0xc04 / 4],
                                  resize & BIT(0), resize & BIT(4));
         height = isp_scaled_size(input_height, s->active[0xc10 / 4],
                                   resize & BIT(2), resize & BIT(6));
+        if (crop && ((source_x & 1) || !input_width || !input_height ||
+                     (uint64_t)source_x + input_width > s->width ||
+                     (uint64_t)source_y + input_height > s->height)) {
+            failure = "crop window";
+            goto out;
+        }
     }
     if (!width || !height || width > 8192 || height > 8192) {
         return false;
@@ -201,16 +215,17 @@ static bool isp_capture_path(RK3566ISPState *s, bool selfpath)
         av_image_alloc(output, output_stride, width, height, format, 16) < 0) {
         goto out;
     }
-    scaler = sws_getContext(s->width, s->height, AV_PIX_FMT_UYVY422,
+    scaler = sws_getContext(source_width, source_height, AV_PIX_FMT_UYVY422,
                             width, height, format, SWS_BILINEAR,
                             NULL, NULL, NULL);
     if (!scaler) {
         failure = "scaler configuration";
         goto out;
     }
-    const uint8_t *input[] = { s->frame, NULL, NULL, NULL };
+    size_t input_offset = ((size_t)source_y * s->width + source_x) * 2;
+    const uint8_t *input[] = { s->frame + input_offset, NULL, NULL, NULL };
     int input_stride[] = { s->width * 2, 0, 0, 0 };
-    if (sws_scale(scaler, input, input_stride, 0, s->height,
+    if (sws_scale(scaler, input, input_stride, 0, source_height,
                    output, output_stride) != height) {
         failure = "image conversion";
         goto out;
