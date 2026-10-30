@@ -14,6 +14,13 @@
 
 #define RK3566_TEST_RAM_SIZE (512 * MiB)
 
+/* ISP IOMMU window and registers from the microduck-beta board map. */
+#define RK3566_ISP_IOMMU_BASE 0xfdff1a00ULL
+#define RK3566_IOMMU_DTE_ADDR 0x00
+#define RK3566_IOMMU_STATUS 0x04
+#define RK3566_IOMMU_AUTO_GATING 0x24
+#define RK3566_IOMMU_STATUS_RESET 0x80000018U
+
 static void test_rk3566_machine_creation(void)
 {
     QTestState *qts = rk3566_qtest_start();
@@ -141,6 +148,62 @@ static void test_rk3566_media_devices(void)
     qtest_quit(qts);
 }
 
+static void test_rk3566_iommu_access_width(void)
+{
+    QTestState *qts = rk3566_qtest_start();
+    uint64_t base = RK3566_ISP_IOMMU_BASE;
+    uint32_t status;
+
+    if (!rk3566_qtest_media_present(qts)) {
+        g_test_skip("RK3566 media devices are not built "
+                    "(libavcodec, libavutil, libswscale or x264 missing)");
+        qtest_quit(qts);
+        return;
+    }
+
+    status = qtest_readl(qts, base + RK3566_IOMMU_STATUS);
+    g_assert_cmphex(status, ==, RK3566_IOMMU_STATUS_RESET);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_AUTO_GATING), ==, 1);
+
+    /*
+     * The register ops declare a 4 byte implementation and a valid range of
+     * 1 to 8 bytes, so narrower reads are extracted from a 32 bit access.
+     */
+    g_assert_cmphex(qtest_readb(qts, base + RK3566_IOMMU_STATUS), ==,
+                    status & 0xff);
+    g_assert_cmphex(qtest_readw(qts, base + RK3566_IOMMU_STATUS), ==,
+                    status & 0xffff);
+
+    /* An 8 byte read combines two adjacent 32 bit registers. */
+    g_assert_cmphex(qtest_readq(qts, base + RK3566_IOMMU_DTE_ADDR), ==,
+                    (uint64_t)status << 32);
+
+    /* Sub-word writes are widened to a full 32 bit register access. */
+    qtest_writeb(qts, base + RK3566_IOMMU_AUTO_GATING, 0);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_AUTO_GATING), ==, 0);
+    qtest_writew(qts, base + RK3566_IOMMU_AUTO_GATING, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_AUTO_GATING), ==, 1);
+
+    /*
+     * Unaligned accesses are accepted by the .valid description; the 4 byte
+     * implementation forwards the unaligned address to the register file,
+     * which reports it as an unimplemented register and leaves the state
+     * untouched.
+     */
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_STATUS + 2), ==, 0);
+    g_assert_cmphex(qtest_readw(qts, base + RK3566_IOMMU_STATUS + 1), ==, 0);
+    qtest_writel(qts, base + RK3566_IOMMU_STATUS + 2, 0xffffffff);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_STATUS), ==, status);
+
+    /* An 8 byte write is split into two 32 bit register writes. */
+    qtest_writeq(qts, base + RK3566_IOMMU_DTE_ADDR, 0x1122334455667788ULL);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_DTE_ADDR), ==,
+                    0x55667788);
+    g_assert_cmphex(qtest_readl(qts, base + RK3566_IOMMU_STATUS), ==, status);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -156,6 +219,8 @@ int main(int argc, char **argv)
                    test_rk3566_mmio_reset_values);
     qtest_add_func("/rk3566/media-devices",
                    test_rk3566_media_devices);
+    qtest_add_func("/rk3566/iommu-access-width",
+                   test_rk3566_iommu_access_width);
 
     return g_test_run();
 }

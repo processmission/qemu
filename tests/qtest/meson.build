@@ -315,7 +315,8 @@ qtests_aarch64 = \
                                                  'rk3566-saradc-test',
                                                  'rk3566-serial-test',
                                                  'rk3566-timer-test',
-                                                 'rk3566-tsadc-test'] : []) + \
+                                                 'rk3566-tsadc-test',
+                                                 'rockchip-spi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK_5B_PLUS') ? ['rock5b-plus-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \
   qtests_cxl +                                                                                  \
