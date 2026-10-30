@@ -12,6 +12,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 
@@ -37,11 +38,13 @@ enum {
 
 #define FIFO_WORDS 128
 #define PCM_BYTES 16384
+#define RK3566_AUDIO_NR_REGS (0x100 / 4)
 #define R(s, address) ((s)->regs[(address) / 4])
 
 struct RK3566AudioState {
     SysBusDevice parent_obj;
-    MemoryRegion mmio;
+    RegisterInfoArray *reg_array;
+    RegisterInfo regs_info[RK3566_AUDIO_NR_REGS];
     qemu_irq irq;
     qemu_irq dma_busy[2];
     qemu_irq lrck;
@@ -64,6 +67,7 @@ struct RK3566AudioState {
     bool pdm;
     bool capture;
     bool lrck_level;
+    bool in_reset;
 };
 
 static unsigned audio_channels(RK3566AudioState *s, bool receive)
@@ -259,14 +263,35 @@ static void audio_tick(void *opaque)
     }
 }
 
+static RK3566AudioState *audio_state_from_array(RegisterInfoArray *reg_array)
+{
+    return RK3566_AUDIO(register_array_get_owner(reg_array));
+}
+
+static RegisterInfo *audio_find_register(RegisterInfoArray *reg_array,
+                                         hwaddr address)
+{
+    for (unsigned i = 0; i < reg_array->num_elements; i++) {
+        RegisterInfo *reg = reg_array->r[i];
+
+        if (reg->access->addr == address) {
+            return reg;
+        }
+    }
+    return NULL;
+}
+
 static uint64_t audio_read(void *opaque, hwaddr address, unsigned size)
 {
-    RK3566AudioState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566AudioState *s = audio_state_from_array(reg_array);
+
     if (address >= sizeof(s->regs)) {
         return 0;
     }
     if (address == (s->pdm ? PDM_RXFIFO_DATA : I2S_RXDR)) {
         uint32_t value = 0;
+
         if (s->rx_count) {
             value = s->rx[s->rx_head++ % FIFO_WORDS];
             s->rx_count--;
@@ -274,18 +299,8 @@ static uint64_t audio_read(void *opaque, hwaddr address, unsigned size)
         audio_update(s);
         return value;
     }
-    if (s->pdm && address == PDM_FIFO_CTRL) {
-        return s->rx_count;
-    }
-    if (!s->pdm && (address == I2S_TXFIFOLR || address == I2S_RXFIFOLR)) {
-        bool receive = address == I2S_RXFIFOLR;
-        unsigned count = receive ? s->rx_count : s->tx_count;
-        unsigned lanes = audio_channels(s, receive) / 2;
-        uint32_t value = 0;
-        for (unsigned lane = 0; lane < lanes; lane++) {
-            value |= MIN((count + lanes - 1 - lane) / lanes, 32) << (6 * lane);
-        }
-        return value;
+    if (audio_find_register(reg_array, address)) {
+        return register_read_memory(reg_array, address, size);
     }
     return R(s, address);
 }
@@ -293,67 +308,185 @@ static uint64_t audio_read(void *opaque, hwaddr address, unsigned size)
 static void audio_write(void *opaque, hwaddr address, uint64_t value,
                         unsigned size)
 {
-    RK3566AudioState *s = opaque;
+    RegisterInfoArray *reg_array = opaque;
+    RK3566AudioState *s = audio_state_from_array(reg_array);
+
     if (address >= sizeof(s->regs)) {
         qemu_log_mask(LOG_UNIMP, "%s: register 0x%" HWADDR_PRIx "\n",
                       object_get_typename(OBJECT(s)), address);
         return;
     }
-    if (s->pdm) {
-        if (address == PDM_SYSCONFIG && (value & 1)) {
-            s->rx_head = s->rx_count = 0;
-            value &= ~1;
-        } else if (address == PDM_INT_CLR) {
-            R(s, PDM_INT_ST) &= ~value;
-            value = 0;
-        } else if (address == PDM_INT_ST || address == PDM_RXFIFO_DATA ||
-                   address == PDM_FIFO_CTRL) {
-            return;
+    if (!s->pdm && address == I2S_TXDR) {
+        if (s->tx_count < 32 * audio_channels(s, false) / 2) {
+            s->tx[(s->tx_head + s->tx_count++) % FIFO_WORDS] = value;
         }
-    } else {
-        if (address == I2S_TXDR) {
-            if (s->tx_count < 32 * audio_channels(s, false) / 2) {
-                s->tx[(s->tx_head + s->tx_count++) % FIFO_WORDS] = value;
-            }
-            audio_update(s);
-            return;
-        }
-        if (address == I2S_CLR) {
-            if (value & 1) {
-                s->tx_head = s->tx_count = 0;
-            }
-            if (value & 2) {
-                s->rx_head = s->rx_count = 0;
-            }
-            value = 0;
-        } else if (address == I2S_INTCR) {
-            if (value & BIT(2)) {
-                R(s, I2S_INTSR) &= ~BIT(1);
-            }
-            if (value & BIT(18)) {
-                R(s, I2S_INTSR) &= ~BIT(17);
-            }
-            value &= ~(BIT(2) | BIT(18));
-        } else if (address == I2S_INTSR || address == I2S_TXFIFOLR ||
-                   address == I2S_RXFIFOLR || address == I2S_RXDR) {
-            return;
-        }
+        audio_update(s);
+        return;
+    }
+    if (address == (s->pdm ? PDM_RXFIFO_DATA : I2S_RXDR)) {
+        return;
+    }
+    if (audio_find_register(reg_array, address)) {
+        register_write_memory(reg_array, address, value, size);
+        return;
     }
     R(s, address) = value;
-    if ((s->pdm && address <= PDM_CLK_CTRL) ||
-        (!s->pdm && (address == I2S_TXCR || address == I2S_RXCR ||
-                     address == I2S_CKR || address == I2S_XFER ||
-                     address == I2S_CLKDIV))) {
-        audio_configure(s);
-    } else {
-        audio_update(s);
-    }
+    audio_update(s);
 }
 
 static const MemoryRegionOps audio_ops = {
     .read = audio_read, .write = audio_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid.min_access_size = 4, .valid.max_access_size = 4,
+};
+
+static uint32_t audio_fifo_level(RK3566AudioState *s, bool receive)
+{
+    unsigned count = receive ? s->rx_count : s->tx_count;
+    unsigned lanes = audio_channels(s, receive) / 2;
+    uint32_t value = 0;
+
+    for (unsigned lane = 0; lane < lanes; lane++) {
+        value |= MIN((count + lanes - 1 - lane) / lanes, 32) << (6 * lane);
+    }
+    return value;
+}
+
+static uint64_t audio_tx_level_post_read(RegisterInfo *reg, uint64_t val)
+{
+    return audio_fifo_level(RK3566_AUDIO(reg->opaque), false);
+}
+
+static uint64_t audio_rx_level_post_read(RegisterInfo *reg, uint64_t val)
+{
+    return audio_fifo_level(RK3566_AUDIO(reg->opaque), true);
+}
+
+static uint64_t audio_pdm_fifo_post_read(RegisterInfo *reg, uint64_t val)
+{
+    return RK3566_AUDIO(reg->opaque)->rx_count;
+}
+
+static uint64_t audio_intcr_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566AudioState *s = RK3566_AUDIO(reg->opaque);
+
+    if (val & BIT(2)) {
+        R(s, I2S_INTSR) &= ~BIT(1);
+    }
+    if (val & BIT(18)) {
+        R(s, I2S_INTSR) &= ~BIT(17);
+    }
+    return val & ~(BIT(2) | BIT(18));
+}
+
+static uint64_t audio_clr_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566AudioState *s = RK3566_AUDIO(reg->opaque);
+
+    if (val & 1) {
+        s->tx_head = s->tx_count = 0;
+    }
+    if (val & 2) {
+        s->rx_head = s->rx_count = 0;
+    }
+    return 0;
+}
+
+static uint64_t audio_sysconfig_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566AudioState *s = RK3566_AUDIO(reg->opaque);
+
+    if (val & 1) {
+        s->rx_head = s->rx_count = 0;
+        val &= ~1;
+    }
+    return val;
+}
+
+static uint64_t audio_int_clr_pre_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566AudioState *s = RK3566_AUDIO(reg->opaque);
+
+    R(s, PDM_INT_ST) &= ~val;
+    return 0;
+}
+
+static bool audio_write_configures(RK3566AudioState *s, hwaddr address)
+{
+    if (s->pdm) {
+        return address <= PDM_CLK_CTRL;
+    }
+    return address == I2S_TXCR || address == I2S_RXCR ||
+           address == I2S_CKR || address == I2S_XFER ||
+           address == I2S_CLKDIV;
+}
+
+static void audio_control_post_write(RegisterInfo *reg, uint64_t val)
+{
+    RK3566AudioState *s = RK3566_AUDIO(reg->opaque);
+
+    if (s->in_reset) {
+        return;
+    }
+    if (audio_write_configures(s, reg->access->addr)) {
+        audio_configure(s);
+    } else {
+        audio_update(s);
+    }
+}
+
+static const RegisterAccessInfo i2s_regs_info[] = {
+    { .name = "TXCR", .addr = I2S_TXCR, .reset = 0x7200000f,
+      .post_write = audio_control_post_write },
+    { .name = "RXCR", .addr = I2S_RXCR, .reset = 0x01c8000f,
+      .post_write = audio_control_post_write },
+    { .name = "CKR", .addr = I2S_CKR, .reset = 0x1f1f,
+      .post_write = audio_control_post_write },
+    { .name = "TXFIFOLR", .addr = I2S_TXFIFOLR, .ro = UINT32_MAX,
+      .post_read = audio_tx_level_post_read },
+    { .name = "DMACR", .addr = I2S_DMACR, .reset = 0x001f0000,
+      .post_write = audio_control_post_write },
+    { .name = "INTCR", .addr = I2S_INTCR, .reset = 0x01f00000,
+      .pre_write = audio_intcr_pre_write,
+      .post_write = audio_control_post_write },
+    { .name = "INTSR", .addr = I2S_INTSR, .ro = UINT32_MAX },
+    { .name = "XFER", .addr = I2S_XFER,
+      .post_write = audio_control_post_write },
+    { .name = "CLR", .addr = I2S_CLR, .pre_write = audio_clr_pre_write,
+      .post_write = audio_control_post_write },
+    { .name = "RXFIFOLR", .addr = I2S_RXFIFOLR, .ro = UINT32_MAX,
+      .post_read = audio_rx_level_post_read },
+    { .name = "TDM_TXCR", .addr = I2S_TDM_TXCR, .reset = 0x3eff,
+      .post_write = audio_control_post_write },
+    { .name = "TDM_RXCR", .addr = I2S_TDM_RXCR, .reset = 0x3eff,
+      .post_write = audio_control_post_write },
+    { .name = "CLKDIV", .addr = I2S_CLKDIV, .reset = 0x0707,
+      .post_write = audio_control_post_write },
+};
+
+static const RegisterAccessInfo pdm_regs_info[] = {
+    { .name = "SYSCONFIG", .addr = PDM_SYSCONFIG,
+      .pre_write = audio_sysconfig_pre_write,
+      .post_write = audio_control_post_write },
+    { .name = "CTRL0", .addr = PDM_CTRL0, .reset = 0x78000017,
+      .post_write = audio_control_post_write },
+    { .name = "CTRL1", .addr = PDM_CTRL1, .reset = 0x0bb8ea60,
+      .post_write = audio_control_post_write },
+    { .name = "CLK_CTRL", .addr = PDM_CLK_CTRL, .reset = 0x0000e401,
+      .post_write = audio_control_post_write },
+    { .name = "HPF_CTRL", .addr = PDM_HPF_CTRL,
+      .post_write = audio_control_post_write },
+    { .name = "FIFO_CTRL", .addr = PDM_FIFO_CTRL, .ro = UINT32_MAX,
+      .post_read = audio_pdm_fifo_post_read },
+    { .name = "DMA_CTRL", .addr = PDM_DMA_CTRL, .reset = 0x1f,
+      .post_write = audio_control_post_write },
+    { .name = "INT_EN", .addr = PDM_INT_EN,
+      .post_write = audio_control_post_write },
+    { .name = "INT_CLR", .addr = PDM_INT_CLR,
+      .pre_write = audio_int_clr_pre_write,
+      .post_write = audio_control_post_write },
+    { .name = "INT_ST", .addr = PDM_INT_ST, .ro = UINT32_MAX },
 };
 
 static void audio_clock_update(void *opaque, ClockEvent event)
@@ -367,27 +500,19 @@ static void audio_clock_update(void *opaque, ClockEvent event)
 static void audio_reset(DeviceState *device)
 {
     RK3566AudioState *s = RK3566_AUDIO(device);
+
     memset(s->regs, 0, sizeof(s->regs));
+    s->in_reset = true;
+    for (unsigned i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        register_reset(&s->regs_info[i]);
+    }
+    s->in_reset = false;
     s->tx_head = s->tx_count = s->rx_head = s->rx_count = 0;
     s->input_count = s->output_count = 0;
     s->tx_partial_bytes = s->rx_partial_bytes = 0;
     s->transmitted_words = s->received_words = 0;
     s->lrck_level = false;
     qemu_set_irq(s->lrck, 0);
-    if (s->pdm) {
-        R(s, PDM_CTRL0) = 0x78000017;
-        R(s, PDM_CTRL1) = 0x0bb8ea60;
-        R(s, PDM_CLK_CTRL) = 0x0000e401;
-        R(s, PDM_DMA_CTRL) = 0x1f;
-    } else {
-        R(s, I2S_TXCR) = 0x7200000f;
-        R(s, I2S_RXCR) = 0x01c8000f;
-        R(s, I2S_CKR) = 0x1f1f;
-        R(s, I2S_DMACR) = 0x001f0000;
-        R(s, I2S_INTCR) = 0x01f00000;
-        R(s, I2S_TDM_TXCR) = R(s, I2S_TDM_RXCR) = 0x3eff;
-        R(s, I2S_CLKDIV) = 0x0707;
-    }
     audio_configure(s);
 }
 
@@ -397,9 +522,6 @@ static void audio_realize(DeviceState *device, Error **errp)
     if (!clock_has_source(s->mclk)) {
         clock_set_hz(s->mclk, s->mclk_hz);
     }
-    memory_region_init_io(&s->mmio, OBJECT(s), &audio_ops, s,
-                          object_get_typename(OBJECT(s)), 0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
     sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
     qdev_init_gpio_out_named(device, s->dma_busy, "dma-busy", 2);
     qdev_init_gpio_out_named(device, &s->lrck, "lrck", 1);
@@ -409,7 +531,21 @@ static void audio_realize(DeviceState *device, Error **errp)
 static void audio_init(Object *object)
 {
     RK3566AudioState *s = RK3566_AUDIO(object);
+    const RegisterAccessInfo *access;
+    unsigned num_access;
+
     s->pdm = object_dynamic_cast(object, TYPE_RK3566_PDM) != NULL;
+    if (s->pdm) {
+        access = pdm_regs_info;
+        num_access = ARRAY_SIZE(pdm_regs_info);
+    } else {
+        access = i2s_regs_info;
+        num_access = ARRAY_SIZE(i2s_regs_info);
+    }
+    s->reg_array = register_init_block32(DEVICE(object), access, num_access,
+                                         s->regs_info, s->regs, &audio_ops,
+                                         false, 0x1000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->reg_array->mem);
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, audio_tick, s);
     s->mclk = qdev_init_clock_in(DEVICE(s), "mclk", audio_clock_update,
                                 s, ClockUpdate);
