@@ -11,17 +11,17 @@
 OBJECT_DECLARE_SIMPLE_TYPE(RK3566OTPState, RK3566_OTP)
 
 enum {
-    OTP_REG_CMD,
-    OTP_REG_FUSE_DATA,
-    OTP_REG_STATUS,
-    OTP_REG_MAX,
+    OTP_REG_CMD = 0x20,
+    OTP_REG_FUSE_DATA = 0x108,
+    OTP_REG_STATUS = 0x304,
+    OTP_REG_MAX_WORD = OTP_REG_STATUS / 4 + 1,
 };
 
 struct RK3566OTPState {
     SysBusDevice parent_obj;
     uint32_t regs[OTP_REG_SIZE / 4];
     uint8_t fuses[1024];
-    RegisterInfo regs_info[OTP_REG_MAX];
+    RegisterInfo regs_info[OTP_REG_MAX_WORD];
     RegisterInfoArray *reg_array;
 };
 
@@ -63,13 +63,13 @@ static void otp_fuse_data_post_write(RegisterInfo *reg, uint64_t val)
 }
 
 static const RegisterAccessInfo otp_regs_info[] = {
-    { .name = "CMD", .addr = 0x20,
+    { .name = "CMD", .addr = OTP_REG_CMD,
       .pre_write = otp_hiword_pre_write,
       .post_write = otp_cmd_post_write },
-    { .name = "FUSE_DATA", .addr = 0x108,
+    { .name = "FUSE_DATA", .addr = OTP_REG_FUSE_DATA,
       .pre_write = otp_hiword_pre_write,
       .post_write = otp_fuse_data_post_write },
-    { .name = "STATUS", .addr = 0x304, .w1c = UINT32_MAX },
+    { .name = "STATUS", .addr = OTP_REG_STATUS, .w1c = UINT32_MAX },
 };
 
 static RegisterInfo *otp_find_register(RegisterInfoArray *reg_array,
