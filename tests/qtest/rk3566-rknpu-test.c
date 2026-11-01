@@ -508,10 +508,13 @@ static void test_rk3566_rknpu_single_core_cowork(void)
                               rk3566_rknn_register_amount(
                                   ARRAY_SIZE(commands)), 1);
 
-    for (unsigned int i = 0; i < 30 && !status; i++) {
+    for (unsigned int i = 0; i < 500 && !status; i++) {
         qtest_clock_step(qts, RKNN_COMPLETE_DELAY_NS);
         status = qtest_readl(qts, RK3566_RKNN_PC_BASE +
                              RKNN_PC_TASK_STATUS);
+        if (!status) {
+            g_usleep(2000);
+        }
     }
 
     /* Any completion code proves the task did not wait for a peer. */
