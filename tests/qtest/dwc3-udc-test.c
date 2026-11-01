@@ -49,6 +49,7 @@
 #define DWC3_GCOREID_RESET          0x5533330a
 #define DWC3_GUSB2PHYCFG_RESET      0x40102410
 #define DWC3_GUSB3PIPECTL_RESET     0x02000000
+#define DWC3_DSTS_RESET             0x00540000
 
 /* Event ring entry values. */
 #define DWC3_DEVT_USBRST            0x101
@@ -214,7 +215,7 @@ static void test_reset_values(void)
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DCFG), ==, 0);
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DCTL), ==, 0);
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DEVTEN), ==, 0);
-    g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DSTS), ==, 0);
+    g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DSTS), ==, DWC3_DSTS_RESET);
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DALEPENA), ==, 0);
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_GEVNTSIZ), ==, 0);
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_GEVNTCOUNT), ==, 0);
@@ -224,7 +225,7 @@ static void test_reset_values(void)
     g_assert_cmphex(dwc3_udc_readl(qts, DWC3_GCOREID), ==,
                     DWC3_GCOREID_RESET);
     dwc3_udc_writel(qts, DWC3_DSTS, 0xffffffff);
-    g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DSTS), ==, 0);
+    g_assert_cmphex(dwc3_udc_readl(qts, DWC3_DSTS), ==, DWC3_DSTS_RESET);
 
     /* Unused but implemented register-bank words are plain storage. */
     dwc3_udc_writel(qts, 0xc000, 0x12345678);

@@ -1040,7 +1040,15 @@ static void pl330_dmawfp(PL330Chan *ch, uint8_t opcode,
         return;
     }
 
-    if (ch->parent->periph_busy[periph_id]) {
+    /*
+     * A peripheral request covers one transfer burst. Complete the previous
+     * burst before sampling the level for the next request: queued AXI beats
+     * have not yet changed the peripheral FIFO level and must not grant a
+     * second burst against the same available space or received words.
+     */
+    if (ch->parent->periph_busy[periph_id] ||
+        pl330_queue_find_insn(&ch->parent->read_queue, ch->tag, false) ||
+        pl330_queue_find_insn(&ch->parent->write_queue, ch->tag, false)) {
         ch->state = pl330_chan_waiting_periph;
         ch->stall = 1;
     } else if (ch->state == pl330_chan_waiting_periph) {

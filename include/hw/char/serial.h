@@ -30,6 +30,7 @@
 #include "chardev/char-fe.h"
 #include "system/memory.h"
 #include "qemu/fifo8.h"
+#include "hw/core/clock.h"
 #include "qom/object.h"
 
 #define UART_FIFO_LENGTH    16      /* 16550A Fifo Length */
@@ -58,6 +59,16 @@ struct SerialState {
     CharFrontend chr;
     int last_break_enable;
     uint32_t baudbase;
+    uint32_t fifo_size;
+    Clock *uartclk;
+    QEMUTimer *xmit_timer;
+    uint64_t frame_ticks;
+    uint64_t tx_ticks;
+    uint64_t tx_subns;
+    uint64_t tx_period;
+    uint64_t tx_last_ns;
+    uint64_t rx_timeout_ticks;
+    bool tx_busy;
     uint32_t tsr_retry;
     guint watch_tag;
     bool wakeup;
@@ -84,5 +95,6 @@ extern const MemoryRegionOps serial_io_ops;
 
 #define TYPE_SERIAL "serial"
 OBJECT_DECLARE_SIMPLE_TYPE(SerialState, SERIAL)
+void serial_update_tx(SerialState *s);
 
 #endif

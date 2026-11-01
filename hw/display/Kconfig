@@ -157,3 +157,7 @@ config MAC_PVG_PCI
     bool
     depends on MAC_PVG && PCI
     default y if PCI_DEVICES
+
+config RK3566_RGA
+    bool
+    select REGISTER

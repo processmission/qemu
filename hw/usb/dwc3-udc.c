@@ -33,6 +33,12 @@
 #define DWC3_GSBUSCFG0                  0xc100
 #define DWC3_GCTL                       0xc110
 #define DWC3_GCOREID                    0xc120
+#define DWC3_GHWPARAMS0                 0xc140
+#define DWC3_GHWPARAMS1                 0xc144
+#define DWC3_GHWPARAMS3                 0xc14c
+#define DWC3_GHWPARAMS7                 0xc15c
+#define DWC3_GTXFIFOSIZ(ep)             (0xc300 + 4 * (ep))
+#define DWC3_GRXFIFOSIZ                 0xc380
 #define DWC3_GUSB2PHYCFG                0xc200
 #define DWC3_GUSB3PIPECTL               0xc2c0
 #define DWC3_GEVNTADR_LO                0xc400
@@ -45,6 +51,8 @@
 #define DWC3_DCTL                       0xc704
 #define DWC3_DEVTEN                     0xc708
 #define DWC3_DSTS                       0xc70c
+#define DWC3_DGCMDPAR                   0xc710
+#define DWC3_DGCMD                      0xc714
 #define DWC3_DALEPENA                   0xc720
 
 /*
@@ -62,7 +70,10 @@
 #define DWC3_GCOREID_RESET              0x5533330a
 #define DWC3_GUSB2PHYCFG_RESET          0x40102410
 #define DWC3_GUSB3PIPECTL_RESET         0x02000000
-#define DWC3_DSTS_RESET                 0x00000000
+#define DWC3_DSTS_DEVCTRLHLT            BIT(22)
+#define DWC3_DSTS_USBLNKST_RX_DET        (5 << 18)
+#define DWC3_DSTS_RESET                 (DWC3_DSTS_DEVCTRLHLT | \
+                                        DWC3_DSTS_USBLNKST_RX_DET)
 
 #define DWC3_GEVNTSIZ_INTMASK           BIT(31)
 
@@ -74,6 +85,8 @@
 #define DWC3_DEPCMD_RSCIDX              BIT(16)
 #define DWC3_DEPCMD_DEPCFG              1
 #define DWC3_DEPCMD_DEPXFERCFG          2
+#define DWC3_DEPCMD_DEPSETSTALL         4
+#define DWC3_DEPCMD_DEPCLEARSTALL       5
 #define DWC3_DEPCMD_DEPSTRTXFER         6
 #define DWC3_DEPCMD_DEPENDXFER          8
 #define DWC3_DEPCMD_DEPSTARTCFG         9
@@ -159,6 +172,7 @@ struct DWC3UDCState {
     uint8_t ep_type[DWC3_MAX_ENDPOINTS];
     uint64_t ep_trb[DWC3_MAX_ENDPOINTS];
     bool ep_pending[DWC3_MAX_ENDPOINTS];
+    bool ep_stalled[DWC3_MAX_ENDPOINTS];
 
     uint64_t event_addr;
     uint32_t event_size;
@@ -201,6 +215,7 @@ struct DWC3UDCState {
 
     /* Opt-in diagnostic tracing, see the "debug" property. */
     bool debug;
+    bool host_connected;
     int64_t depcmd_write_ns[DWC3_MAX_ENDPOINTS];
 };
 
@@ -248,7 +263,7 @@ static void dwc3_udc_log_unimp_command(DWC3UDCState *s, unsigned int ep,
     s->unimp_cmd_logged |= BIT(cmd);
     qemu_log_mask(LOG_UNIMP,
                   TYPE_DWC3_UDC ": unimplemented endpoint command 0x%x on "
-                  "ep %u (acknowledged with status OK)\n", cmd, ep);
+                  "ep %u (command error)\n", cmd, ep);
 }
 
 static void dwc3_udc_log_no_backend(DWC3UDCState *s)
@@ -507,6 +522,9 @@ static void dwc3_udc_try_setup(DWC3UDCState *s)
     uint64_t buffer;
     uint32_t size;
 
+    if (!s->host_connected) {
+        return;
+    }
     if (!s->ep_pending[0] || s->control_stage != DWC3_CONTROL_IDLE) {
         DWC3_UDC_DBG(s, "try_setup skip pending=%d stage=%u step=%u "
                      "input=%u\n", s->ep_pending[0], s->control_stage,
@@ -680,7 +698,8 @@ static void dwc3_udc_process_ep(DWC3UDCState *s, unsigned int ep)
     DWC3TRB trb;
     uint32_t trbctl;
 
-    if (ep >= DWC3_MAX_ENDPOINTS || !s->ep_pending[ep] ||
+    if (!s->host_connected || ep >= DWC3_MAX_ENDPOINTS || s->ep_stalled[ep] ||
+        !s->ep_pending[ep] ||
         !dwc3_udc_read_trb(s->ep_trb[ep], &trb) ||
         !(trb.ctrl & DWC3_TRB_CTRL_HWO)) {
         return;
@@ -718,7 +737,7 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
                                       uint32_t command)
 {
     uint32_t command_number = command & 0xf;
-    uint32_t result = command & ~DWC3_DEPCMD_CMDACT;
+    uint32_t result = command & ~(DWC3_DEPCMD_CMDACT | (0xf << 12));
 
     s->depcmd_write_ns[ep] = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     DWC3_UDC_DBG(s, "DEPCMD ep=%u cmd=%u command=0x%x\n",
@@ -739,16 +758,34 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
     case DWC3_DEPCMD_DEPENDXFER:
         s->ep_pending[ep] = false;
         break;
+    case DWC3_DEPCMD_DEPSETSTALL:
+        s->ep_stalled[ep] = true;
+        break;
+    case DWC3_DEPCMD_DEPCLEARSTALL:
+        s->ep_stalled[ep] = false;
+        break;
     case DWC3_DEPCMD_DEPXFERCFG:
+        if ((dwc3_udc_reg(s, DWC3_DEPCMDPAR0(ep)) & 0xffff) != 1) {
+            result |= BIT(12);
+        }
+        break;
     case DWC3_DEPCMD_DEPSTARTCFG:
-        /* Acknowledged; no endpoint state is modeled for these commands. */
+        for (unsigned i = (command >> 16) & 0x7f; i < DWC3_MAX_ENDPOINTS; i++) {
+            s->ep_pending[i] = false;
+            s->ep_stalled[i] = false;
+        }
         break;
     default:
         dwc3_udc_log_unimp_command(s, ep, command_number);
+        result |= BIT(12);
         break;
     }
 
     dwc3_udc_set_reg(s, DWC3_DEPCMD(ep), result);
+    if (command & BIT(8)) {
+        dwc3_udc_push_event(s, (ep << 1) | (7 << 6) |
+                            (result & (0xf << 12)) | (command_number << 24));
+    }
     if (command_number == DWC3_DEPCMD_DEPSTRTXFER) {
         dwc3_udc_process_ep(s, ep);
     }
@@ -860,8 +897,12 @@ static void dwc3_udc_write(void *opaque, hwaddr addr, uint64_t value,
         }
         new_value &= ~DWC3_DCTL_CSFTRST;
         dwc3_udc_set_reg(s, addr, new_value);
+        dwc3_udc_set_reg(s, DWC3_DSTS,
+                        (new_value & DWC3_DCTL_RUNSTOP ? 0 :
+                         DWC3_DSTS_DEVCTRLHLT) |
+                        (s->host_connected ? 0 : DWC3_DSTS_USBLNKST_RX_DET));
         if (!(old_value & DWC3_DCTL_RUNSTOP) &&
-            (new_value & DWC3_DCTL_RUNSTOP)) {
+            (new_value & DWC3_DCTL_RUNSTOP) && s->host_connected) {
             /*
              * Run/Stop 0->1 is the deterministic point at which the emulated
              * host starts a session: queue a bus reset and a connect-done so
@@ -888,7 +929,27 @@ static void dwc3_udc_write(void *opaque, hwaddr addr, uint64_t value,
             s->runstop_retry = false;
         }
         break;
+    case DWC3_DGCMD:
+        new_value &= ~(BIT(10) | (0xf << 12));
+        switch (new_value & 0xff) {
+        case 0x09:
+            if (!(dwc3_udc_reg(s, DWC3_DGCMDPAR) & BIT(5))) {
+                break;
+            }
+            /* fall through */
+        case 0x0a:
+            /* Device FIFO flush discards bytes not consumed by the host. */
+            s->tx_head = s->tx_tail = s->tx_count = 0;
+            timer_del(s->tx_timer);
+            break;
+        default:
+            new_value |= BIT(12);
+            break;
+        }
+        dwc3_udc_set_reg(s, addr, new_value);
+        break;
     case DWC3_GCOREID:
+    case DWC3_GHWPARAMS0 ... DWC3_GHWPARAMS7:
     case DWC3_DSTS:
         qemu_log_mask(LOG_GUEST_ERROR,
                       TYPE_DWC3_UDC ": write to read-only register at "
@@ -951,11 +1012,22 @@ static void dwc3_udc_reset_state(DWC3UDCState *s)
     memset(s->ep_type, 0, sizeof(s->ep_type));
     memset(s->ep_trb, 0, sizeof(s->ep_trb));
     memset(s->ep_pending, 0, sizeof(s->ep_pending));
+    memset(s->ep_stalled, 0, sizeof(s->ep_stalled));
 
     /* Documented reset values of the modeled DWC3 IP. */
     dwc3_udc_set_reg(s, DWC3_GSBUSCFG0, DWC3_GSBUSCFG0_RESET);
     dwc3_udc_set_reg(s, DWC3_GCTL, DWC3_GCTL_RESET);
     dwc3_udc_set_reg(s, DWC3_GCOREID, DWC3_GCOREID_RESET);
+    /* 64-bit AXI master, 32-bit APB slave, one event interrupt, HS UTMI. */
+    dwc3_udc_set_reg(s, DWC3_GHWPARAMS0, 0x40204048);
+    dwc3_udc_set_reg(s, DWC3_GHWPARAMS1, BIT(15));
+    dwc3_udc_set_reg(s, DWC3_GHWPARAMS3,
+                     (16 << 18) | (DWC3_MAX_ENDPOINTS << 12) | BIT(2));
+    dwc3_udc_set_reg(s, DWC3_GHWPARAMS7, (8192 << 16) | 1024);
+    dwc3_udc_set_reg(s, DWC3_GRXFIFOSIZ, 1024);
+    for (unsigned i = 0; i < DWC3_MAX_ENDPOINTS / 2; i++) {
+        dwc3_udc_set_reg(s, DWC3_GTXFIFOSIZ(i), (i * 512 << 16) | 512);
+    }
     dwc3_udc_set_reg(s, DWC3_GUSB2PHYCFG, DWC3_GUSB2PHYCFG_RESET);
     dwc3_udc_set_reg(s, DWC3_GUSB3PIPECTL, DWC3_GUSB3PIPECTL_RESET);
     dwc3_udc_set_reg(s, DWC3_DSTS, DWC3_DSTS_RESET);
@@ -1058,7 +1130,7 @@ static int dwc3_udc_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_dwc3_udc = {
     .name = TYPE_DWC3_UDC,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = dwc3_udc_post_load,
     .fields = (const VMStateField[]) {
@@ -1066,6 +1138,7 @@ static const VMStateDescription vmstate_dwc3_udc = {
         VMSTATE_UINT8_ARRAY(ep_type, DWC3UDCState, DWC3_MAX_ENDPOINTS),
         VMSTATE_UINT64_ARRAY(ep_trb, DWC3UDCState, DWC3_MAX_ENDPOINTS),
         VMSTATE_BOOL_ARRAY(ep_pending, DWC3UDCState, DWC3_MAX_ENDPOINTS),
+        VMSTATE_BOOL_ARRAY_V(ep_stalled, DWC3UDCState, DWC3_MAX_ENDPOINTS, 2),
         VMSTATE_UINT64(event_addr, DWC3UDCState),
         VMSTATE_UINT32(event_size, DWC3UDCState),
         VMSTATE_UINT32(event_count, DWC3UDCState),
@@ -1086,6 +1159,7 @@ static const VMStateDescription vmstate_dwc3_udc = {
 
 static const Property dwc3_udc_properties[] = {
     DEFINE_PROP_CHR("chardev", DWC3UDCState, chr),
+    DEFINE_PROP_BOOL("host-connected", DWC3UDCState, host_connected, true),
     /* Diagnostic tracing for reliability triage; off by default. */
     DEFINE_PROP_BOOL("debug", DWC3UDCState, debug, false),
 };

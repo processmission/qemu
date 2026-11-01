@@ -203,6 +203,37 @@ system_ss.add(when: 'CONFIG_RK3588_GRF', if_true: files('rk3588_grf.c'))
 system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_IOMMU', if_true: files('rockchip_iommu.c'))
 system_ss.add(when: 'CONFIG_RK3588_RKNPU', if_true: files('rk3588_rknpu.c'))
+
+system_ss.add(when: 'CONFIG_RK3566_CRU', if_true: files('rk3566_cru.c'))
+system_ss.add(when: 'CONFIG_RK3566_SYSTEM', if_true: files('rk3566_system.c'))
+system_ss.add(when: 'CONFIG_RK3566_PWM', if_true: files('rk3566_pwm.c'))
+system_ss.add(when: 'CONFIG_RK3566_CSI_DPHY', if_true: files('rk3566_csi_dphy.c'))
+system_ss.add(when: 'CONFIG_RK3566_RKNPU', if_true: files('rk3566_rknpu.c'))
+system_ss.add(when: 'CONFIG_ST25R100', if_true: files('st25r100.c'))
+
+# The ISP and VENC models convert image formats and encode H.264 frames with
+# libavutil, libswscale, libavcodec and x264.
+rk3566_isp_ss = ss.source_set()
+rk3566_isp_libavcodec = dependency('libavcodec', required: false)
+rk3566_isp_libavutil = dependency('libavutil', required: false)
+rk3566_isp_libswscale = dependency('libswscale', required: false)
+if rk3566_isp_libavcodec.found() and rk3566_isp_libavutil.found() and \
+   rk3566_isp_libswscale.found()
+  rk3566_isp_ss.add(files('rk3566_isp.c'), rk3566_isp_libavcodec,
+                    rk3566_isp_libavutil, rk3566_isp_libswscale)
+endif
+system_ss.add_all(when: 'CONFIG_RK3566_ISP', if_true: rk3566_isp_ss)
+
+rk3566_venc_ss = ss.source_set()
+rk3566_venc_libavcodec = dependency('libavcodec', required: false)
+rk3566_venc_libavutil = dependency('libavutil', required: false)
+rk3566_venc_x264 = dependency('x264', required: false)
+if rk3566_venc_libavcodec.found() and rk3566_venc_libavutil.found() and \
+   rk3566_venc_x264.found()
+  rk3566_venc_ss.add(files('rk3566_venc.c'), rk3566_venc_libavcodec,
+                     rk3566_venc_libavutil, rk3566_venc_x264)
+endif
+system_ss.add_all(when: 'CONFIG_RK3566_VENC', if_true: rk3566_venc_ss)
 system_ss.add(when: 'CONFIG_SPACEMIT_K3_CTRL', if_true: files('spacemit-k3.c'))
 system_ss.add(when: 'CONFIG_NXP_S32_MC_ME', if_true: files('nxp_s32_mc_me.c'))
 

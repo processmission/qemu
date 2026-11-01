@@ -117,6 +117,8 @@ struct RockchipRKNNCoreState {
     MemoryRegion *dma_mr;
     AddressSpace *dma_as;
     uint32_t core_index;
+    uint32_t command_count_scale;
+    uint32_t dma_address_bits;
     uint32_t regcmd_shadow_pc[ROCKCHIP_RKNN_PC_R_MAX];
     uint32_t regcmd_shadow_cna[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_core[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];

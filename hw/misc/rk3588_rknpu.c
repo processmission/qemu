@@ -586,6 +586,11 @@ static bool rockchip_rknn_iommu_range_mapped(RockchipRKNNCoreState *s,
         page_offset = iova & entry.addr_mask;
         chunk = entry.addr_mask == HWADDR_MAX ? length :
                 MIN(length, (size_t)(entry.addr_mask - page_offset + 1));
+        hwaddr physical = entry.translated_addr + page_offset;
+        uint64_t dma_limit = UINT64_C(1) << s->dma_address_bits;
+        if (physical >= dma_limit || chunk > dma_limit - physical) {
+            return false;
+        }
         if (chunk < length && iova > UINT32_MAX - chunk) {
             return false;
         }
@@ -4391,7 +4396,8 @@ static bool rockchip_rknn_fetch_pipeline_task(
         s->pending_next_iova =
             next_iova & ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
         s->pending_next_command_count =
-            ((next_amount & ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) * 2;
+            ((next_amount & ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) *
+            s->command_count_scale;
     }
 
     return true;
@@ -4405,7 +4411,7 @@ static void rockchip_rknn_prepare_pipeline(RockchipRKNNCoreState *s)
                     ROCKCHIP_RKNN_PC_BASE_ADDRESS_MASK;
     uint32_t command_count =
         ((s->pc_regs[R_PC_REGISTER_AMOUNTS] &
-          ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) * 2;
+          ROCKCHIP_RKNN_PC_REGISTER_AMOUNTS_MASK) + 1) * s->command_count_scale;
 
     s->pending_task_count = 0;
     s->pending_task_index = 0;
@@ -9261,6 +9267,12 @@ static void rockchip_rknn_realize(DeviceState *dev, Error **errp)
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
     IOMMUMemoryRegion *iommu;
 
+    if ((s->command_count_scale != 1 && s->command_count_scale != 2) ||
+        (s->dma_address_bits != 32 && s->dma_address_bits != 40)) {
+        error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
+                   " requires command-count-scale 1/2 and dma-address-bits 32/40");
+        return;
+    }
     if (s->core_index >= ROCKCHIP_RKNN_CORE_COUNT) {
         error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
                    " invalid core-index %u", s->core_index);
@@ -9670,6 +9682,10 @@ static const Property rockchip_rknn_properties[] = {
     DEFINE_PROP_LINK("dma", RockchipRKNNCoreState, dma_mr,
                      TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_UINT32("core-index", RockchipRKNNCoreState, core_index, 0),
+    DEFINE_PROP_UINT32("command-count-scale", RockchipRKNNCoreState,
+                       command_count_scale, 2),
+    DEFINE_PROP_UINT32("dma-address-bits", RockchipRKNNCoreState,
+                       dma_address_bits, 40),
     DEFINE_PROP_UINT64("functional-max-host-bytes", RockchipRKNNCoreState,
                        functional_max_host_bytes,
                        ROCKCHIP_RKNN_DEFAULT_MAX_HOST_BYTES),
