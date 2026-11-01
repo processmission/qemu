@@ -60,6 +60,33 @@ REG32(PPU_RDMA_S_POINTER, 0x0004)
 #define ROCKCHIP_RKNN_PIPELINE_BANK1_INTERRUPT 0x00000155
 #define ROCKCHIP_RKNN_INTERRUPT_VALID_BITS 0x0001ffff
 #define ROCKCHIP_RKNN_INTERRUPT_RESERVED_BITS 0xfffe0000
+
+/*
+ * Per-SoC descriptions.  The RK3588 core is the full three-core block;
+ * RK356x reuses the same register file with one core and the legacy
+ * PC+0x8000 read/write amount window.
+ */
+const RockchipRKNNSocConfig rockchip_rknn_soc_config_rk3588 = {
+    .core_count = 3,
+    .command_count_scale = 2,
+    .dma_address_bits = 40,
+    .pc_version = ROCKCHIP_RKNN_PC_VERSION,
+    .pc_version_num = ROCKCHIP_RKNN_PC_VERSION_NUM,
+    .has_amount_window = false,
+};
+
+const RockchipRKNNSocConfig rockchip_rknn_soc_config_rk356x = {
+    .core_count = 1,
+    .command_count_scale = 1,
+    .dma_address_bits = 32,
+    .pc_version = ROCKCHIP_RKNN_PC_VERSION,
+    .pc_version_num = ROCKCHIP_RKNN_PC_VERSION_NUM,
+    .has_amount_window = true,
+    .amount_clr_all_offset = 0x8010,
+    .amount_dt_wr_offset = 0x8034,
+    .amount_dt_rd_offset = 0x8038,
+    .amount_wt_rd_offset = 0x803c,
+};
 /*
  * Orange Pi 5 Plus PPU and depthwise captures show RAW_STATUS[31:30] set
  * after the production 0x1ffff interrupt acknowledgement.  Preserve this
@@ -7905,13 +7932,23 @@ static void rockchip_rknn_execution_done(void *opaque, int ret)
 static unsigned int rockchip_rknn_participating_core_count(
     RockchipRKNNCoreState *s)
 {
+    unsigned int core_count;
+
     if (!s->pending_pipeline_decoded ||
         !(s->pending_pipeline->enabled_blocks & ROCKCHIP_RKNN_BLOCK_CNA)) {
         return 1;
     }
-
-    return rockchip_rknn_co_work_core_count(
+    core_count = rockchip_rknn_co_work_core_count(
         s->pending_pipeline->cna.co_work_mode);
+    /*
+     * A single-core part cannot rendezvous with peers: clamp the
+     * co-work request so the task completes on this core instead of
+     * waiting for a peer that does not exist.
+     */
+    if (core_count > s->soc_config->core_count) {
+        core_count = s->soc_config->core_count;
+    }
+    return core_count;
 }
 
 static void rockchip_rknn_try_complete_rendezvous(RockchipRKNNCoreState *s)
@@ -7928,7 +7965,7 @@ static void rockchip_rknn_try_complete_rendezvous(RockchipRKNNCoreState *s)
         rockchip_rknn_complete(s);
         return;
     }
-    if (core_count > ROCKCHIP_RKNN_CORE_COUNT ||
+    if (core_count > s->soc_config->core_count ||
         s->core_index >= core_count) {
         return;
     }
@@ -8000,7 +8037,7 @@ static void rockchip_rknn_drain_execution(RockchipRKNNCoreState *s,
 
 static void rockchip_rknn_drain_executions(RockchipRKNNCoreState *s)
 {
-    for (unsigned int i = 0; i < ROCKCHIP_RKNN_CORE_COUNT; i++) {
+    for (unsigned int i = 0; i < s->core_count; i++) {
         RockchipRKNNCoreState *peer = rockchip_rknn_get_peer(s, i);
 
         if (peer) {
@@ -9025,6 +9062,66 @@ static const MemoryRegionOps rockchip_rknn_global_ops = {
     .valid = { .min_access_size = 4, .max_access_size = 4, },
 };
 
+/*
+ * RK356x legacy PC+0x8000 amount window.
+ *
+ * The vendor driver clears the accumulated read/write counters by writing
+ * 0x80000101 followed by 0x00000101 to the clear-all register; bit 31 is
+ * the clear strobe.  The counters are statistics only, so the model does
+ * not accumulate traffic itself: software reads/writes the registers and
+ * the clear strobe resets them.
+ */
+static uint64_t rockchip_rknn_amount_read(void *opaque, hwaddr addr,
+                                          unsigned size)
+{
+    RockchipRKNNCoreState *s = opaque;
+    hwaddr offset = addr + ROCKCHIP_RKNN_AMOUNT_WINDOW_OFFSET;
+
+    if (!s->soc_config->has_amount_window) {
+        return 0;
+    }
+    if (offset == s->soc_config->amount_dt_wr_offset) {
+        return s->amount_counts[0];
+    }
+    if (offset == s->soc_config->amount_dt_rd_offset) {
+        return s->amount_counts[1];
+    }
+    if (offset == s->soc_config->amount_wt_rd_offset) {
+        return s->amount_counts[2];
+    }
+    return 0;
+}
+
+static void rockchip_rknn_amount_write(void *opaque, hwaddr addr,
+                                       uint64_t value, unsigned size)
+{
+    RockchipRKNNCoreState *s = opaque;
+    hwaddr offset = addr + ROCKCHIP_RKNN_AMOUNT_WINDOW_OFFSET;
+
+    if (!s->soc_config->has_amount_window) {
+        return;
+    }
+    if (offset == s->soc_config->amount_clr_all_offset) {
+        if (value & BIT(31)) {
+            memset(s->amount_counts, 0, sizeof(s->amount_counts));
+        }
+    } else if (offset == s->soc_config->amount_dt_wr_offset) {
+        s->amount_counts[0] = value;
+    } else if (offset == s->soc_config->amount_dt_rd_offset) {
+        s->amount_counts[1] = value;
+    } else if (offset == s->soc_config->amount_wt_rd_offset) {
+        s->amount_counts[2] = value;
+    }
+}
+
+static const MemoryRegionOps rockchip_rknn_amount_ops = {
+    .read = rockchip_rknn_amount_read,
+    .write = rockchip_rknn_amount_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 4, .max_access_size = 4, },
+    .valid = { .min_access_size = 4, .max_access_size = 4, },
+};
+
 static void rockchip_rknn_reset(DeviceState *dev)
 {
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
@@ -9090,9 +9187,13 @@ static void rockchip_rknn_reset(DeviceState *dev)
         register_reset(&s->ppu_rdma_regs_info[i]);
     }
 
+    s->pc_regs[R_PC_VERSION] = s->soc_config->pc_version;
+    s->pc_regs[R_PC_VERSION_NUM] = s->soc_config->pc_version_num;
+    memset(s->amount_counts, 0, sizeof(s->amount_counts));
+
     rockchip_rknn_update_irq(s);
 
-    for (unsigned int i = 0; i < ROCKCHIP_RKNN_CORE_COUNT; i++) {
+    for (unsigned int i = 0; i < s->core_count; i++) {
         RockchipRKNNCoreState *peer = rockchip_rknn_get_peer(s, i);
 
         if (peer && peer->execution_result_ready) {
@@ -9157,7 +9258,7 @@ static int rockchip_rknn_pre_save(void *opaque)
     RockchipRKNNCoreState *s = opaque;
 
     rockchip_rknn_drain_executions(s);
-    for (unsigned int i = 0; i < ROCKCHIP_RKNN_CORE_COUNT; i++) {
+    for (unsigned int i = 0; i < s->core_count; i++) {
         RockchipRKNNCoreState *peer = rockchip_rknn_get_peer(s, i);
 
         if (peer && peer->execution_aiocb) {
@@ -9197,6 +9298,7 @@ static void rockchip_rknn_init(Object *obj)
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(obj);
     DeviceState *dev = DEVICE(obj);
 
+    s->soc_config = &rockchip_rknn_soc_config_rk3588;
     s->pc_reg_array =
         register_init_block32(dev, rockchip_rknn_pc_regs_info,
                               ARRAY_SIZE(rockchip_rknn_pc_regs_info),
@@ -9234,6 +9336,10 @@ static void rockchip_rknn_init(Object *obj)
     memory_region_init_io(&s->global_reg_array, obj, &rockchip_rknn_global_ops,
                           s, TYPE_ROCKCHIP_RKNN_CORE ".global",
                           ROCKCHIP_RKNN_WINDOW_SIZE);
+    memory_region_init_io(&s->amount_reg_array, obj,
+                          &rockchip_rknn_amount_ops, s,
+                          TYPE_ROCKCHIP_RKNN_CORE ".amount",
+                          ROCKCHIP_RKNN_WINDOW_SIZE);
 
     timer_init_ns(&s->complete_timer, QEMU_CLOCK_VIRTUAL,
                   rockchip_rknn_complete, s);
@@ -9250,6 +9356,7 @@ static void rockchip_rknn_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->global_reg_array);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->ppu_reg_array->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->ppu_rdma_reg_array->mem);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->amount_reg_array);
     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
 }
 
@@ -9267,13 +9374,21 @@ static void rockchip_rknn_realize(DeviceState *dev, Error **errp)
     RockchipRKNNCoreState *s = ROCKCHIP_RKNN_CORE(dev);
     IOMMUMemoryRegion *iommu;
 
-    if ((s->command_count_scale != 1 && s->command_count_scale != 2) ||
-        (s->dma_address_bits != 32 && s->dma_address_bits != 40)) {
+    if (!s->soc_config ||
+        s->soc_config->core_count == 0 ||
+        s->soc_config->core_count > ROCKCHIP_RKNN_CORE_COUNT ||
+        (s->soc_config->command_count_scale != 1 &&
+         s->soc_config->command_count_scale != 2) ||
+        (s->soc_config->dma_address_bits != 32 &&
+         s->soc_config->dma_address_bits != 40)) {
         error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
-                   " requires command-count-scale 1/2 and dma-address-bits 32/40");
+                   " invalid SoC configuration");
         return;
     }
-    if (s->core_index >= ROCKCHIP_RKNN_CORE_COUNT) {
+    s->core_count = s->soc_config->core_count;
+    s->command_count_scale = s->soc_config->command_count_scale;
+    s->dma_address_bits = s->soc_config->dma_address_bits;
+    if (s->core_index >= s->core_count) {
         error_setg(errp, TYPE_ROCKCHIP_RKNN_CORE
                    " invalid core-index %u", s->core_index);
         return;
@@ -9682,10 +9797,6 @@ static const Property rockchip_rknn_properties[] = {
     DEFINE_PROP_LINK("dma", RockchipRKNNCoreState, dma_mr,
                      TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_UINT32("core-index", RockchipRKNNCoreState, core_index, 0),
-    DEFINE_PROP_UINT32("command-count-scale", RockchipRKNNCoreState,
-                       command_count_scale, 2),
-    DEFINE_PROP_UINT32("dma-address-bits", RockchipRKNNCoreState,
-                       dma_address_bits, 40),
     DEFINE_PROP_UINT64("functional-max-host-bytes", RockchipRKNNCoreState,
                        functional_max_host_bytes,
                        ROCKCHIP_RKNN_DEFAULT_MAX_HOST_BYTES),

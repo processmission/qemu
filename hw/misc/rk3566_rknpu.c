@@ -24,8 +24,7 @@ static void rk3566_npu_realize(DeviceState *device, Error **errp)
         error_setg(errp, "RK3566 has one RKNPU core, core-index must be zero");
         return;
     }
-    s->command_count_scale = 1;
-    s->dma_address_bits = 32;
+    s->soc_config = &rockchip_rknn_soc_config_rk356x;
     parent_realize(device, errp);
 }
 

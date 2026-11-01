@@ -22,6 +22,27 @@ OBJECT_DECLARE_SIMPLE_TYPE(RockchipRKNNCoreState, ROCKCHIP_RKNN_CORE)
 
 typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 
+/*
+ * Per-SoC description of the RKNPU block.  It mirrors the vendor driver
+ * struct rknpu_config so that machine subtypes only have to pick a config
+ * instead of setting individual properties.
+ */
+typedef struct RockchipRKNNSocConfig {
+    uint32_t core_count;
+    uint32_t command_count_scale;
+    uint32_t dma_address_bits;
+    uint32_t pc_version;
+    uint32_t pc_version_num;
+    bool has_amount_window;
+    uint16_t amount_clr_all_offset;
+    uint16_t amount_dt_wr_offset;
+    uint16_t amount_dt_rd_offset;
+    uint16_t amount_wt_rd_offset;
+} RockchipRKNNSocConfig;
+
+extern const RockchipRKNNSocConfig rockchip_rknn_soc_config_rk3588;
+extern const RockchipRKNNSocConfig rockchip_rknn_soc_config_rk356x;
+
 #define ROCKCHIP_RKNN_WINDOW_SIZE 0x1000
 #define ROCKCHIP_RKNN_DPU_OFFSET 0x4000
 #define ROCKCHIP_RKNN_PPU_OFFSET 0x6000
@@ -36,6 +57,8 @@ typedef struct RockchipRKNNPipelineTask RockchipRKNNPipelineTask;
 #define ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT 7
 #define ROCKCHIP_RKNN_PRESENT_R_MAX 32
 #define ROCKCHIP_RKNN_CORE_COUNT 3
+#define ROCKCHIP_RKNN_AMOUNT_WINDOW_OFFSET 0x8000
+#define ROCKCHIP_RKNN_AMOUNT_COUNTERS 3
 #define ROCKCHIP_RKNN_PENDING_WRITE_R_MAX \
     (ROCKCHIP_RKNN_REGCMD_DOMAIN_COUNT * 2 * \
      ROCKCHIP_RKNN_PRESENT_R_MAX)
@@ -116,9 +139,13 @@ struct RockchipRKNNCoreState {
     qemu_irq irq;
     MemoryRegion *dma_mr;
     AddressSpace *dma_as;
+    const RockchipRKNNSocConfig *soc_config;
+    uint32_t core_count;
     uint32_t core_index;
     uint32_t command_count_scale;
     uint32_t dma_address_bits;
+    uint32_t amount_counts[ROCKCHIP_RKNN_AMOUNT_COUNTERS];
+    MemoryRegion amount_reg_array;
     uint32_t regcmd_shadow_pc[ROCKCHIP_RKNN_PC_R_MAX];
     uint32_t regcmd_shadow_cna[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];
     uint32_t regcmd_shadow_core[ROCKCHIP_RKNN_REGCMD_DOMAIN_R_MAX];

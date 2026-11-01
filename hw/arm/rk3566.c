@@ -420,11 +420,15 @@ static void rk3566_soc_realize(DeviceState *dev, Error **errp)
         OBJECT(rockchip_iommu_get_memory_region(ROCKCHIP_IOMMU(npu_mmu))),
         &error_abort);
     sysbus_realize(SYS_BUS_DEVICE(npu), &error_fatal);
+    qdev_connect_gpio_out_named(s->cru, "rknpu-reset", 0,
+                                qdev_get_gpio_in_named(npu, "reset", 0));
     const hwaddr npu_regs[] = { 0xfde40000, 0xfde41000, 0xfde43000, 0xfde44000,
         0xfde4f000, 0xfde46000, 0xfde47000 };
     for (unsigned i = 0; i < ARRAY_SIZE(npu_regs); i++) {
         sysbus_mmio_map(SYS_BUS_DEVICE(npu), i, npu_regs[i]);
     }
+    /* RK3566 exposes the vendor PC+0x8000 read/write amount window. */
+    sysbus_mmio_map(SYS_BUS_DEVICE(npu), 7, 0xfde48000);
     DeviceState *npu_irqs = rk3566_device(s, TYPE_OR_IRQ, "npu-irqs");
     qdev_prop_set_uint16(npu_irqs, "num-lines", 2);
     qdev_realize(npu_irqs, NULL, &error_fatal);
