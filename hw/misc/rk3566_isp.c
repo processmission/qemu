@@ -110,6 +110,14 @@ enum {
 #define ISP_3A_RIS_ALL         (ISP_3A_RIS_RAWAE_BIG | \
                                 ISP_3A_RIS_RAWHIST_BIG | \
                                 ISP_3A_RIS_RAWAF | ISP_3A_RIS_RAWAWB)
+#define ISP_3A_READY_AE(blk)   BIT(blk)
+#define ISP_3A_READY_HIST(blk) BIT(3 + (blk))
+#define ISP_3A_READY_AF        BIT(6)
+#define ISP_3A_READY_AWB       BIT(7)
+#define ISP_3A_READY_ALL       (ISP_3A_READY_AE(0) | ISP_3A_READY_AE(1) | \
+                                ISP_3A_READY_AE(2) | ISP_3A_READY_HIST(0) | \
+                                ISP_3A_READY_HIST(1) | ISP_3A_READY_HIST(2) | \
+                                ISP_3A_READY_AF | ISP_3A_READY_AWB)
 
 struct RK3566ISPState {
     SysBusDevice parent_obj;
@@ -130,7 +138,7 @@ struct RK3566ISPState {
     bool streaming, link_enabled, busy;
     bool synth;
     QEMUTimer *synth_timer;
-    bool stats_ready;
+    uint32_t stats_ready;
     uint32_t stat_ae_sum[ISP_3A_AE_BLOCKS][ISP_3A_AE_WINDOWS][3];
     uint32_t stat_ae_mean[ISP_3A_AE_BLOCKS][ISP_3A_AE_MEANS];
     uint32_t stat_hist[ISP_3A_AE_BLOCKS][ISP_3A_HIST_BINS];
@@ -154,7 +162,7 @@ struct RK3566ISPState {
 
 static void isp_3a_reset(RK3566ISPState *s)
 {
-    s->stats_ready = false;
+    s->stats_ready = 0;
     REG(s, ISP_ISP3A_RIS) = 0;
     memset(s->stat_ae_sum, 0, sizeof(s->stat_ae_sum));
     memset(s->stat_ae_mean, 0, sizeof(s->stat_ae_mean));
@@ -285,7 +293,7 @@ static void isp_3a_measure(RK3566ISPState *s)
     s->awb_ram_cursor = 0;
     s->af_ram_cursor = 0;
     REG(s, ISP_ISP3A_RIS) |= ISP_3A_RIS_ALL;
-    s->stats_ready = true;
+    s->stats_ready = ISP_3A_READY_ALL;
 }
 
 static void isp_3a_store_words(uint8_t *buf, hwaddr offset,
@@ -303,10 +311,14 @@ static void isp_3a_write_ddr(RK3566ISPState *s)
         return;
     }
     memset(buf, 0, ISP_STATS_DDR_SIZE);
+    static const hwaddr hist_offsets[ISP_3A_AE_BLOCKS] = {
+        0x0c00, 0x1400, 0x1800,
+    };
+
     for (unsigned i = 0; i < ISP_3A_AE_BLOCKS; i++) {
         isp_3a_store_words(buf, 0x0000 + i * 0x390, s->stat_ae_mean[i],
                            ISP_3A_AE_MEANS);
-        isp_3a_store_words(buf, 0x0c00 + i * 0x800, s->stat_hist[i],
+        isp_3a_store_words(buf, hist_offsets[i], s->stat_hist[i],
                            ISP_3A_HIST_BINS);
     }
     isp_3a_store_words(buf, 0x0ab0, s->stat_ae_mean[0], 25);
@@ -326,8 +338,12 @@ static void isp_3a_write_ddr(RK3566ISPState *s)
     }
     isp_3a_store_words(buf, 0x2710 + 0xe0, s->stat_awb_yhist,
                        ISP_3A_AWB_HIST_BINS);
-    address_space_write(&s->dma_as, base, MEMTXATTRS_UNSPECIFIED, buf,
-                        ISP_STATS_DDR_SIZE);
+    if (address_space_write(&s->dma_as, base, MEMTXATTRS_UNSPECIFIED, buf,
+                            ISP_STATS_DDR_SIZE) != MEMTX_OK) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "rk3566-isp: cannot write 3A statistics to 0x%"
+                      HWADDR_PRIx "\n", base);
+    }
 }
 
 static bool isp_3a_ae_block(hwaddr address, unsigned *blk, hwaddr *base)
@@ -372,7 +388,8 @@ static uint64_t isp_3a_read(RK3566ISPState *s, hwaddr address)
         off = address - ISP_RAWAWB_BASE;
         if (off == ISP_RAWAWB_CTRL) {
             return (s->regs[address / 4] & ~ISP_3A_MEAS_DONE) |
-                   (s->stats_ready ? ISP_3A_MEAS_DONE : 0);
+                   (s->stats_ready & ISP_3A_READY_AWB ?
+                    ISP_3A_MEAS_DONE : 0);
         }
         if (off == ISP_RAWAWB_Y_HIST01 + 0 || off == ISP_RAWAWB_Y_HIST01 + 4 ||
             off == ISP_RAWAWB_Y_HIST01 + 8 || off == ISP_RAWAWB_Y_HIST01 + 12) {
@@ -416,7 +433,8 @@ static uint64_t isp_3a_read(RK3566ISPState *s, hwaddr address)
         switch (off) {
         case ISP_RAWAF_CTRL:
             return (s->regs[address / 4] & ~ISP_3A_MEAS_DONE) |
-                   (s->stats_ready ? ISP_3A_MEAS_DONE : 0);
+                   (s->stats_ready & ISP_3A_READY_AF ?
+                    ISP_3A_MEAS_DONE : 0);
         case ISP_RAWAF_SUM_A:
             return s->stat_af_sum[0];
         case ISP_RAWAF_SUM_B:
@@ -442,7 +460,8 @@ static uint64_t isp_3a_read(RK3566ISPState *s, hwaddr address)
         off = address - base;
         if (off == ISP_RAWAE_BIG_CTRL) {
             return (s->regs[address / 4] & ~ISP_3A_MEAS_DONE) |
-                   (s->stats_ready ? ISP_3A_MEAS_DONE : 0);
+                   (s->stats_ready & ISP_3A_READY_AE(blk) ?
+                    ISP_3A_MEAS_DONE : 0);
         }
         if (off >= ISP_RAWAE_BIG_WND1_SUMR &&
             off < ISP_RAWAE_BIG_WND1_SUMR + 3 * ISP_3A_AE_WINDOWS * 4) {
@@ -463,7 +482,8 @@ static uint64_t isp_3a_read(RK3566ISPState *s, hwaddr address)
         off = address - base;
         if (off == ISP_RAWHIST_BIG_CTRL) {
             return (s->regs[address / 4] & ~ISP_3A_MEAS_DONE) |
-                   (s->stats_ready ? ISP_3A_MEAS_DONE : 0);
+                   (s->stats_ready & ISP_3A_READY_HIST(blk) ?
+                    ISP_3A_MEAS_DONE : 0);
         }
         if (off == ISP_RAWHIST_BIG_RO_BIN) {
             unsigned idx = s->hist_cursor[blk]++ % ISP_3A_HIST_BINS;
@@ -494,7 +514,7 @@ static void isp_3a_write(RK3566ISPState *s, hwaddr address, uint64_t value)
     if (address >= ISP_RAWAWB_BASE && address < ISP_RAWAWB_BASE + 0x800) {
         off = address - ISP_RAWAWB_BASE;
         if ((off == ISP_RAWAWB_CTRL) && (value & ISP_3A_MEAS_DONE)) {
-            s->stats_ready = false;
+            s->stats_ready &= ~ISP_3A_READY_AWB;
             REG(s, ISP_ISP3A_RIS) &= ~ISP_3A_RIS_RAWAWB;
         }
         return;
@@ -502,6 +522,7 @@ static void isp_3a_write(RK3566ISPState *s, hwaddr address, uint64_t value)
     if (address >= ISP_RAWAF_BASE && address < ISP_RAWAF_BASE + 0x100) {
         off = address - ISP_RAWAF_BASE;
         if ((off == ISP_RAWAF_CTRL) && (value & ISP_3A_MEAS_DONE)) {
+            s->stats_ready &= ~ISP_3A_READY_AF;
             REG(s, ISP_ISP3A_RIS) &= ~ISP_3A_RIS_RAWAF;
         }
         return;
@@ -509,6 +530,7 @@ static void isp_3a_write(RK3566ISPState *s, hwaddr address, uint64_t value)
     if (isp_3a_ae_block(address, &blk, &base)) {
         off = address - base;
         if ((off == ISP_RAWAE_BIG_CTRL) && (value & ISP_3A_MEAS_DONE)) {
+            s->stats_ready &= ~ISP_3A_READY_AE(blk);
             REG(s, ISP_ISP3A_RIS) &= ~ISP_3A_RIS_RAWAE_BIG;
         }
         return;
@@ -516,6 +538,7 @@ static void isp_3a_write(RK3566ISPState *s, hwaddr address, uint64_t value)
     if (isp_3a_hist_block(address, &blk, &base)) {
         off = address - base;
         if ((off == ISP_RAWHIST_BIG_CTRL) && (value & ISP_3A_MEAS_DONE)) {
+            s->stats_ready &= ~ISP_3A_READY_HIST(blk);
             REG(s, ISP_ISP3A_RIS) &= ~ISP_3A_RIS_RAWHIST_BIG;
         }
         return;
@@ -816,6 +839,7 @@ static void isp_synth_tick(void *opaque)
         return;
     }
     if (!s->busy) {
+        s->input_frames++;
         isp_synth_generate(s);
         isp_submit_frame(s);
     }
