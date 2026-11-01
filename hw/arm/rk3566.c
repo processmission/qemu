@@ -24,6 +24,7 @@
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/i2c/rk3x_i2c.h"
 #include "hw/intc/arm_gicv3_its_common.h"
+#include "hw/misc/rk3566_rknpu.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/misc/rockchip_iommu.h"
 #include "hw/misc/rockchip_syscon.h"
@@ -415,7 +416,7 @@ static void rk3566_soc_realize(DeviceState *dev, Error **errp)
     }
     DeviceState *npu_mmu = rk3566_device(s, TYPE_ROCKCHIP_IOMMU, "npu-mmu");
     rk3566_map(s, npu_mmu, 0xfde4b000, -1);
-    DeviceState *npu = rk3566_device(s, "rk3566-rknpu", "npu");
+    DeviceState *npu = rk3566_device(s, TYPE_RK3566_RKNPU, "npu");
     object_property_set_link(OBJECT(npu), "dma",
         OBJECT(rockchip_iommu_get_memory_region(ROCKCHIP_IOMMU(npu_mmu))),
         &error_abort);

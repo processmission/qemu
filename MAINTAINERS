@@ -1090,6 +1090,7 @@ F: hw/audio/rk3566_audio.c
 F: hw/display/rk3566_rga.c
 F: hw/i2c/rk3566_i2c.c
 F: hw/misc/rk3566_*.c
+F: hw/misc/rockchip_rknpu.c
 F: hw/misc/st25r100.c
 F: hw/nvram/rk3566_otp.c
 F: hw/sensor/gc2093.c
@@ -1098,6 +1099,7 @@ F: hw/sensor/rk3566_tsadc.c
 F: hw/sensor/vl53l8cx.c
 F: hw/ssi/rockchip_spi.c
 F: hw/timer/rk3566_timer.c
+F: include/hw/misc/rockchip_rknpu.h
 F: include/hw/ssi/rockchip_spi.h
 F: tests/qtest/rk3566-*
 F: tests/qtest/rockchip-spi-test.c
@@ -1115,8 +1117,10 @@ F: hw/arm/rk3588-evb.c
 F: hw/arm/rk3588s-roc-pc.c
 F: hw/*/rk3588*
 F: hw/misc/rockchip_iommu.c
+F: hw/misc/rockchip_rknpu.c
 F: include/hw/*/rk3588*
 F: include/hw/misc/rockchip_iommu.h
+F: include/hw/misc/rockchip_rknpu.h
 F: tests/functional/aarch64/test_rk3588_rknpu.py
 F: tests/functional/aarch64/test_rock5b_plus.py
 F: tests/qtest/rk3588*

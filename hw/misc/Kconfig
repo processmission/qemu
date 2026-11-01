@@ -261,9 +261,13 @@ config RK3588_GRF
 config RK3588_SCMI
     bool
 
-config RK3588_RKNPU
+config ROCKCHIP_RKNPU
     bool
     select REGISTER
+
+config RK3588_RKNPU
+    bool
+    select ROCKCHIP_RKNPU
 
 config ROCKCHIP_IOMMU
     bool
@@ -439,7 +443,7 @@ config RK3566_VENC
 
 config RK3566_RKNPU
     bool
-    select RK3588_RKNPU
+    select ROCKCHIP_RKNPU
 
 config ST25R100
     bool
