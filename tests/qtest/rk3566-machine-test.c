@@ -29,17 +29,17 @@ static void test_rk3566_machine_creation(void)
     g_autofree char *ram_backend =
         rk3566_qom_get_str(qts, "/machine", "memory-backend");
     g_autofree char *uart0_type =
-        rk3566_qom_child_object_type(qts, "/machine", "uart0");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "uart0");
     g_autofree char *gic_type =
-        rk3566_qom_child_object_type(qts, "/machine", "gic");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "gic");
     g_autofree char *timer_type =
-        rk3566_qom_child_object_type(qts, "/machine", "timer0");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "timer0");
     g_autofree char *otp_type =
-        rk3566_qom_child_object_type(qts, "/machine", "otp");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "otp");
     g_autofree char *cru_type =
-        rk3566_qom_child_object_type(qts, "/machine", "cru");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "cru");
     g_autofree char *npu_type =
-        rk3566_qom_child_object_type(qts, "/machine", "npu");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "npu");
     g_autofree char *ram_type =
         rk3566_qom_child_object_type(qts, "/objects", "microduck.ram");
 
@@ -135,10 +135,10 @@ static void test_rk3566_media_devices(void)
         return;
     }
 
-    isp_type = rk3566_qom_child_object_type(qts, "/machine", "isp");
-    dphy_type = rk3566_qom_child_object_type(qts, "/machine", "csi-dphy");
-    rga_type = rk3566_qom_child_object_type(qts, "/machine", "rga2");
-    venc_type = rk3566_qom_child_object_type(qts, "/machine", "venc");
+    isp_type = rk3566_qom_child_object_type(qts, "/machine/soc", "isp");
+    dphy_type = rk3566_qom_child_object_type(qts, "/machine/soc", "csi-dphy");
+    rga_type = rk3566_qom_child_object_type(qts, "/machine/soc", "rga2");
+    venc_type = rk3566_qom_child_object_type(qts, "/machine/soc", "venc");
 
     g_assert_cmpstr(isp_type, ==, "rk3566-isp");
     g_assert_cmpstr(dphy_type, ==, "rk3566-csi-dphy");

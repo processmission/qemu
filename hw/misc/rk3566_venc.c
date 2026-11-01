@@ -1,7 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * RK3566 VEPU540 H.264 interface with x264 encoding and libavcodec
- * statistics.
+ * RK3566 VEPU540 encoder
+ *
+ * H.264 interface with x264 encoding and libavcodec statistics.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"

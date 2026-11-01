@@ -38,7 +38,7 @@
 #define RK3566_VENC_IRQ_READ_ERROR (1u << 7)
 #define RK3566_VENC_IRQ_TIMEOUT (1u << 8)
 
-#define RK3566_VENC_GIC_QOM "/machine/gic"
+#define RK3566_VENC_GIC_QOM "/machine/soc/gic"
 
 static uint32_t venc_read(QTestState *qts, uint32_t offset)
 {
@@ -52,7 +52,7 @@ static void venc_write(QTestState *qts, uint32_t offset, uint32_t value)
 
 static bool rk3566_venc_available(QTestState *qts)
 {
-    return rk3566_qom_child_type_exists(qts, "/machine", "rk3566-rkvenc");
+    return rk3566_qom_child_type_exists(qts, "/machine/soc", "rk3566-rkvenc");
 }
 
 static void test_rk3566_venc_reset_values(void)
@@ -67,7 +67,7 @@ static void test_rk3566_venc_reset_values(void)
         return;
     }
 
-    venc = rk3566_qom_child_object_type(qts, "/machine", "venc");
+    venc = rk3566_qom_child_object_type(qts, "/machine/soc", "venc");
     g_assert_cmpstr(venc, ==, "rk3566-rkvenc");
 
     /* VEPU5 defaults come from the register table. */

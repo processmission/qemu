@@ -1,4 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * RK3566 timer
+ *
+ * Two 64-bit down counters with control and interrupt status.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"

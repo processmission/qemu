@@ -1,4 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * RK3566 I2C peripheral models
+ *
+ * Register-backed models for the RK809, SYR827 and PCA9535 devices.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"

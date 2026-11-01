@@ -412,3 +412,35 @@ config AX650X_DWMAC_GLUE
 
 config AX650X_HWSPINLOCK
     bool
+
+config RK3566_CRU
+    bool
+    select REGISTER
+
+config RK3566_SYSTEM
+    bool
+    select REGISTER
+
+config RK3566_PWM
+    bool
+    select REGISTER
+
+config RK3566_CSI_DPHY
+    bool
+    select REGISTER
+
+config RK3566_ISP
+    bool
+    select REGISTER
+
+config RK3566_VENC
+    bool
+    select REGISTER
+
+config RK3566_RKNPU
+    bool
+    select RK3588_RKNPU
+
+config ST25R100
+    bool
+    select SSI

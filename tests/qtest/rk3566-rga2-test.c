@@ -134,7 +134,7 @@ static void test_rk3566_rga2_command_error_irq(void)
         return;
     }
 
-    qtest_irq_intercept_in(qts, "/machine/gic");
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
 
     /* Unmask the error interrupt, then start a command with an empty block. */
     rk3566_mmio_write32_at(qts, RK3566_RGA2_BASE, RK3566_RGA2_INTERRUPT,
@@ -186,7 +186,7 @@ static void test_rk3566_rga2_command_copy(void)
         return;
     }
 
-    qtest_irq_intercept_in(qts, "/machine/gic");
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
 
     /* Build a 4x4 RGBA to RGBA copy command in guest DRAM. */
     rk3566_mmio_write32(qts, RK3566_RGA2_CMD_DRAM +

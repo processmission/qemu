@@ -27,7 +27,7 @@ static void test_dphy_registers(void)
         return;
     }
 
-    type = rk3566_qom_child_object_type(qts, "/machine", "csi-dphy");
+    type = rk3566_qom_child_object_type(qts, "/machine/soc", "csi-dphy");
     g_assert_cmpstr(type, ==, "rk3566-csi-dphy");
 
     /* LANE_ENABLE resets to one and accepts arbitrary writes. */

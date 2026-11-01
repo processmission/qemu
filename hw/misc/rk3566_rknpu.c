@@ -1,5 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* RK3566 single-core RKNPU command processor configuration. */
+/*
+ * RK3566 RKNPU
+ *
+ * Single-core command processor configuration on top of the RK3588 RKNPU model.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"

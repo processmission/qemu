@@ -44,11 +44,11 @@ static void test_rk3566_system_variants(void)
 {
     QTestState *qts = rk3566_qtest_start();
     g_autofree char *pmu_type =
-        rk3566_qom_child_object_type(qts, "/machine", "pmu");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "pmu");
     g_autofree char *rng_type =
-        rk3566_qom_child_object_type(qts, "/machine", "rng");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "rng");
     g_autofree char *pvtm_type =
-        rk3566_qom_child_object_type(qts, "/machine", "pvtm0");
+        rk3566_qom_child_object_type(qts, "/machine/soc", "pvtm0");
 
     g_assert_cmpstr(pmu_type, ==, "rk3566-system");
     g_assert_cmpstr(rng_type, ==, "rk3566-system");

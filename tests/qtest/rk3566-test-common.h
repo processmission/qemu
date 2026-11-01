@@ -15,7 +15,7 @@
 
 #define RK3566_MACHINE_NAME "microduck-beta"
 #define RK3566_MACHINE_TYPE "microduck-beta-machine"
-#define RK3566_GIC_QOM "/machine/gic"
+#define RK3566_GIC_QOM "/machine/soc/gic"
 
 /*
  * Memory windows from the MicroDuck beta board map.  Only the windows and
@@ -243,10 +243,10 @@ static inline uint64_t rk3566_qom_get_uint64(QTestState *qts, const char *path,
  */
 static inline bool rk3566_qtest_media_present(QTestState *qts)
 {
-    return rk3566_qom_child_type_exists(qts, "/machine", "rk3566-isp") &&
-           rk3566_qom_child_type_exists(qts, "/machine", "rk3566-csi-dphy") &&
-           rk3566_qom_child_type_exists(qts, "/machine", "rk3566-rga2") &&
-           rk3566_qom_child_type_exists(qts, "/machine", "rk3566-rkvenc");
+    return rk3566_qom_child_type_exists(qts, "/machine/soc", "rk3566-isp") &&
+           rk3566_qom_child_type_exists(qts, "/machine/soc", "rk3566-csi-dphy") &&
+           rk3566_qom_child_type_exists(qts, "/machine/soc", "rk3566-rga2") &&
+           rk3566_qom_child_type_exists(qts, "/machine/soc", "rk3566-rkvenc");
 }
 
 #endif /* TESTS_QTEST_RK3566_TEST_COMMON_H */

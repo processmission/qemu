@@ -1,5 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* VL53L8CX SPI/DCI interface with measured frames supplied by MuJoCo. */
+/*
+ * VL53L8CX ToF sensor
+ *
+ * SPI/DCI interface with measured frames supplied by MuJoCo.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/bswap.h"

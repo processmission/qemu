@@ -1,5 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* GC2093 sensor control and RKISP 2.1 capture from external UYVY frames. */
+/*
+ * RK3566 ISP
+ *
+ * RKISP 2.1 capture from external UYVY frames, including the main and
+ * self paths, shadowed register pairs and the DMA write-out.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
@@ -14,7 +22,6 @@
 #include "hw/core/qdev-properties-system.h"
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
-#include "hw/i2c/i2c.h"
 #include "migration/vmstate.h"
 #include "system/dma.h"
 #include <libavutil/imgutils.h>
@@ -22,11 +29,7 @@
 #include <libswscale/swscale.h>
 
 #define TYPE_RK3566_ISP "rk3566-isp"
-#define TYPE_GC2093 "microduck-gc2093"
-#define TYPE_RK3566_DPHY "rk3566-csi-dphy"
 OBJECT_DECLARE_SIMPLE_TYPE(RK3566ISPState, RK3566_ISP)
-OBJECT_DECLARE_SIMPLE_TYPE(GC2093State, GC2093)
-OBJECT_DECLARE_SIMPLE_TYPE(RK3566DPHYState, RK3566_DPHY)
 #define REG(s, address) ((s)->regs[(address) / 4])
 
 enum {
@@ -59,28 +62,6 @@ struct RK3566ISPState {
     uint32_t pixel_rate_hz;
     uint8_t *input, *frame;
     bool streaming, link_enabled, busy;
-};
-
-struct GC2093State {
-    I2CSlave parent_obj;
-    uint8_t regs[0x10000];
-    uint16_t address;
-    uint8_t address_bytes;
-    qemu_irq streaming;
-    bool powered, resetn;
-};
-
-enum {
-    DPHY_REG_CTRL,
-    DPHY_REG_MAX,
-};
-
-struct RK3566DPHYState {
-    SysBusDevice parent_obj;
-    qemu_irq enabled;
-    uint32_t regs[0x1000 / 4];
-    RegisterInfo regs_info[DPHY_REG_MAX];
-    RegisterInfoArray *reg_array;
 };
 
 static void isp_update_irq(RK3566ISPState *s)
@@ -643,196 +624,10 @@ static void isp_class_init(ObjectClass *class, const void *data)
     device_class_set_props(device, isp_properties);
 }
 
-static void gc2093_reset(DeviceState *device)
-{
-    GC2093State *s = GC2093(device);
-    memset(s->regs, 0, sizeof(s->regs));
-    s->regs[0x3f0] = 0x20;
-    s->regs[0x3f1] = 0x93;
-    s->regs[0x3e] = 0x11;
-    s->address = s->address_bytes = 0;
-    qemu_set_irq(s->streaming, 0);
-}
-
-static int gc2093_event(I2CSlave *slave, enum i2c_event event)
-{
-    GC2093State *s = GC2093(slave);
-    if ((event == I2C_START_SEND || event == I2C_START_RECV) &&
-        (!s->powered || !s->resetn)) {
-        return 1;
-    }
-    if (event == I2C_START_SEND) {
-        s->address_bytes = 0;
-    }
-    return 0;
-}
-
-static int gc2093_send(I2CSlave *slave, uint8_t value)
-{
-    GC2093State *s = GC2093(slave);
-    if (s->address_bytes < 2) {
-        s->address = (s->address << 8) | value;
-        s->address_bytes++;
-    } else {
-        if (s->address == 0x3fe && value == 0xf0) {
-            gc2093_reset(DEVICE(s));
-            return 0;
-        }
-        if (s->address != 0x3f0 && s->address != 0x3f1) {
-            s->regs[s->address] = value;
-        }
-        if (s->address == 0x3e) {
-            qemu_set_irq(s->streaming,
-                         s->powered && s->resetn && value == 0x91);
-        }
-        s->address++;
-    }
-    return 0;
-}
-
-static uint8_t gc2093_recv(I2CSlave *slave)
-{
-    GC2093State *s = GC2093(slave);
-    return s->regs[s->address++];
-}
-
-static void gc2093_power(void *opaque, int line, int level)
-{
-    GC2093State *s = GC2093(opaque);
-    s->powered = level;
-    if (!level) {
-        gc2093_reset(DEVICE(s));
-    }
-}
-
-static void gc2093_resetn(void *opaque, int line, int level)
-{
-    GC2093State *s = GC2093(opaque);
-    s->resetn = level;
-    if (!level) {
-        gc2093_reset(DEVICE(s));
-    }
-}
-
-static void gc2093_init(Object *object)
-{
-    qdev_init_gpio_out_named(DEVICE(object), &GC2093(object)->streaming,
-                             "streaming", 1);
-    qdev_init_gpio_in_named(DEVICE(object), gc2093_power, "power", 1);
-    qdev_init_gpio_in_named(DEVICE(object), gc2093_resetn, "resetn", 1);
-}
-
-static const VMStateDescription gc2093_vmstate = {
-    .name = TYPE_GC2093, .version_id = 1, .minimum_version_id = 1,
-    .fields = (const VMStateField[]) {
-        VMSTATE_I2C_SLAVE(parent_obj, GC2093State),
-        VMSTATE_UINT8_ARRAY(regs, GC2093State, 0x10000),
-        VMSTATE_UINT16(address, GC2093State),
-        VMSTATE_UINT8(address_bytes, GC2093State),
-        VMSTATE_BOOL(powered, GC2093State),
-        VMSTATE_BOOL(resetn, GC2093State),
-        VMSTATE_END_OF_LIST()
-    },
-};
-
-static void gc2093_class_init(ObjectClass *class, const void *data)
-{
-    DeviceClass *device = DEVICE_CLASS(class);
-    I2CSlaveClass *slave = I2C_SLAVE_CLASS(class);
-    device_class_set_legacy_reset(device, gc2093_reset);
-    device->vmsd = &gc2093_vmstate;
-    slave->event = gc2093_event;
-    slave->send = gc2093_send;
-    slave->recv = gc2093_recv;
-}
-
-static void dphy_ctrl_post_write(RegisterInfo *reg, uint64_t val)
-{
-    RK3566DPHYState *s = RK3566_DPHY(reg->opaque);
-
-    qemu_set_irq(s->enabled, (val & 0x4c) == 0x4c);
-}
-
-static const RegisterAccessInfo dphy_regs_info[] = {
-    { .name = "LANE_ENABLE", .addr = 0, .reset = 1,
-      .post_write = dphy_ctrl_post_write },
-};
-
-static uint64_t dphy_read(void *opaque, hwaddr address, unsigned size)
-{
-    RegisterInfoArray *reg_array = opaque;
-    RK3566DPHYState *s = RK3566_DPHY(register_array_get_owner(reg_array));
-
-    if (address == 0) {
-        return register_read_memory(reg_array, address, size);
-    }
-    return s->regs[address / 4];
-}
-
-static void dphy_write(void *opaque, hwaddr address, uint64_t value,
-                       unsigned size)
-{
-    RegisterInfoArray *reg_array = opaque;
-    RK3566DPHYState *s = RK3566_DPHY(register_array_get_owner(reg_array));
-
-    if (address == 0) {
-        register_write_memory(reg_array, address, value, size);
-        return;
-    }
-    s->regs[address / 4] = value;
-}
-
-static const MemoryRegionOps dphy_ops = {
-    .read = dphy_read, .write = dphy_write, .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 4, .valid.max_access_size = 4,
-};
-
-static void dphy_reset(DeviceState *device)
-{
-    RK3566DPHYState *s = RK3566_DPHY(device);
-
-    memset(s->regs, 0, sizeof(s->regs));
-    register_reset(&s->regs_info[DPHY_REG_CTRL]);
-    qemu_set_irq(s->enabled, 0);
-}
-
-static void dphy_init(Object *object)
-{
-    RK3566DPHYState *s = RK3566_DPHY(object);
-
-    s->reg_array = register_init_block32(DEVICE(object), dphy_regs_info,
-                                         ARRAY_SIZE(dphy_regs_info),
-                                         s->regs_info, s->regs,
-                                         &dphy_ops, false, 0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->reg_array->mem);
-    qdev_init_gpio_out_named(DEVICE(s), &s->enabled, "link-enabled", 1);
-}
-
-static const VMStateDescription dphy_vmstate = {
-    .name = TYPE_RK3566_DPHY, .version_id = 1, .minimum_version_id = 1,
-    .fields = (const VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(regs, RK3566DPHYState, 0x1000 / 4),
-        VMSTATE_END_OF_LIST()
-    },
-};
-
-static void dphy_class_init(ObjectClass *class, const void *data)
-{
-    DeviceClass *device = DEVICE_CLASS(class);
-    device_class_set_legacy_reset(device, dphy_reset);
-    device->vmsd = &dphy_vmstate;
-}
-
-static const TypeInfo camera_types[] = {
+static const TypeInfo isp_types[] = {
     { .name = TYPE_RK3566_ISP, .parent = TYPE_SYS_BUS_DEVICE,
       .instance_size = sizeof(RK3566ISPState), .instance_init = isp_init,
       .instance_finalize = isp_finalize, .class_init = isp_class_init },
-    { .name = TYPE_GC2093, .parent = TYPE_I2C_SLAVE,
-      .instance_size = sizeof(GC2093State), .instance_init = gc2093_init,
-      .class_init = gc2093_class_init },
-    { .name = TYPE_RK3566_DPHY, .parent = TYPE_SYS_BUS_DEVICE,
-      .instance_size = sizeof(RK3566DPHYState), .instance_init = dphy_init,
-      .class_init = dphy_class_init },
 };
 
-DEFINE_TYPES(camera_types)
+DEFINE_TYPES(isp_types)

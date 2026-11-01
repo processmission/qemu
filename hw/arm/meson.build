@@ -1,5 +1,4 @@
 arm_common_ss = ss.source_set()
-subdir('rk3566')
 arm_common_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c'))
 arm_common_ss.add(when: 'CONFIG_AX650X_PYRAMID',
                   if_true: files('ax650x.c', 'ax650x-dwmac.c'))
@@ -23,6 +22,8 @@ arm_common_ss.add(when: 'CONFIG_PHYTIUM_POMELO',
 arm_common_ss.add(when: 'CONFIG_REALVIEW', if_true: files('realview.c'))
 arm_common_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa-ref.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588', if_true: files('rk3588.c'))
+arm_common_ss.add(when: 'CONFIG_RK3566', if_true: files('rk3566.c'))
+arm_common_ss.add(when: 'CONFIG_MICRODUCK', if_true: files('microduck.c'))
 arm_common_ss.add(when: 'CONFIG_ROCK5B', if_true: files('rock-5b.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588_EVB', if_true: files('rk3588-evb.c'))
 arm_common_ss.add(when: 'CONFIG_RK3588S_ROC_PC', if_true: files('rk3588s-roc-pc.c'))

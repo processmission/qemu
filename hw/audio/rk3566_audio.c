@@ -1,5 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* RK3566 I2S/TDM and PDM FIFOs, clocking, interrupts and DMA handshakes. */
+/*
+ * RK3566 I2S/TDM and PDM
+ *
+ * FIFOs, clocking, interrupts and DMA handshakes.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
 #include "qemu/audio.h"

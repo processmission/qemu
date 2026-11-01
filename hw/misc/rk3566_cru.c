@@ -1,5 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* RK3566 CRU/PMUCRU with RK3328-style PLLs and high-word register updates. */
+/*
+ * RK3566 CRU/PMUCRU
+ *
+ * RK3328-style PLLs, high-word register updates and the clock tree.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"

@@ -1,5 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* RK3566 RGA2 command DMA, page translation and image conversion. */
+/*
+ * RK3566 RGA2
+ *
+ * Command DMA, page translation and image conversion.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"

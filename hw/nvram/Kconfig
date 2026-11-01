@@ -42,3 +42,7 @@ config XLNX_EFUSE_ZYNQMP
 config XLNX_BBRAM
     bool
     select XLNX_EFUSE_CRC
+
+config RK3566_OTP
+    bool
+    select REGISTER

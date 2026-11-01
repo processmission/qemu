@@ -118,7 +118,7 @@ static void test_rk3566_cru_fractional_write(void)
                              RK3566_CRU_CLKSEL(15)), ==, 0x403);
     g_assert_cmphex(cru_read(qts, RK3566_CRU_BASE,
                              RK3566_CRU_CLKSEL(16)), ==, 0x00800c35);
-    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/cru/mclk-i2s1",
+    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/soc/cru/mclk-i2s1",
                                            "qtest-clock-period"), ==,
                      (1000000000ULL << 32) / 12288000ULL);
 
@@ -153,7 +153,7 @@ static void test_rk3566_cru_clock_gate(void)
 {
     QTestState *qts = rk3566_qtest_start();
 
-    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/cru/sclk-spi3",
+    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/soc/cru/sclk-spi3",
                                            "qtest-clock-period"), ==,
                      RK3566_CRU_SPI3_PERIOD);
     /* Bit 1 of CLKGATE_CON31 gates SCLK_SPI3. */
@@ -161,12 +161,12 @@ static void test_rk3566_cru_clock_gate(void)
               ((1u << 1) << 16) | (1u << 1));
     g_assert_cmphex(cru_read(qts, RK3566_CRU_BASE,
                              RK3566_CRU_CLKGATE(31)), ==, 0x2);
-    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/cru/sclk-spi3",
+    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/soc/cru/sclk-spi3",
                                            "qtest-clock-period"), ==, 0);
     cru_write(qts, RK3566_CRU_BASE, RK3566_CRU_CLKGATE(31), 1u << 17);
     g_assert_cmphex(cru_read(qts, RK3566_CRU_BASE,
                              RK3566_CRU_CLKGATE(31)), ==, 0);
-    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/cru/sclk-spi3",
+    g_assert_cmpuint(rk3566_qom_get_uint64(qts, "/machine/soc/cru/sclk-spi3",
                                            "qtest-clock-period"), ==,
                      RK3566_CRU_SPI3_PERIOD);
 

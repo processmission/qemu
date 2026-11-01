@@ -4,3 +4,7 @@ config STM32F2XX_ADC
 config STC8G_ADC
     bool
     select REGISTER
+
+config RK3566_SARADC
+    bool
+    select REGISTER

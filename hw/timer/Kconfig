@@ -76,3 +76,8 @@ config STC8G_PCA
 
 config AVR_TIMER16
     bool
+
+config RK3566_TIMER
+    bool
+    select PTIMER
+    select REGISTER

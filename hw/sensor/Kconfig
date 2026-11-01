@@ -43,3 +43,19 @@ config ISL_PMBUS_VR
 config MAX31785
     bool
     depends on PMBUS
+
+config RK3566_TSADC
+    bool
+    select REGISTER
+
+config LSM6DSV16X
+    bool
+    select I2C
+
+config VL53L8CX
+    bool
+    select SSI
+
+config GC2093
+    bool
+    select I2C

@@ -44,7 +44,7 @@
 #define RK3566_PDM_INT_ST 0x024
 #define RK3566_PDM_RXFIFO_DATA 0x030
 
-#define RK3566_GIC_QOM "/machine/gic"
+#define RK3566_GIC_QOM "/machine/soc/gic"
 
 static uint32_t i2s_read(QTestState *qts, uint32_t offset)
 {
@@ -68,9 +68,9 @@ static void pdm_write(QTestState *qts, uint32_t offset, uint32_t value)
 
 static bool rk3566_audio_available(QTestState *qts)
 {
-    g_autofree char *i2s = rk3566_qom_child_object_type(qts, "/machine",
+    g_autofree char *i2s = rk3566_qom_child_object_type(qts, "/machine/soc",
                                                         "i2s1");
-    g_autofree char *pdm = rk3566_qom_child_object_type(qts, "/machine",
+    g_autofree char *pdm = rk3566_qom_child_object_type(qts, "/machine/soc",
                                                         "pdm");
 
     return i2s && pdm;
@@ -88,8 +88,8 @@ static void test_rk3566_audio_reset_values(void)
         return;
     }
 
-    i2s = rk3566_qom_child_object_type(qts, "/machine", "i2s1");
-    pdm = rk3566_qom_child_object_type(qts, "/machine", "pdm");
+    i2s = rk3566_qom_child_object_type(qts, "/machine/soc", "i2s1");
+    pdm = rk3566_qom_child_object_type(qts, "/machine/soc", "pdm");
     g_assert_cmpstr(i2s, ==, "rk3566-i2s-tdm");
     g_assert_cmpstr(pdm, ==, "rk3566-pdm");
 

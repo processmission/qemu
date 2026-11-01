@@ -1,8 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * ST25R100 SPI register interface, oscillator and ISO14443 no-response
- * timer.
+ * ST25R100 NFC frontend
+ *
+ * SPI register interface, oscillator and ISO14443 no-response timer.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"

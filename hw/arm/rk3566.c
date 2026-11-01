@@ -1,81 +1,46 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* RK3566 MicroDuck beta board, using the vendor Linux device addresses. */
+/*
+ * Rockchip RK3566 SoC
+ *
+ * The CPU cluster, GIC, clock and reset unit, DMA controllers, bus
+ * controllers and the on-chip peripherals modeled by this series.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 
 #include "qemu/osdep.h"
-#include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qemu/units.h"
-#include "qemu/timer.h"
-#include <libfdt.h>
 #include "qapi/error.h"
-#include "qapi/visitor.h"
-#include "chardev/char.h"
-#include "hw/arm/boot.h"
+#include "qobject/qlist.h"
 #include "hw/arm/bsa.h"
-#include "hw/arm/machines-qom.h"
-#include "hw/char/dw8250.h"
-#include "hw/core/boards.h"
-#include "hw/core/qdev-properties.h"
-#include "hw/core/qdev-properties-system.h"
+#include "hw/arm/rk3566.h"
 #include "hw/core/irq.h"
 #include "hw/core/or-irq.h"
 #include "hw/core/qdev-clock.h"
-#include "hw/cpu/cluster.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/sysbus.h"
 #include "hw/gpio/rockchip_gpio.h"
 #include "hw/i2c/rk3x_i2c.h"
-#include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
-#include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/misc/rockchip_iommu.h"
-#include "hw/sd/sd.h"
+#include "hw/misc/rockchip_syscon.h"
 #include "hw/sd/dw_mmc.h"
-#include "hw/sd/sdhci.h"
 #include "hw/sd/rockchip_dwcmshc.h"
-#include "hw/usb/dwc3-udc.h"
+#include "hw/sd/sd.h"
+#include "hw/sd/sdhci.h"
 #include "hw/ssi/rockchip_spi.h"
+#include "hw/usb/dwc3-udc.h"
 #include "hw/watchdog/k230_wdt.h"
-#include "qobject/qlist.h"
-#include "qom/object.h"
 #include "system/address-spaces.h"
-#include "system/block-backend.h"
-#include "system/blockdev.h"
-#include "system/device_tree.h"
-#include "system/system.h"
-#include "system/qtest.h"
 #include "target/arm/gtimer.h"
 #include "target/arm/internals.h"
 
-#define TYPE_MICRODUCK_MACHINE MACHINE_TYPE_NAME("microduck-beta")
-OBJECT_DECLARE_SIMPLE_TYPE(MicroDuckState, MICRODUCK_MACHINE)
-#define RK3566_CPUS 4
-#define RK3566_IRQS 320
-
-struct MicroDuckState {
-    MachineState parent_obj;
-    CPUClusterState cluster;
-    ARMCPU cpu[RK3566_CPUS];
-    GICv3State gic;
-    RK3588SCMIState *scmi;
-    MemoryRegion ram;
-    MemoryRegion debug;
-    uint32_t debug_regs[0x10000 / 4];
-    DeviceState *dma[2];
-    DW8250State *uart[4];
-    DeviceState *gpio[5];
-    DeviceState *cru;
-    DeviceState *spi[4];
-    DeviceState *isp;
-    MemoryRegion venc_mmu_window[2];
-    MemoryRegion dma_alias[2];
-    MemoryRegion qos[24];
-    uint32_t qos_regs[24][8];
-    struct arm_boot_info boot;
-};
-
 static uint64_t debug_read(void *opaque, hwaddr addr, unsigned size)
 {
-    MicroDuckState *s = opaque;
+    RK3566SoCState *s = opaque;
     unsigned cpu = (addr >> 12) & 3;
     uint64_t pc = s->cpu[cpu].env.pc;
     switch (addr & 0xfff) {
@@ -90,7 +55,7 @@ static uint64_t debug_read(void *opaque, hwaddr addr, unsigned size)
 static void debug_write(void *opaque, hwaddr addr, uint64_t value,
                         unsigned size)
 {
-    MicroDuckState *s = opaque;
+    RK3566SoCState *s = opaque;
     s->debug_regs[addr / 4] = value;
 }
 
@@ -117,7 +82,7 @@ static const MemoryRegionOps qos_ops = {
 
 static void uart_irq(void *opaque, int index, int level)
 {
-    MicroDuckState *s = opaque;
+    RK3566SoCState *s = opaque;
     SerialState *serial = &s->uart[index]->serial_mm.serial;
     qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->gic), 116 + index), level);
     if (s->dma[0]) {
@@ -128,7 +93,7 @@ static void uart_irq(void *opaque, int index, int level)
     }
 }
 
-static DeviceState *rk3566_device(MicroDuckState *s, const char *type,
+static DeviceState *rk3566_device(RK3566SoCState *s, const char *type,
                                 const char *name)
 {
     DeviceState *dev = qdev_new(type);
@@ -137,7 +102,7 @@ static DeviceState *rk3566_device(MicroDuckState *s, const char *type,
     return dev;
 }
 
-static void rk3566_map(MicroDuckState *s, DeviceState *dev, hwaddr address,
+static void rk3566_map(RK3566SoCState *s, DeviceState *dev, hwaddr address,
                       int irq)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
@@ -148,26 +113,7 @@ static void rk3566_map(MicroDuckState *s, DeviceState *dev, hwaddr address,
     }
 }
 
-static bool rk3566_smc(ARMCPU *cpu)
-{
-    MicroDuckState *s = MICRODUCK_MACHINE(qdev_get_machine());
-    CPUARMState *env = &cpu->env;
-    switch ((uint32_t)env->xregs[0]) {
-    case RK3588_SCMI_SMC_ID:
-        rk3588_scmi_handle_smc(s->scmi);
-        env->xregs[0] = 0;
-        return true;
-    case 0x82000009: /* Shared context page for the IRQ-mode debug console. */
-    case 0xc2000005:
-        env->xregs[0] = 0;
-        env->xregs[1] = 0x110000;
-        return true;
-    default:
-        return false;
-    }
-}
-
-static void rk3566_cpus(MicroDuckState *s)
+static void rk3566_cpus(RK3566SoCState *s)
 {
     object_initialize_child(OBJECT(s), "gic", &s->gic, TYPE_ARM_GICV3);
     DeviceState *gic = DEVICE(&s->gic);
@@ -231,9 +177,11 @@ static void rk3566_cpus(MicroDuckState *s)
     rk3566_map(s, its, 0xfd440000, -1);
 }
 
-static void rk3566_storage(MicroDuckState *s)
+
+static void rk3566_storage(RK3566SoCState *s)
 {
     DeviceState *host = rk3566_device(s, TYPE_SYSBUS_SDHCI, "emmc");
+
     qdev_prop_set_uint8(host, "sd-spec-version", 3);
     qdev_prop_set_uint64(host, "capareg", 0x280737ec6481);
     object_property_set_uint(OBJECT(host), "uhs", UHS_I, &error_abort);
@@ -243,17 +191,10 @@ static void rk3566_storage(MicroDuckState *s)
     DeviceState *vendor = rk3566_device(s, TYPE_ROCKCHIP_DWCMSHC_VENDOR,
                                         "emmc-vendor");
     rk3566_map(s, vendor, 0xfe310000 + ROCKCHIP_DWCMSHC_VENDOR_BASE, -1);
-    DriveInfo *drive = drive_get(IF_SD, 0, 0);
-    if (drive) {
-        DeviceState *card = qdev_new(TYPE_EMMC);
-        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(drive),
-                                &error_fatal);
-        qdev_realize_and_unref(card, qdev_get_child_bus(host, "sd-bus"),
-                               &error_fatal);
-    }
+    s->sdhci = host;
 }
 
-static void rk3566_dma(MicroDuckState *s)
+static void rk3566_dma(RK3566SoCState *s)
 {
     for (unsigned i = 0; i < 2; i++) {
         g_autofree char *name = g_strdup_printf("dmac%u", i);
@@ -284,65 +225,14 @@ static void rk3566_dma(MicroDuckState *s)
     }
 }
 
-static void rk3566_boot_dtb(const struct arm_boot_info *info, void *fdt)
+static void rk3566_soc_realize(DeviceState *dev, Error **errp)
 {
-    const char *node = "/reserved-memory/scmi@10f000";
-    qemu_fdt_add_subnode(fdt, node);
-    qemu_fdt_setprop_cells(fdt, node, "reg", 0, 0x10f000, 0, 0x1000);
-    qemu_fdt_setprop(fdt, node, "no-map", NULL, 0);
-    qemu_fdt_setprop_cell(fdt, "/fiq-debugger", "rockchip,serial-id", 3);
-    /* QEMU's PSCI firmware implements WFI retention, without power-down. */
-    for (unsigned i = 0; i < RK3566_CPUS; i++) {
-        g_autofree char *cpu = g_strdup_printf("/cpus/cpu@%x", i << 8);
-        int offset = fdt_path_offset(fdt, cpu);
-        if (offset >= 0) {
-            fdt_delprop(fdt, offset, "cpu-idle-states");
-        }
-    }
-    /* The control board configuration exposes the implemented peripherals. */
-    const char *absent[] = {
-        "/gpu@fde60000", "/gpu-mali@fde60000",
-        "/video-codec@fdea0400", "/vdpu@fdea0400", "/jpegd@fded0000",
-        "/vepu@fdee0000", "/iep@fdef0000", "/rkvdec@fdf80200",
-        "/rkcif@fdfe0000",
-        "/rkcif_dvp", "/rkcif_dvp_sditf", "/rkcif_mipi_lvds",
-        "/rkcif_mipi_lvds_sditf",
-        "/display-subsystem", "/mipi-csi2", "/mipi-csi2-hw@fdfb0000",
-    };
-    for (unsigned i = 0; i < ARRAY_SIZE(absent); i++) {
-        if (fdt_path_offset(fdt, absent[i]) >= 0) {
-            qemu_fdt_setprop_string(fdt, absent[i], "status", "disabled");
-        }
-    }
-    node = "/virtio@ffe00000";
-    qemu_fdt_add_subnode(fdt, node);
-    qemu_fdt_setprop_string(fdt, node, "compatible", "virtio,mmio");
-    qemu_fdt_setprop_cells(fdt, node, "reg", 0, 0xffe00000, 0, 0x200);
-    qemu_fdt_setprop_cells(fdt, node, "interrupts", 0, 257, 4);
-    qemu_fdt_setprop(fdt, node, "dma-coherent", NULL, 0);
-}
-
-static void microduck_init(MachineState *ms)
-{
-    MicroDuckState *s = MICRODUCK_MACHINE(ms);
-    if (!ms->kernel_filename && !qtest_enabled()) {
-        error_report("microduck-beta requires a kernel or firmware ELF "
-                     "via -kernel");
-        exit(EXIT_FAILURE);
-    }
+    RK3566SoCState *s = RK3566_SOC(dev);
     bool media = object_class_by_name("rk3566-isp") &&
                  object_class_by_name("rk3566-csi-dphy") &&
                  object_class_by_name("rk3566-rga2") &&
                  object_class_by_name("rk3566-rkvenc");
 
-    if (!media && !qtest_enabled()) {
-        error_report("microduck-beta requires the RK3566 media devices; "
-                     "install libavcodec, libavutil, libswscale and x264");
-        exit(EXIT_FAILURE);
-    }
-    memory_region_init_alias(&s->ram, OBJECT(s), "rk3566.ram", ms->ram, 0,
-                             ms->ram_size);
-    memory_region_add_subregion(get_system_memory(), 0, &s->ram);
     rk3566_cpus(s);
     memory_region_init_io(&s->debug, OBJECT(s), &debug_ops, s,
                           "rk3566-debug", 0x10000);
@@ -359,18 +249,20 @@ static void microduck_init(MachineState *ms)
                               s->qos_regs[i], name, 0x20);
         memory_region_add_subregion(get_system_memory(), qos[i], &s->qos[i]);
     }
+
     s->cru = rk3566_device(s, "rk3566-cru", "cru");
     rk3566_map(s, s->cru, 0xfdd20000, -1);
-    DeviceState *pmucru = rk3566_device(s, "rk3566-cru", "pmucru");
-    qdev_prop_set_bit(pmucru, "pmu", true);
-    rk3566_map(s, pmucru, 0xfdd00000, -1);
+    s->pmucru = rk3566_device(s, "rk3566-cru", "pmucru");
+    qdev_prop_set_bit(s->pmucru, "pmu", true);
+    rk3566_map(s, s->pmucru, 0xfdd00000, -1);
+
     const hwaddr uart_base[] = { 0xfdd50000, 0xfe650000,
                                  0xfe660000, 0xfe670000 };
     const int uart_irqs[] = { 116, 117, 118, 119 };
+
     for (unsigned i = 0; i < ARRAY_SIZE(uart_base); i++) {
-        g_autofree char *name = g_strdup_printf("uart%u", i);
-        DeviceState *uart = rk3566_device(s, TYPE_DW8250, name);
-        s->uart[i] = DW8250(uart);
+        DeviceState *uart = DEVICE(s->uart[i]);
+
         qdev_prop_set_uint32(uart, "baudbase", 24000000 / 16);
         qdev_prop_set_uint32(uart, "fifo-size", 64);
         if (i > 0) {
@@ -379,12 +271,14 @@ static void microduck_init(MachineState *ms)
             qdev_connect_clock_in(uart, "uartclk",
                                   qdev_get_clock_out(s->cru, clock_name));
         }
-        qdev_prop_set_chr(uart, "chardev",
-                          serial_hd(i == 2 ? 0 : i == 3 ? 1 : i + 2));
-        rk3566_map(s, uart, uart_base[i], uart_irqs[i]);
+        sysbus_realize(SYS_BUS_DEVICE(uart), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(uart), 0, uart_base[i]);
         sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
                            qemu_allocate_irq(uart_irq, s, i));
+        sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
+                           qdev_get_gpio_in(DEVICE(&s->gic), uart_irqs[i]));
     }
+
     const hwaddr syscon[] = { 0xfdc20000, 0xfdc50000, 0xfdc60000,
         0xfdc80000, 0xfdc90000, 0xfdca0000, 0xfdcb0000,
         0xfe8a0000, 0xfe8b0000 };
@@ -401,7 +295,7 @@ static void microduck_init(MachineState *ms)
         s->gpio[i] = rk3566_device(s, TYPE_ROCKCHIP_GPIO, name);
         rk3566_map(s, s->gpio[i], gpio[i], 33 + i);
     }
-    const hwaddr i2c[] = { 0xfdd40000, 0xfe5a0000, 0xfe5b0000, 0xfe5c0000 };
+
     if (media) {
         DeviceState *isp_mmu = rk3566_device(s, TYPE_ROCKCHIP_IOMMU,
                                              "isp-mmu");
@@ -413,7 +307,8 @@ static void microduck_init(MachineState *ms)
         object_property_set_link(OBJECT(s->isp), "dma",
             OBJECT(rockchip_iommu_get_memory_region(
                 ROCKCHIP_IOMMU(isp_mmu))), &error_abort);
-        qdev_prop_set_chr(s->isp, "chardev", qemu_chr_find("camera"));
+        qdev_prop_set_chr(s->isp, "chardev",
+                          qemu_chr_find(s->camera_chardev));
         rk3566_map(s, s->isp, 0xfdff0000, 57);
         sysbus_connect_irq(SYS_BUS_DEVICE(s->isp), 1,
                            qdev_get_gpio_in(DEVICE(&s->gic), 58));
@@ -424,40 +319,16 @@ static void microduck_init(MachineState *ms)
         qdev_connect_gpio_out_named(dphy, "link-enabled", 0,
             qdev_get_gpio_in_named(s->isp, "link-enabled", 0));
     }
+
+    const hwaddr i2c[] = { 0xfdd40000, 0xfe5a0000, 0xfe5b0000, 0xfe5c0000 };
+
     for (unsigned i = 0; i < ARRAY_SIZE(i2c); i++) {
         g_autofree char *name = g_strdup_printf("i2c%u", i);
-        DeviceState *host = rk3566_device(s, TYPE_RK3X_I2C, name);
-        rk3566_map(s, host, i2c[i], 46 + i);
-        I2CBus *bus = I2C_BUS(qdev_get_child_bus(host, "i2c-bus"));
-        if (i == 0 || i == 3) {
-            I2CSlave *dev = i2c_slave_new("microduck-register-i2c", 0x20);
-            qdev_prop_set_uint32(DEVICE(dev), "kind", i == 0 ? 0 : 2);
-            i2c_slave_realize_and_unref(dev, bus, &error_fatal);
-            qdev_connect_gpio_out_named(DEVICE(dev), "nirq", 0,
-                qdev_get_gpio_in(s->gpio[i == 0 ? 0 : 4], i == 0 ? 3 : 23));
-        }
-        if (i == 0) {
-            I2CSlave *dev = i2c_slave_new("microduck-register-i2c", 0x41);
-            qdev_prop_set_uint32(DEVICE(dev), "kind", 1);
-            i2c_slave_realize_and_unref(dev, bus, &error_fatal);
-        }
-        if (i == 3) {
-            I2CSlave *imu = i2c_slave_new("microduck-lsm6dsv16x", 0x6a);
-            qdev_prop_set_chr(DEVICE(imu), "chardev",
-                              qemu_chr_find("head-imu"));
-            i2c_slave_realize_and_unref(imu, bus, &error_fatal);
-        }
-        if (i == 2 && media) {
-            I2CSlave *camera = i2c_slave_new("microduck-gc2093", 0x37);
-            i2c_slave_realize_and_unref(camera, bus, &error_fatal);
-            qdev_connect_gpio_out_named(DEVICE(camera), "streaming", 0,
-                qdev_get_gpio_in_named(s->isp, "sensor-stream", 0));
-            qdev_connect_gpio_out_named(s->gpio[3], "gpio-out", 22,
-                qdev_get_gpio_in_named(DEVICE(camera), "power", 0));
-            qdev_connect_gpio_out_named(s->gpio[4], "gpio-out", 17,
-                qdev_get_gpio_in_named(DEVICE(camera), "resetn", 0));
-        }
+
+        s->i2c[i] = rk3566_device(s, TYPE_RK3X_I2C, name);
+        rk3566_map(s, s->i2c[i], i2c[i], 46 + i);
     }
+
     DeviceState *scmi = rk3566_device(s, TYPE_RK3588_SCMI, "scmi");
     qdev_prop_set_string(scmi, "soc", "rk3566");
     s->scmi = RK3588_SCMI(scmi);
@@ -465,11 +336,12 @@ static void microduck_init(MachineState *ms)
     memory_region_add_subregion_overlap(get_system_memory(), 0x10f000,
                                         sysbus_mmio_get_region(
                                             SYS_BUS_DEVICE(scmi), 0), 1);
-    arm_register_psci_smc_handler(rk3566_smc);
+
     rk3566_storage(s);
-    rk3566_map(s, rk3566_device(s, TYPE_DW_MMC, "sdio"), 0xfe2c0000, 99);
-    rk3566_map(s, rk3566_device(s, "virtio-mmio", "management"),
-               0xffe00000, 257);
+
+    s->sdio = rk3566_device(s, TYPE_DW_MMC, "sdio");
+    rk3566_map(s, s->sdio, 0xfe2c0000, 99);
+
     for (unsigned i = 1; i <= 3; i += 2) {
         g_autofree char *name = g_strdup_printf("spi%u", i);
         g_autofree char *clock = g_strdup_printf("sclk-spi%u", i);
@@ -482,19 +354,7 @@ static void microduck_init(MachineState *ms)
         qdev_connect_gpio_out_named(s->spi[i], "dma-busy", 1,
                                     qdev_get_gpio_in(s->dma[0], 21 + i * 2));
     }
-    DeviceState *nfc = ssi_create_peripheral(ROCKCHIP_SPI(s->spi[1])->spi,
-                                             "microduck-st25r100");
-    qdev_connect_gpio_out_named(s->gpio[3], "gpio-out", 1,
-                                qdev_get_gpio_in_named(nfc, SSI_GPIO_CS, 0));
-    qdev_connect_gpio_out_named(s->gpio[3], "gpio-out", 21,
-                                qdev_get_gpio_in_named(nfc, "reset", 0));
-    qdev_connect_gpio_out_named(nfc, "irq", 0,
-                                qdev_get_gpio_in(s->gpio[3], 20));
-    DeviceState *tof = qdev_new("microduck-vl53l8cx");
-    qdev_prop_set_chr(tof, "chardev", qemu_chr_find("tof-data"));
-    ssi_realize_and_unref(tof, ROCKCHIP_SPI(s->spi[3])->spi, &error_fatal);
-    qdev_connect_gpio_out_named(s->spi[3], "cs", 0,
-                                qdev_get_gpio_in_named(tof, SSI_GPIO_CS, 0));
+
     rk3566_map(s, rk3566_device(s, "rk3566-system", "pmu"), 0xfdd90000, -1);
     DeviceState *rng = rk3566_device(s, "rk3566-system", "rng");
     qdev_prop_set_bit(rng, "rng", true);
@@ -506,10 +366,10 @@ static void microduck_init(MachineState *ms)
         qdev_prop_set_bit(dev, "pvtm", true);
         rk3566_map(s, dev, pvtm[i], -1);
     }
-    DeviceState *usb = rk3566_device(s, TYPE_DWC3_UDC, "usb-otg");
-    qdev_prop_set_chr(usb, "chardev", serial_hd(4));
-    qdev_prop_set_bit(usb, "host-connected", false);
-    rk3566_map(s, usb, 0xfcc00000, 169);
+
+    qdev_prop_set_bit(s->usb, "host-connected", false);
+    rk3566_map(s, s->usb, 0xfcc00000, 169);
+
     DeviceState *i2s1 = rk3566_device(s, "rk3566-i2s-tdm", "i2s1");
     qdev_connect_clock_in(i2s1, "mclk",
                           qdev_get_clock_out(s->cru, "mclk-i2s1"));
@@ -583,49 +443,53 @@ static void microduck_init(MachineState *ms)
     ptimer_set_freq(K230_WDT(wdt)->timer, 24000000);
     ptimer_transaction_commit(K230_WDT(wdt)->timer);
     rk3566_map(s, rk3566_device(s, "rk3566-timer", "timer0"), 0xfe5f0000, 109);
-    if (!ms->kernel_filename) {
-        return;
+}
+
+static void rk3566_soc_instance_init(Object *obj)
+{
+    RK3566SoCState *s = RK3566_SOC(obj);
+
+    for (unsigned i = 0; i < RK3566_NUM_UARTS; i++) {
+        g_autofree char *name = g_strdup_printf("uart%u", i);
+        g_autofree char *alias = g_strdup_printf("uart%u-chardev", i);
+
+        s->uart[i] = DW8250(qdev_new(TYPE_DW8250));
+        object_property_add_child(obj, name, OBJECT(s->uart[i]));
+        object_property_add_alias(obj, alias, OBJECT(s->uart[i]), "chardev");
+        object_unref(OBJECT(s->uart[i]));
     }
-    s->boot.ram_size = ms->ram_size;
-    s->boot.loader_start = 0;
-    s->boot.board_id = -1;
-    s->boot.psci_conduit = QEMU_PSCI_CONDUIT_SMC;
-    s->boot.modify_dtb = rk3566_boot_dtb;
-    arm_load_kernel(&s->cpu[0], ms, &s->boot);
+
+    s->usb = qdev_new(TYPE_DWC3_UDC);
+    object_property_add_child(obj, "usb-otg", OBJECT(s->usb));
+    object_property_add_alias(obj, "usb-chardev", OBJECT(s->usb), "chardev");
+    object_unref(OBJECT(s->usb));
 }
 
-static void microduck_get_virtual_clock(Object *obj, Visitor *v,
-                                       const char *name, void *opaque,
-                                       Error **errp)
-{
-    uint64_t value = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-
-    visit_type_uint64(v, name, &value, errp);
-}
-
-static void microduck_class_init(ObjectClass *oc, const void *data)
-{
-    MachineClass *mc = MACHINE_CLASS(oc);
-    mc->desc = "Pollen MicroDuck beta (Rockchip RK3566)";
-    mc->init = microduck_init;
-    mc->default_ram_size = GiB;
-    mc->default_ram_id = "microduck.ram";
-    mc->min_cpus = mc->default_cpus = mc->max_cpus = RK3566_CPUS;
-    mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-a55");
-    object_class_property_add(oc, "virtual-clock-ns", "uint64",
-                              microduck_get_virtual_clock, NULL, NULL, NULL);
-}
-
-static const TypeInfo microduck_info = {
-    .name = TYPE_MICRODUCK_MACHINE,
-    .parent = TYPE_MACHINE,
-    .interfaces = aarch64_machine_interfaces,
-    .instance_size = sizeof(MicroDuckState),
-    .class_init = microduck_class_init,
+static const Property rk3566_soc_properties[] = {
+    DEFINE_PROP_LINK("memory", RK3566SoCState, memory, TYPE_MEMORY_REGION,
+                     MemoryRegion *),
+    DEFINE_PROP_STRING("camera-chardev", RK3566SoCState, camera_chardev),
 };
 
-static void microduck_register(void)
+static void rk3566_soc_class_init(ObjectClass *oc, const void *data)
 {
-    type_register_static(&microduck_info);
+    DeviceClass *dc = DEVICE_CLASS(oc);
+
+    dc->realize = rk3566_soc_realize;
+    device_class_set_props(dc, rk3566_soc_properties);
 }
-type_init(microduck_register)
+
+static const TypeInfo rk3566_soc_info = {
+    .name = TYPE_RK3566_SOC,
+    .parent = TYPE_DEVICE,
+    .instance_size = sizeof(RK3566SoCState),
+    .instance_init = rk3566_soc_instance_init,
+    .class_init = rk3566_soc_class_init,
+};
+
+static void rk3566_soc_register_types(void)
+{
+    type_register_static(&rk3566_soc_info);
+}
+
+type_init(rk3566_soc_register_types)

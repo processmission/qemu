@@ -143,4 +143,13 @@ endif
 
 system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_lcdc.c'))
 
+rk3566_rga_ss = ss.source_set()
+rk3566_rga_libavutil = dependency('libavutil', required: false)
+rk3566_rga_libswscale = dependency('libswscale', required: false)
+if rk3566_rga_libavutil.found() and rk3566_rga_libswscale.found()
+  rk3566_rga_ss.add(files('rk3566_rga.c'), rk3566_rga_libavutil,
+                    rk3566_rga_libswscale)
+endif
+system_ss.add_all(when: 'CONFIG_RK3566_RGA', if_true: rk3566_rga_ss)
+
 modules += { 'hw-display': hw_display_modules }

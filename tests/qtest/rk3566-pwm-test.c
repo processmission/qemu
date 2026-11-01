@@ -51,9 +51,9 @@ static void test_pwm_reset_values(void)
 static void test_pwm_dual_instances(void)
 {
     QTestState *qts = rk3566_qtest_start();
-    g_autofree char *first = rk3566_qom_child_object_type(qts, "/machine",
+    g_autofree char *first = rk3566_qom_child_object_type(qts, "/machine/soc",
                                                           "pwm4-7");
-    g_autofree char *second = rk3566_qom_child_object_type(qts, "/machine",
+    g_autofree char *second = rk3566_qom_child_object_type(qts, "/machine/soc",
                                                            "pwm8-11");
 
     g_assert_cmpstr(first, ==, "rk3566-pwm");

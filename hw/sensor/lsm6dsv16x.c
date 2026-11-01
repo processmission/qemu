@@ -1,5 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-/* LSM6DSV16X I2C registers and FIFO, fed by MuJoCo sensor records. */
+/*
+ * LSM6DSV16X IMU
+ *
+ * I2C registers and FIFO, fed by MuJoCo sensor records.
+ *
+ * Copyright (c) 2026 Process Mission
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/fifo8.h"
