@@ -9717,13 +9717,15 @@ static const VMStateDescription vmstate_rockchip_rknn_register_file = {
 
 static const VMStateDescription vmstate_rockchip_rknn = {
     .name = TYPE_ROCKCHIP_RKNN_CORE,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 1,
     .pre_save = rockchip_rknn_pre_save,
     .post_load = rockchip_rknn_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(pc_regs, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_PC_R_MAX),
+        VMSTATE_UINT32_ARRAY_V(amount_counts, RockchipRKNNCoreState,
+                               ROCKCHIP_RKNN_AMOUNT_COUNTERS, 2),
         VMSTATE_UINT32_ARRAY(cna_regs, RockchipRKNNCoreState,
                              ROCKCHIP_RKNN_CNA_R_MAX),
         VMSTATE_UINT32_ARRAY(core_regs, RockchipRKNNCoreState,
