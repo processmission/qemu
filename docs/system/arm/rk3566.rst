@@ -24,13 +24,46 @@ The first serial port is the Linux FIQ console and the second serial port
 connects to the Dynamixel control bus.  The optional ``bluetooth`` chardev
 serves the H4 Bluetooth transport on the third serial port.
 
-The ToF and camera inputs are provided by dedicated chardevs.  The
-``tof-data`` chardev receives 192-byte depth frames for the VL53L8CX
-sensor: 64 little-endian ``uint16`` millimetre values followed by 64
-target status bytes.  The ``camera`` chardev receives complete 640x360
-UYVY frames; the GC2093 sensor, CSI DPHY and ISP models convert them
-according to the guest format configuration and write them through the
-ISP IOMMU.
+The ToF input is provided by a dedicated ``tof-data`` chardev.  It
+receives 192-byte depth frames for the VL53L8CX sensor: 64 little-endian
+``uint16`` millimetre values followed by 64 target status bytes.
+
+Camera pipeline
+---------------
+
+The camera path is modelled with the GC2093 sensor on I2C2
+(``0xfe5b0000``, address ``0x37``), the RK3566 CSI DPHY at
+``0xfe870000`` and the RK3566 ISP at ``0xfdff0000``.  The ISP IOMMU at
+``0xfdff1a00`` translates the capture DMA addresses.  The GC2093 model
+implements the 16-bit register interface, chip identification
+(``0x2093``), soft reset, streaming control and register storage for the
+sensor mode table, exposure, VTS, mirror/flip and gain registers.  The
+streaming state is reported to the ISP through the model's streaming
+GPIO.
+
+The guest sees the ``rkisp_mainpath`` and ``rkisp_selfpath`` video nodes
+as ``/dev/video0`` and ``/dev/video1`` plus the remaining rkisp capture
+nodes.  The camera input is optional: the ``camera`` chardev receives
+complete 640x360 UYVY frames, and the ISP converts them to the guest
+output format and writes them through the ISP IOMMU.  Without the
+``camera`` chardev the sensor, DPHY and ISP still probe, while a guest
+stream waits for frames.  For example:
+
+.. code-block:: bash
+
+  $ qemu-system-aarch64 -M microduck-beta -m 1G \
+        -kernel Image -dtb rk3566-microduck-beta.dtb \
+        -drive if=sd,index=0,format=raw,file=microduck-beta.img \
+        -chardev socket,id=camera,path=/run/camera.sock,server=on,wait=off \
+        -serial mon:stdio
+
+Known camera limitations: the ISP converts the synthetic host frames and
+does not model the ISP processing blocks or the 3A statistics, so the
+captured image does not originate from the sensor Bayer data and camera
+tuning cannot run.  The rkcif and MIPI CSI2 host models are not
+implemented; the machine device tree fixup disables the corresponding
+nodes.  The raw write/read and iqtool video nodes are visible in the
+guest but do not produce data.
 
 .. list-table:: Modeled devices
    :header-rows: 1
@@ -63,9 +96,15 @@ ISP IOMMU.
    * - SPI3
      - ``0xfe640000``
      - VL53L8CX ToF sensor
+   * - I2C2
+     - ``0xfe5b0000``
+     - GC2093 camera sensor
+   * - CSI DPHY
+     - ``0xfe870000``
+     - MIPI CSI-2 D-PHY
    * - ISP
      - ``0xfdff0000``
-     - Image capture and format conversion
+     - Image capture, conversion and IOMMU write-out
    * - RGA2
      - ``0xfdeb0000``
      - Image scaling and conversion
