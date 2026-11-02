@@ -1101,6 +1101,7 @@ F: hw/ssi/rockchip_spi.c
 F: hw/timer/rk3566_timer.c
 F: include/hw/misc/rockchip_rknpu.h
 F: include/hw/ssi/rockchip_spi.h
+F: tests/functional/aarch64/test_microduck.py
 F: tests/qtest/rk3566-*
 F: tests/qtest/rockchip-spi-test.c
 
