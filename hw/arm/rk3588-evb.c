@@ -3386,7 +3386,7 @@ static void rk3588_create_rknpu(RK3588MachineState *s)
             ROCKCHIP_IOMMU(s->rknn_mmu[i]));
         SysBusDevice *sbd;
 
-        s->rknn[i] = qdev_new(TYPE_ROCKCHIP_RKNN_CORE);
+        s->rknn[i] = qdev_new(TYPE_RK3588_RKNPU);
         qdev_prop_set_uint32(s->rknn[i], "core-index", i);
         object_property_set_link(OBJECT(s->rknn[i]), "dma",
                                  OBJECT(dma_mr), &error_fatal);

@@ -10467,8 +10467,8 @@ int main(int argc, char **argv)
         g_test_skip(RK3588_EVB_MACHINE " machine not available");
         return 0;
     }
-    if (!qtest_has_device("rockchip.rk3588-rknn-core")) {
-        g_test_skip("rockchip.rk3588-rknn-core device not available");
+    if (!qtest_has_device("rk3588-rknpu")) {
+        g_test_skip("rk3588-rknpu device not available");
         return 0;
     }
 

@@ -202,6 +202,8 @@ system_ss.add(when: 'CONFIG_RK3588_FIRMWARE_MMIO', if_true: files('rk3588_firmwa
 system_ss.add(when: 'CONFIG_RK3588_GRF', if_true: files('rk3588_grf.c'))
 system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_IOMMU', if_true: files('rockchip_iommu.c'))
+system_ss.add(when: 'CONFIG_ROCKCHIP_RKNPU',
+              if_true: files('rockchip_rknpu.c'))
 system_ss.add(when: 'CONFIG_RK3588_RKNPU', if_true: files('rk3588_rknpu.c'))
 
 system_ss.add(when: 'CONFIG_RK3566_CRU', if_true: files('rk3566_cru.c'))

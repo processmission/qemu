@@ -16,6 +16,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/clock.h"
+#include "hw/core/irq.h"
 #include "migration/vmstate.h"
 
 #define TYPE_RK3566_CRU "rk3566-cru"
@@ -40,6 +41,7 @@ struct RK3566CRUState {
 
     bool pmu;
     bool resetting;
+    qemu_irq rknpu_reset;
 
     Clock *i2s1_tx;
     Clock *i2s1_rx;
@@ -242,6 +244,14 @@ static void cru_post_write(RegisterInfo *reg, uint64_t val)
 
     if (!s->resetting) {
         cru_update_clocks(s);
+    }
+    /*
+     * SRST_A_NPU (id 43) and SRST_H_NPU (id 44) live in SOFTRST_CON2
+     * bits 11 and 12 (16 resets per register).  Assert the NPU reset
+     * input while either bit is set.
+     */
+    if (reg->access->addr == SOFTRST_CON(2)) {
+        qemu_set_irq(s->rknpu_reset, !!(val & (BIT(11) | BIT(12))));
     }
 }
 
@@ -507,6 +517,7 @@ static void cru_reset(DeviceState *dev)
         register_reset(&s->regs_info[table[i].addr / 4]);
     }
     s->resetting = false;
+    qemu_set_irq(s->rknpu_reset, 0);
     cru_update_clocks(s);
 }
 
@@ -533,6 +544,7 @@ static void cru_init(Object *obj)
 
         s->uart[i] = qdev_init_clock_out(DEVICE(s), name);
     }
+    qdev_init_gpio_out_named(DEVICE(s), &s->rknpu_reset, "rknpu-reset", 1);
 }
 
 static void cru_realize(DeviceState *dev, Error **errp)
