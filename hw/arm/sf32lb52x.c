@@ -44,6 +44,30 @@ static const int sf32lb52x_usart_irq[SF32LB52X_NUM_USARTS] = {
     59, 74, 95,
 };
 
+static const int sf32lb52x_i2c_irq[SF32LB52X_NUM_I2C] = {
+    61, 76, 93, 78,
+};
+
+static const int sf32lb52x_spi_irq[SF32LB52X_NUM_SPI] = {
+    60, 75,
+};
+
+static const hwaddr sf32lb52x_mailbox_base[SF32LB52X_NUM_MAILBOX] = {
+    0x50082000, 0x40002000,
+};
+
+static const int sf32lb52x_mailbox_irq[SF32LB52X_NUM_MAILBOX] = {
+    58, 80,
+};
+
+static const hwaddr sf32lb52x_pwm_base[SF32LB52X_NUM_PWM] = {
+    0x50004000, 0x500b0000,
+};
+
+static const int sf32lb52x_pwm_irq[SF32LB52X_NUM_PWM] = {
+    94, 71,
+};
+
 /*
  * Peripheral windows that are not modeled. Accesses are logged as
  * unimplemented instead of faulting the guest, so that firmware which
@@ -54,28 +78,8 @@ static const struct {
     hwaddr base;
     hwaddr size;
 } sf32lb52x_unimplemented[] = {
-    { "sf32lb52x.atim",    0x50004000, 0x1000 },
-    { "sf32lb52x.lcdc",    0x50008000, 0x1000 },
-    { "sf32lb52x.efuse",   0x5000c000, 0x0100 },
     { "sf32lb52x.crypto",  0x5000d000, 0x1000 },
-    { "sf32lb52x.trng",    0x5000f000, 0x1000 },
     { "sf32lb52x.mpi1",    0x50041000, 0x1000 },
-    { "sf32lb52x.mpi2",    0x50042000, 0x1000 },
-    { "sf32lb52x.crc",     0x50048000, 0x1000 },
-    { "sf32lb52x.dmac",    0x50081000, 0x1000 },
-    { "sf32lb52x.mailbox", 0x50082000, 0x1000 },
-    { "sf32lb52x.gpadc",   0x50087000, 0x1000 },
-    { "sf32lb52x.audcodec", 0x50088000, 0x0400 },
-    { "sf32lb52x.tsen",    0x50089000, 0x1000 },
-    { "sf32lb52x.wdt",     0x50094000, 0x1000 },
-    { "sf32lb52x.spi1",    0x50095000, 0x1000 },
-    { "sf32lb52x.spi2",    0x50096000, 0x1000 },
-    { "sf32lb52x.i2c1",    0x5009c000, 0x1000 },
-    { "sf32lb52x.i2c2",    0x5009d000, 0x1000 },
-    { "sf32lb52x.i2c3",    0x5009e000, 0x1000 },
-    { "sf32lb52x.i2c4",    0x5009f000, 0x1000 },
-    { "sf32lb52x.gptim2",  0x500b0000, 0x1000 },
-    { "sf32lb52x.rtc",     0x500cb000, 0x1000 },
 };
 
 static uint64_t sf32lb52x_syscon_read(void *opaque, hwaddr addr,
@@ -221,6 +225,34 @@ static void sf32lb52x_soc_instance_init(Object *obj)
                                   "chardev");
     }
 
+    object_initialize_child(obj, "rtc", &s->rtc, TYPE_SF32LB52X_RTC);
+    object_initialize_child(obj, "wdt", &s->wdt, TYPE_SF32LB52X_WDT);
+    object_initialize_child(obj, "crc", &s->crc, TYPE_SF32LB52X_CRC);
+    object_initialize_child(obj, "trng", &s->trng, TYPE_SF32LB52X_TRNG);
+    object_initialize_child(obj, "tsen", &s->tsen, TYPE_SF32LB52X_TSEN);
+    object_initialize_child(obj, "gpadc", &s->gpadc, TYPE_SF32LB52X_GPADC);
+    object_initialize_child(obj, "efuse", &s->efuse, TYPE_SF32LB52X_EFUSE);
+    for (i = 0; i < SF32LB52X_NUM_I2C; i++) {
+        object_initialize_child(obj, "i2c[*]", &s->i2c[i],
+                                TYPE_SF32LB52X_I2C);
+    }
+    for (i = 0; i < SF32LB52X_NUM_SPI; i++) {
+        object_initialize_child(obj, "spi[*]", &s->spi[i],
+                                TYPE_SF32LB52X_SPI);
+    }
+    object_initialize_child(obj, "dmac", &s->dmac, TYPE_SF32LB52X_DMAC);
+    object_initialize_child(obj, "mpi2", &s->mpi, TYPE_SF32LB52X_MPI);
+    object_initialize_child(obj, "lcdc", &s->lcdc, TYPE_SF32LB52X_LCDC);
+    object_initialize_child(obj, "audcodec", &s->audcodec,
+                            TYPE_SF32LB52X_AUDCODEC);
+    for (i = 0; i < SF32LB52X_NUM_MAILBOX; i++) {
+        object_initialize_child(obj, "mailbox[*]", &s->mailbox[i],
+                                TYPE_SF32LB52X_MAILBOX);
+    }
+    for (i = 0; i < SF32LB52X_NUM_PWM; i++) {
+        object_initialize_child(obj, "pwm[*]", &s->pwm[i], TYPE_SF32LB52X_PWM);
+    }
+
     s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
 }
 
@@ -234,6 +266,29 @@ static void sf32lb52x_soc_reset_hold(Object *obj, ResetType type)
     memset(s->cfg.regs, 0, sizeof(s->cfg.regs));
     memset(s->pinmux.regs, 0, sizeof(s->pinmux.regs));
     memset(s->gpio.regs, 0, sizeof(s->gpio.regs));
+}
+
+/*
+ * Realize one of the small system peripherals, map its register window and
+ * route its interrupt to the NVIC when it has one.
+ */
+static bool sf32lb52x_simple_device_realize(DeviceState *soc,
+                                            DeviceState *dev, hwaddr base,
+                                            bool has_irq, int irq,
+                                            Error **errp)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+    sysbus_mmio_map(sbd, 0, base);
+    if (has_irq) {
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(DEVICE(&SF32LB52X_SOC(soc)->armv7m),
+                                            irq));
+    }
+    return true;
 }
 
 static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
@@ -253,7 +308,15 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    if (!memory_region_init_rom(&s->flash, OBJECT(dev), "sf32lb52x.flash",
+    /*
+     * RAM-backed: the MPI2 controller programs/erases this region through
+     * the NOR command engine, while the CPU still executes from it (XIP).
+     * Known simplification: a direct CPU store to the XIP window therefore
+     * succeeds (real NOR would ignore it), and a system reset re-copies the
+     * -kernel ROM blob over programmed data. Firmware programs the NOR via
+     * MPI2, and the boot ABI is unchanged.
+     */
+    if (!memory_region_init_ram(&s->flash, OBJECT(dev), "sf32lb52x.flash",
                                 SF32LB52X_FLASH_SIZE, errp)) {
         return;
     }
@@ -310,6 +373,109 @@ static void sf32lb52x_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(usart, 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m),
                                             sf32lb52x_usart_irq[i]));
+    }
+
+    object_property_set_link(OBJECT(&s->rtc), "cfg", OBJECT(&s->cfg.mmio),
+                             &error_abort);
+
+    if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->rtc),
+                                         SF32LB52X_RTC_BASE, true, 49,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->wdt),
+                                         SF32LB52X_WDT_BASE, true, 26,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->crc),
+                                         SF32LB52X_CRC_BASE, false, 0,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->trng),
+                                         SF32LB52X_TRNG_BASE, true, 69,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->tsen),
+                                         SF32LB52X_TSEN_BASE, false, 0,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->gpadc),
+                                         SF32LB52X_GPADC_BASE, true, 65,
+                                         errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->efuse),
+                                         SF32LB52X_EFUSE_BASE, false, 0,
+                                         errp)) {
+        return;
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_I2C; i++) {
+        DeviceState *i2c = DEVICE(&s->i2c[i]);
+        SysBusDevice *sbd = SYS_BUS_DEVICE(i2c);
+
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0,
+                        SF32LB52X_I2C1_BASE + i * SF32LB52X_USART_STRIDE);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            sf32lb52x_i2c_irq[i]));
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_SPI; i++) {
+        DeviceState *spi = DEVICE(&s->spi[i]);
+        SysBusDevice *sbd = SYS_BUS_DEVICE(spi);
+
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0,
+                        SF32LB52X_SPI1_BASE + i * SF32LB52X_USART_STRIDE);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            sf32lb52x_spi_irq[i]));
+    }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dmac), 0, SF32LB52X_DMAC_BASE);
+    for (i = 0; i < 8; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->dmac), i,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m), 50 + i));
+    }
+
+    object_property_set_link(OBJECT(&s->mpi), "nor", OBJECT(&s->flash),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->mpi), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mpi), 0, SF32LB52X_MPI2_BASE);
+
+    if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->lcdc),
+                                         SF32LB52X_LCDC_BASE, false, 0, errp) ||
+        !sf32lb52x_simple_device_realize(dev, DEVICE(&s->audcodec),
+                                         SF32LB52X_AUDCODEC_BASE, false, 0,
+                                         errp)) {
+        return;
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_MAILBOX; i++) {
+        /* MAILBOX1 has four channel blocks, LPSYS MAILBOX2 has two. */
+        object_property_set_uint(OBJECT(&s->mailbox[i]), "num-blocks",
+                                 i == 0 ? 4 : 2, &error_abort);
+        if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->mailbox[i]),
+                                             sf32lb52x_mailbox_base[i], true,
+                                             sf32lb52x_mailbox_irq[i],
+                                             errp)) {
+            return;
+        }
+    }
+
+    for (i = 0; i < SF32LB52X_NUM_PWM; i++) {
+        if (i == 1) {
+            object_property_set_bool(OBJECT(&s->pwm[i]), "gptim", true,
+                                     &error_abort);
+        }
+        if (!sf32lb52x_simple_device_realize(dev, DEVICE(&s->pwm[i]),
+                                             sf32lb52x_pwm_base[i], true,
+                                             sf32lb52x_pwm_irq[i], errp)) {
+            return;
+        }
     }
 
     sf32lb52x_create_unimplemented_devices(s->memory);

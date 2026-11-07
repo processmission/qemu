@@ -365,6 +365,21 @@ config SF32LB52X
     select ARM_V7M
     select SF32LB_USART
     select UNIMP
+    select SF32LB52X_RTC
+    select SF32LB52X_WDT
+    select SF32LB52X_CRC
+    select SF32LB52X_TRNG
+    select SF32LB52X_TSEN
+    select SF32LB52X_GPADC
+    select SF32LB52X_EFUSE
+    select SF32LB52X_I2C
+    select SF32LB52X_SPI
+    select SF32LB52X_DMAC
+    select SF32LB52X_MPI
+    select SF32LB52X_LCDC
+    select SF32LB52X_AUDCODEC
+    select SF32LB52X_MAILBOX
+    select SF32LB52X_PWM
 
 config SF32LB52_DEVKIT_LCD
     bool
@@ -692,7 +707,6 @@ config NPCM8XX
     select SERIAL_MM
     select SSI
     select UNIMP
-
 
 config FSL_IMX25
     bool

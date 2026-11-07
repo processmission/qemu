@@ -161,3 +161,6 @@ config MAC_PVG_PCI
 config RK3566_RGA
     bool
     select REGISTER
+config SF32LB52X_LCDC
+    bool
+    depends on SF32LB52X

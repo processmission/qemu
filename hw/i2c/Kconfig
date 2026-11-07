@@ -75,3 +75,7 @@ config BCM2835_I2C
 config RK3566_I2C
     bool
     select I2C
+config SF32LB52X_I2C
+    bool
+    select I2C
+    depends on SF32LB52X

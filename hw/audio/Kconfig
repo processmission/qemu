@@ -58,3 +58,7 @@ config VIRTIO_SND
 
 config RK3566_AUDIO
     bool
+config SF32LB52X_AUDCODEC
+    bool
+    select REGISTER
+    depends on SF32LB52X

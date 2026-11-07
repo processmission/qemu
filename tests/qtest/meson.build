@@ -269,6 +269,21 @@ qtests_arm = \
    ['ardep-v2-test'] : []) + \
   (config_all_devices.has_key('CONFIG_S32K5') ? ['s32k5-test'] : []) + \
   (config_all_devices.has_key('CONFIG_SF32LB52X') ? ['sf32lb52x-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_RTC') ? ['sf32lb52x-rtc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_WDT') ? ['sf32lb52x-wdt-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_CRC') ? ['sf32lb52x-crc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_TRNG') ? ['sf32lb52x-trng-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_TSEN') ? ['sf32lb52x-tsen-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_GPADC') ? ['sf32lb52x-gpadc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_EFUSE') ? ['sf32lb52x-efuse-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_I2C') ? ['sf32lb52x-i2c-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_SPI') ? ['sf32lb52x-spi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_DMAC') ? ['sf32lb52x-dmac-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_MPI') ? ['sf32lb52x-mpi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_LCDC') ? ['sf32lb52x-lcdc-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_AUDCODEC') ? ['sf32lb52x-audcodec-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_MAILBOX') ? ['sf32lb52x-mailbox-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_SF32LB52X_PWM') ? ['sf32lb52x-pwm-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
   (config_all_devices.has_key('CONFIG_VERSATILE') ? ['arm-boot-test'] : []) + \

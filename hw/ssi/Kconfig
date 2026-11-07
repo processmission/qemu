@@ -61,3 +61,7 @@ config PNV_SPI
 config ALLWINNER_A10_SPI
     bool
     select SSI
+
+config SF32LB52X_SPI
+    bool
+    depends on SF32LB52X

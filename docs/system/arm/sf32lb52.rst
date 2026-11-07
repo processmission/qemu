@@ -7,7 +7,9 @@ development board, which is built around the SiFli SF32LB52X SoC and its
 SF32LB525UC6 module.
 
 The model is intended for RTOS boot smoke tests, including Zephyr images
-built for the ``sf32lb52_devkit_lcd/sf32lb525uc6`` board target.
+built for the ``sf32lb52_devkit_lcd/sf32lb525uc6`` board target.  It models
+the peripherals used by those images at register and controller behavior
+level, and is not a complete SF32LB52X emulation.
 
 For more information, see <https://wiki.sifli.com/en/board/sf32lb52x/SF32LB52-DevKit-LCD.html>
 
@@ -15,26 +17,32 @@ Supported devices
 -----------------
 The ``sf32lb52-devkit-lcd`` machine supports the following devices:
 
-* 1 Arm Cortex-M33 core
-* 3 USART serial ports
-* the RCC and reset controller
-* the HPSYS_CFG, pinmux and GPIO blocks
-* the AON and PMUC power management blocks
-
-The other SF32LB52X peripherals are not modeled yet and are provided as
-unimplemented devices.
+* CPU and memory: one Arm Cortex-M33 core, the Armv8-M NVIC and SysTick
+  timer, 512 KiB of SRAM, 64 KiB of shared SRAM and the QSPI-NOR XIP window
+* Serial interfaces: 3 USART, 4 I2C and 2 SPI controllers
+* Storage and DMA: the MPI2 QSPI-NOR controller with a PY25Q128HA NOR flash,
+  and the DMAC1 DMA controller
+* System control and power: the RCC and reset controller, the HPSYS_CFG,
+  pinmux and GPIO blocks, the AON and PMUC power-management blocks, and LDO
+  regulator control
+* Timers and timekeeping: the RTC with retained backup registers, the WDT,
+  and the ATIM1 and GPTIM2 PWM timers
+* Analog and security: the GPADC and TSEN sensors, the eFuse/OTP block, the
+  TRNG and the CRC engine
+* Display, audio and inter-core communication: the LCDC with a MIPI-DBI
+  interface, the audio codec and the inter-core mailboxes
 
 Boot options
 ------------
 The ``sf32lb52-devkit-lcd`` machine boots an image directly given with
-``-kernel``. Both a Zephyr ELF image and a raw ``zephyr.bin`` image are
-accepted. The SiFli boot ROM, its flash configuration table and the
-``sftool`` flashing flow are not modeled, and there is no ``-bios``
-firmware boot path.
+``-kernel``.  Both a Zephyr ELF image and a raw ``zephyr.bin`` image are
+accepted.  The SiFli boot ROM, its first-stage flash configuration table
+(ftab) and the ``sftool`` flashing flow are not modeled, and there is no
+``-bios`` firmware boot path.
 
 Running
 -------
-The first serial port is connected to the Zephyr console, so the console
+The Zephyr console is connected to the first serial port, so the console
 output is available with ``-nographic``:
 
 .. code-block:: bash
@@ -43,6 +51,18 @@ output is available with ``-nographic``:
 
 Limitations
 -----------
-Only the devices listed above are modeled; accesses to the other
-peripheral windows are logged and ignored. Migration and VM snapshots are
-not supported.
+Only the peripheral classes listed above are modeled.  The remaining
+SF32LB52X peripherals are not modeled, and unimplemented peripheral windows
+log and ignore guest accesses.
+
+The QSPI-NOR XIP window is backed by RAM in this model.  A direct CPU store
+to the window therefore succeeds where real NOR flash would ignore it, and a
+system reset restores the ``-kernel`` image.  Firmware should program the
+flash through the MPI2 controller.
+
+The mailboxes are transport-level models only; the LCPU and Bluetooth
+firmware are not modeled.
+
+The models follow the register and controller behavior used by the Zephyr
+drivers and do not reproduce full hardware timing or every documented
+feature.  Migration and VM snapshots are not supported.
