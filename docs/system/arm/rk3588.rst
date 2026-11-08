@@ -77,6 +77,361 @@ The ``rock-5b`` machine supports the following devices:
 The machine always uses all eight CPUs and supports 128 MiB to 16 GiB
 of RAM, with 2 GiB as the default.
 
+Peripheral mapping
+~~~~~~~~~~~~~~~~~~
+
+The machine models part of the RK3588 peripheral set.  The remaining windows
+are mapped as unimplemented devices, so a guest access reads as zero and is
+logged by ``-d unimp``.  The tables below give the SoC window, the GIC
+interrupt, the ROCK 5B board connection and the modeling status of the
+peripherals that a bring-up has to locate.
+
+Window and interrupt numbers are those of ``rk3588_memmap[]``,
+``rk3588_unimpl_devices[]`` and the ``RK3588_*_SPI`` macros in
+``hw/arm/rk3588.c``, and they match the RK3588 device tree.  Header pin
+numbers, mux functions and header voltages are from Radxa's ROCK 5B hardware
+interface documentation; the on-board wiring is from
+``rk3588-rock-5b-5bp-5t.dtsi``.  Header mux names are the pinout names; the
+device-tree pin groups are their lowercase form, with an ``_xfer`` suffix for
+a data pair (``UART2_TX_M0``/``UART2_RX_M0`` are ``uart2m0_xfer``).
+
+A GPIO is addressed as ``GPIO<bank>_<port><index>``: ``bank * 32 + port * 8 +
+index``, with ports ``A`` to ``D``.  The number in the pin table follows that
+formula, so ``GPIO4_B3`` is 139.  Bare numbers in the connection columns below
+are 40-pin header positions.
+
+.. list-table:: UART
+   :header-rows: 1
+   :widths: 10 14 8 48 20
+
+   * - Controller
+     - Window
+     - IRQ
+     - Header connection
+     - Model
+   * - UART0
+     - ``0xfd890000``
+     - 331
+     - not routed on the board (PMU power domain)
+     - unimplemented
+   * - UART1
+     - ``0xfeb40000``
+     - 332
+     - 29 (``UART1_CTSN_M1``), 31 (``UART1_RX_M1``); TX/RX also on the M.2
+       E-key (32/22)
+     - ``-serial`` slot 2
+   * - UART2
+     - ``0xfeb50000``
+     - 333
+     - 8 (``UART2_TX_M0``), 10 (``UART2_RX_M0``); 36/38 (``UART2_M2``), 40
+       (``UART2_RTSN``)
+     - ``-serial`` slot 1, console
+   * - UART3
+     - ``0xfeb60000``
+     - 334
+     - 12 (``UART3_TX_M1``), 35 (``UART3_RX_M1``)
+     - ``-serial`` slot 3
+   * - UART4
+     - ``0xfeb70000``
+     - 335
+     - 19 (``UART4_RX_M2``), 23 (``UART4_TX_M2``)
+     - ``-serial`` slot 4
+   * - UART5
+     - ``0xfeb80000``
+     - 336
+     - not routed on the board
+     - ``-serial`` slot 5
+   * - UART6
+     - ``0xfeb90000``
+     - 337
+     - not routed on the board
+     - ``-serial`` slot 6
+   * - UART7
+     - ``0xfeba0000``
+     - 338
+     - 11 (``UART7_RX_M1``), 15 (``UART7_TX_M1``), 7 (``UART7_CTSN_M1``), 32
+       (``UART7_RTSN_M1``); 24/26 (``UART7_M2``)
+     - ``-serial`` slot 7
+   * - UART8
+     - ``0xfebb0000``
+     - 339
+     - 3 (``UART8_CTSN_M0``), 5 (``UART8_RTSN_M0``) - flow control only
+     - ``-serial`` slot 8
+   * - UART9
+     - ``0xfebc0000``
+     - 340
+     - not routed on the board
+     - ``-serial`` slot 9
+
+UART0 is reserved for the PMU domain and stays an unimplemented window.  The
+slot order is set by ``rock5b_connect_serial()``: slot 0 is the Type-C USB CDC
+console, slot 1 is UART2, and slots 2 to 9 carry UART1 and UART3 through
+UART9.  Every port uses the 16550-compatible ``serial_mm`` core with the
+DesignWare APB vendor window (``USR`` at ``0x7c``); the model programs the
+24 MHz ``RK3588_UART_CLOCK`` reference, so a guest divisor gives the baud rate
+the real UART would.
+
+.. list-table:: GPIO
+   :header-rows: 1
+   :widths: 10 14 8 52 16
+
+   * - Bank
+     - Window
+     - IRQ
+     - Header connection
+     - Model
+   * - GPIO0
+     - ``0xfd8a0000``
+     - 277
+     - 8, 10, 37 (also the on-board status LED, ``GPIO0_B7``)
+     - unimplemented
+   * - GPIO1
+     - ``0xfec20000``
+     - 278
+     - 19, 21, 23, 24, 26, 29, 31
+     - unimplemented
+   * - GPIO2
+     - ``0xfec30000``
+     - 279
+     - not routed on the header
+     - unimplemented
+   * - GPIO3
+     - ``0xfec40000``
+     - 280
+     - 7, 11, 12, 13, 15, 16, 32, 33, 35, 36, 38, 40
+     - unimplemented
+   * - GPIO4
+     - ``0xfec50000``
+     - 281
+     - 3, 5, 18, 27, 28
+     - unimplemented
+
+A bank model exists (``hw/gpio/rockchip_gpio.c``): it implements the Rockchip
+GPIO v2 register layout, 32 lines with direction, external level read-back and
+the edge/level interrupt block.  ``rock-5b`` does not instantiate it, so the
+five windows stay unimplemented.  Pin muxing itself lives in the IOC blocks,
+which the machine does not model either, so once the banks are wired up a
+guest will still not be able to switch a pin between GPIO and a peripheral
+function.
+
+.. list-table:: I2C
+   :header-rows: 1
+   :widths: 8 14 8 50 20
+
+   * - Bus
+     - Window
+     - IRQ
+     - On-board devices and header connection
+     - Model
+   * - I2C0
+     - ``0xfd880000``
+     - 317
+     - ``RK8602`` @0x42 and ``RK8603`` @0x43, the CPU supply regulators
+       (``I2C0_M2``); 27 (``I2C0_SDA_M1``), 28 (``I2C0_SCL_M1``)
+     - unimplemented
+   * - I2C1
+     - ``0xfea90000``
+     - 318
+     - ``RK8602`` @0x42, the NPU supply regulator (``I2C1_M2``); 8
+       (``I2C1_SCL_M0``), 10 (``I2C1_SDA_M0``)
+     - unimplemented
+   * - I2C2
+     - ``0xfeaa0000``
+     - 319
+     - not routed on the board
+     - unimplemented
+   * - I2C3
+     - ``0xfeab0000``
+     - 320
+     - 13 (``I2C3_SCL_M1``), 15 (``I2C3_SDA_M1``)
+     - unimplemented
+   * - I2C4
+     - ``0xfeac0000``
+     - 321
+     - ``FUSB302`` @0x22, the USB-C PD controller (``I2C4_M1``); also on the
+       M.2 E-key
+     - unimplemented
+   * - I2C5
+     - ``0xfead0000``
+     - 322
+     - not routed on the board
+     - unimplemented
+   * - I2C6
+     - ``0xfec80000``
+     - 323
+     - ``HYM8563`` RTC @0x51 (IRQ on ``GPIO0_B0``); also the MIPI DSI touch
+       bus
+     - unimplemented
+   * - I2C7
+     - ``0xfec90000``
+     - 324
+     - ``ES8316`` audio codec @0x11; 3 (``I2C7_SDA_M3``), 5 (``I2C7_SCL_M3``)
+     - unimplemented
+   * - I2C8
+     - ``0xfeca0000``
+     - 325
+     - 7 (``I2C8_SDA_M4``), 32 (``I2C8_SCL_M4``)
+     - unimplemented
+
+I2C0 and I2C1 put the same bus on two different pin groups: the regulators
+use ``_M2`` on the board while the header carries ``_M1`` and ``_M0``, so a
+device plugged into the header shares the bus, and therefore the address
+space, with a supply regulator.  That is a bus-level conflict, not a mux one:
+the two pin groups cannot be active at the same time either, because a
+controller drives one group at a time.
+
+.. list-table:: SPI
+   :header-rows: 1
+   :widths: 8 14 8 50 20
+
+   * - Bus
+     - Window
+     - IRQ
+     - On-board devices and header connection
+     - Model
+   * - SPI0
+     - ``0xfeb00000``
+     - 326
+     - 19 (``SPI0_MOSI_M2``), 21 (``SPI0_MISO_M2``), 23 (``SPI0_CLK_M2``),
+       24 (``SPI0_CS0_M2``), 26 (``SPI0_CS1_M2``)
+     - unimplemented
+   * - SPI1
+     - ``0xfeb10000``
+     - 327
+     - 13 (``SPI1_MOSI_M1``), 15 (``SPI1_MISO_M1``), 11 (``SPI1_CLK_M1``),
+       32 (``SPI1_CS0_M1``), 7 (``SPI1_CS1_M1``)
+     - unimplemented
+   * - SPI2
+     - ``0xfeb20000``
+     - 328
+     - ``RK806`` PMIC on chip select 0 (``SPI2_M2``), not on the header
+     - unimplemented
+   * - SPI3
+     - ``0xfeb30000``
+     - 329
+     - 28 (``SPI3_MOSI_M0``), 18 (``SPI3_MISO_M0``), 27 (``SPI3_CLK_M0``)
+     - unimplemented
+   * - SPI4
+     - ``0xfecb0000``
+     - 330
+     - not routed on the board
+     - unimplemented
+
+The SPI NOR flash is not on this list: it sits behind the SFC controller,
+which is modeled, and is attached with ``-drive if=mtd,index=0`` as described
+above.
+
+.. list-table:: PWM, SARADC, RTC, watchdog and timers
+   :header-rows: 1
+   :widths: 22 16 8 40 14
+
+   * - Block
+     - Window
+     - IRQ
+     - Header connection
+     - Model
+   * - PWM0 (channels 0-3)
+     - ``0xfd8b0000``
+     - -
+     - 36 (``PWM2_M1``), 38 (``PWM3_IR_M1``); channel 1 drives the on-board
+       fan
+     - unimplemented
+   * - PWM1 (channels 4-7)
+     - ``0xfebd0000``
+     - -
+     - 18 (``PWM5_M2``), 28 (``PWM6_M2``), 27 (``PWM7_IR_M3``)
+     - unimplemented
+   * - PWM2 (channels 8-11)
+     - ``0xfebe0000``
+     - -
+     - 33 (``PWM8_M0``)
+     - unimplemented
+   * - PWM3 (channels 12-15)
+     - ``0xfebf0000``
+     - -
+     - 12 (``PWM12_M0``), 31 (``PWM13_M2``), 35 (``PWM13_M0``), 5
+       (``PWM14_M1``), 32 (``PWM14_M0``), 3 (``PWM15_IR_M1``), 7
+       (``PWM15_IR_M0``), 29 (``PWM15_IR_M3``)
+     - unimplemented
+   * - SARADC
+     - ``0xfec10000``
+     - 398
+     - 22 (channel 4); channel 0 is the Maskrom/BOOT strap
+     - unimplemented
+   * - HYM8563 RTC
+     - I2C6 @0x51
+     - ``GPIO0_B0``
+     - not on the header
+     - unimplemented
+   * - Watchdog (``wdt-ns``)
+     - ``0xfeaf0000``
+     - 315
+     - not on the header
+     - unimplemented
+   * - TIMER (``timer-ns0``)
+     - ``0xfeae0000``
+     - 289
+     - not on the header
+     - unimplemented
+   * - Secure timer (``hptimer``)
+     - ``0xfd8c8000``
+     - -
+     - not on the header
+     - unimplemented
+   * - Architectural timer
+     - CNTFRQ 24 MHz
+     - per-CPU PPI
+     - not on the header
+     - modeled
+
+The RK3588 has four PWM controllers, each with four channels, so a pinout name
+such as ``PWM13_M0`` selects controller 3, channel 1 at ``0xfebf0010``.  PWM
+output has no interrupt line on this SoC, hence the empty IRQ column.  The
+watchdog and the non-secure timer also exist per domain (``wdt-pmu`` at
+``0xfd8e0000``, ``wdt-npu`` at ``0xfdaf8000``, ``timer-npu`` at
+``0xfdb00000``); none of them is modeled.
+
+All 40-pin header GPIOs are 3.3 V (3.63 V maximum); the SARADC inputs on the
+header are 1.8 V (1.98 V maximum) and are not 5 V tolerant.  A pin carries one
+function at a time, so the mux names listed for a pin are mutually exclusive,
+and so are the pin groups of one controller.  Beyond the shared I2C0 and I2C1
+buses, the header pairs that need a decision are SPI0 with UART4 on 19/23,
+SPI1 with UART7 on 7/11/15/32, PWM with UART2 on 36/38 and PWM with UART3 on
+12/35.
+
+Verification
+^^^^^^^^^^^^
+
+The window map can be read back from the monitor: a modeled device appears
+under its own name, while an unimplemented window appears as
+``rk3588.<name>`` at a negative priority::
+
+   (qemu) info mtree -f
+   00000000feb40000-00000000feb4001f (prio 1, i/o): serial
+   ...
+   00000000fd890000-00000000fd89ffff (prio -1000, i/o): rk3588.uart0
+   00000000fec80000-00000000fec8ffff (prio -1000, i/o): rk3588.i2c6
+
+A guest access to one of those windows is reported with ``-d unimp`` and the
+stub name, which is the quickest way to tell "not implemented yet" from "wrong
+address"::
+
+   rk3588.i2c6: unimplemented device write (size 4, offset 0x0000, value 0xdeadbeef)
+
+The machine test covers the modeled side of the map::
+
+   $ QTEST_QEMU_BINARY=./qemu-system-aarch64 ./tests/qtest/rock-5b-test
+   ok 1 /aarch64/rock-5b/machine-topology
+   ok 2 /aarch64/rock-5b/pcie-rtl8125
+   ok 3 /aarch64/rock-5b/sdmmc
+   ok 4 /aarch64/rock-5b/cru
+   ok 5 /aarch64/rock-5b/sdmmc-idmac
+
+For the serial console, the slot assignment above is what makes
+``-serial null -serial mon:stdio`` print the UART2 console: an image that
+writes to UART2 shows up on the second ``-serial`` option, while one that
+writes to UART1 needs a third one.
+
 Boot options
 ~~~~~~~~~~~~
 
