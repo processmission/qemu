@@ -41,6 +41,9 @@ typedef enum RK3588CpuClusterId {
 /* UART0 in the PMU power domain is reserved; UART1-UART9 are modeled. */
 #define RK3588_NUM_UARTS             (10)
 
+/* SPI0-SPI3 carry the SPI controllers; SPI4 is not routed on the boards. */
+#define RK3588_NUM_SPIS              (4)
+
 /* Indices into rk3588_memmap[], see hw/arm/rk3588.c. */
 enum {
     RK3588_DEV_GIC_DIST,
@@ -63,6 +66,10 @@ enum {
     RK3588_DEV_UART7,
     RK3588_DEV_UART8,
     RK3588_DEV_UART9,
+    RK3588_DEV_SPI0,
+    RK3588_DEV_SPI1,
+    RK3588_DEV_SPI2,
+    RK3588_DEV_SPI3,
 };
 
 struct RK3588SoCState {
@@ -85,7 +92,7 @@ struct RK3588SoCState {
     DeviceState *secure_otp;
     DeviceState *crypto;
     DeviceState *tsadc;
-    DeviceState *spi2;
+    DeviceState *spi[RK3588_NUM_SPIS];
     DeviceState *dmac1;
     DeviceState *gpio[5];
     DeviceState *i2c6;

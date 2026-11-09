@@ -69,8 +69,7 @@
 #define RK3588_CRYPTO_BASE           0xfe370000
 #define RK3588_TSADC_BASE            0xfec00000
 #define RK3588_TSADC_SPI             397
-#define RK3588_SPI2_BASE             0xfeb20000
-#define RK3588_SPI2_SPI              328
+#define RK3588_SPI0_SPI              326
 #define RK3588_RNG_BASE              0xfe378000
 #define RK3588_RNG_SPI               400
 #define RK3588_DMAC1_BASE            0xfea10000
@@ -108,6 +107,15 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_DEV_UART7]      = { 0xfeba0000, 0x00010000 },
     [RK3588_DEV_UART8]      = { 0xfebb0000, 0x00010000 },
     [RK3588_DEV_UART9]      = { 0xfebc0000, 0x00010000 },
+    [RK3588_DEV_SPI0]       = { 0xfeb00000, 0x00010000 },
+    [RK3588_DEV_SPI1]       = { 0xfeb10000, 0x00010000 },
+    [RK3588_DEV_SPI2]       = { 0xfeb20000, 0x00010000 },
+    [RK3588_DEV_SPI3]       = { 0xfeb30000, 0x00010000 },
+};
+
+/* Object names of the SPI controllers, indexed like the state array. */
+static const char *const rk3588_spi_names[RK3588_NUM_SPIS] = {
+    "spi0", "spi1", "spi2", "spi3",
 };
 
 #define RK3588_UNIMPLEMENTED(name, base, size) \
@@ -287,10 +295,7 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("timer-ns0", 0xfeae0000, 32 * KiB),
     RK3588_UNIMPLEMENTED("timer-ns1", 0xfeae8000, 32 * KiB),
     RK3588_UNIMPLEMENTED("wdt-ns", 0xfeaf0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("spi0", 0xfeb00000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("spi1", 0xfeb10000, 64 * KiB),
     RK3588_UNIMPLEMENTED("spi2", 0xfeb20000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("spi3", 0xfeb30000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pwm1", 0xfebd0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pwm2", 0xfebe0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pwm3", 0xfebf0000, 64 * KiB),
@@ -733,23 +738,48 @@ static bool rk3588_soc_create_tsadc(RK3588SoCState *s, Error **errp)
     return true;
 }
 
-static bool rk3588_soc_create_spi2(RK3588SoCState *s, Error **errp)
+/*
+ * Model one Rockchip SPI controller.  Every RK3588 SPI instance is the same
+ * IP block, so the window and the interrupt line follow from the memmap
+ * index.  The controller also gets a qdev id so that SPI peripherals can be
+ * attached to its bus by name, like the PCIe hosts; the legacy machines
+ * additionally attach the RK806 PMIC to SPI2.
+ */
+static bool rk3588_soc_create_spi(RK3588SoCState *s, unsigned int dev,
+                                  Error **errp)
 {
-    DeviceState *pmic;
+    unsigned int idx = dev - RK3588_DEV_SPI0;
     SysBusDevice *sbd;
 
-    s->spi2 = qdev_new(TYPE_ROCKCHIP_SPI);
-    object_property_add_child(OBJECT(s), "spi2", OBJECT(s->spi2));
-    sbd = SYS_BUS_DEVICE(s->spi2);
+    assert(idx < RK3588_NUM_SPIS);
+
+    s->spi[idx] = qdev_new(TYPE_ROCKCHIP_SPI);
+    s->spi[idx]->id = g_strdup(rk3588_spi_names[idx]);
+    object_property_add_child(OBJECT(s), rk3588_spi_names[idx],
+                              OBJECT(s->spi[idx]));
+    sbd = SYS_BUS_DEVICE(s->spi[idx]);
     if (!sysbus_realize(sbd, errp)) {
         return false;
     }
-    sysbus_mmio_map(sbd, 0, RK3588_SPI2_BASE);
+    sysbus_mmio_map(sbd, 0, rk3588_memmap[dev].base);
     sysbus_connect_irq(sbd, 0,
-                       qdev_get_gpio_in(DEVICE(&s->gic), RK3588_SPI2_SPI));
+                       qdev_get_gpio_in(DEVICE(&s->gic),
+                                        RK3588_SPI0_SPI + idx));
+    return true;
+}
+
+static bool rk3588_soc_create_spi2(RK3588SoCState *s, Error **errp)
+{
+    unsigned int idx = RK3588_DEV_SPI2 - RK3588_DEV_SPI0;
+    DeviceState *pmic;
+
+    if (!rk3588_soc_create_spi(s, RK3588_DEV_SPI2, errp)) {
+        return false;
+    }
 
     pmic = qdev_new(TYPE_RK806);
-    return qdev_realize_and_unref(pmic, BUS(ROCKCHIP_SPI(s->spi2)->spi), errp);
+    return qdev_realize_and_unref(pmic, BUS(ROCKCHIP_SPI(s->spi[idx])->spi),
+                                  errp);
 }
 
 static bool rk3588_soc_create_rng(RK3588SoCState *s, Error **errp)
@@ -986,6 +1016,9 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
         !rk3588_soc_create_sfc(s, errp) ||
         !rk3588_soc_create_sdmmc(s, errp) ||
         !rk3588_soc_create_uart(s, errp) ||
+        !rk3588_soc_create_spi(s, RK3588_DEV_SPI0, errp) ||
+        !rk3588_soc_create_spi(s, RK3588_DEV_SPI1, errp) ||
+        !rk3588_soc_create_spi(s, RK3588_DEV_SPI3, errp) ||
         !rk3588_soc_create_usb(s, errp) ||
         !rk3588_soc_create_pcie(s, errp)) {
         return;
