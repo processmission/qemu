@@ -120,8 +120,19 @@ static void rockchip_spi_update(RockchipSPIState *s)
     for (unsigned i = 0; i < ARRAY_SIZE(s->cs); i++) {
         bool active_high = (s->ctrlr0 >> (23 + i)) & 1;
         bool selected = (s->ser >> i) & 1;
+        bool level = selected == active_high;
+        DeviceState *dev = ssi_get_cs(s->spi, i);
 
-        qemu_set_irq(s->cs[i], selected == active_high);
+        qemu_set_irq(s->cs[i], level);
+        /*
+         * The peripheral only answers while its own chip select is
+         * asserted, so mirror the pin level onto the SSI bus as well.
+         * Peripherals without a chip select of their own handle the
+         * framing themselves and have no line to drive.
+         */
+        if (dev && SSI_PERIPHERAL_GET_CLASS(dev)->cs_polarity != SSI_CS_NONE) {
+            qemu_set_irq(qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0), level);
+        }
     }
     rockchip_spi_schedule(s);
 }
