@@ -13,6 +13,12 @@
 #define RK3566_SPI1_BASE 0xfe620000ULL
 #define RK3566_SPI3_BASE 0xfe640000ULL
 
+/* GPIO3 carries the MicroDuck NFC chip select on pin A1. */
+#define RK3566_GPIO3_BASE 0xfe760000ULL
+#define RK3566_GPIO_SWPORT_DR_L 0x00
+#define RK3566_GPIO_SWPORT_DDR_L 0x08
+#define RK3566_NFC_CS_PIN 1
+
 /* Register offsets from the MSPI controller. */
 enum {
     SPI_CTRLR0 = 0x00,
@@ -201,6 +207,57 @@ static void test_spi_unimplemented(void)
     unlink(log_path);
 }
 
+/*
+ * The MicroDuck beta wires the NFC chip select to GPIO3_A1 instead of the
+ * controller's CS output (hw/arm/microduck.c).  The controller must leave
+ * that line alone: if it drove its own idle "not selected" level between two
+ * frames, the NFC command parser would restart and the chip ID register
+ * would read back as zero.
+ */
+static void test_spi_gpio_chip_select(void)
+{
+    QTestState *qts = rk3566_qtest_start();
+    uint64_t base = RK3566_SPI1_BASE;
+
+    /* Drive GPIO3_A1 low: the NFC frontend is selected. */
+    rk3566_mmio_write32_at(qts, RK3566_GPIO3_BASE,
+                           RK3566_GPIO_SWPORT_DDR_L,
+                           BIT(RK3566_NFC_CS_PIN));
+    rk3566_mmio_write32_at(qts, RK3566_GPIO3_BASE,
+                           RK3566_GPIO_SWPORT_DR_L, 0);
+
+    /*
+     * 8-bit frames with TX and RX enabled.  The controller still needs its
+     * own select bit to clock anything out, but the frontend is selected by
+     * the GPIO, which stays low for the whole transfer.
+     */
+    SPI_WRITE(base, SPI_CTRLR0, 0x1);
+    SPI_WRITE(base, SPI_BAUDR, 0x4);
+    SPI_WRITE(base, SPI_SSIENR, 0x1);
+    SPI_WRITE(base, SPI_SER, 0x1);
+
+    /* Address byte 0xbf: read register 0x3f, the chip ID. */
+    SPI_WRITE(base, SPI_TXDR, 0xbf);
+    qtest_clock_step(qts, 100000);
+
+    /*
+     * A driver that frames each byte drops SER between the command and the
+     * data phase while the GPIO keeps the frontend selected.  The controller
+     * must not pass that gap on as a chip-select pulse, or the frontend would
+     * take the dummy byte for a fresh address and the ID would read as zero.
+     */
+    SPI_WRITE(base, SPI_SER, 0x0);
+    SPI_WRITE(base, SPI_SER, 0x1);
+
+    SPI_WRITE(base, SPI_TXDR, 0x00);
+    qtest_clock_step(qts, 100000);
+
+    g_assert_cmphex(qtest_readl(qts, base + SPI_RXDR), ==, 0x00);
+    g_assert_cmphex(qtest_readl(qts, base + SPI_RXDR), ==, 0xa9);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -215,6 +272,8 @@ int main(int argc, char **argv)
                    test_spi_register_access);
     qtest_add_func("/rockchip-spi/fifo-and-irq", test_spi_fifo_and_irq);
     qtest_add_func("/rockchip-spi/unimplemented", test_spi_unimplemented);
+    qtest_add_func("/rockchip-spi/gpio-chip-select",
+                   test_spi_gpio_chip_select);
 
     return g_test_run();
 }

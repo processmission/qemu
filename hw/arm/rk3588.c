@@ -757,6 +757,15 @@ static bool rk3588_soc_create_spi(RK3588SoCState *s, unsigned int dev,
     s->spi[idx]->id = g_strdup(rk3588_spi_names[idx]);
     object_property_add_child(OBJECT(s), rk3588_spi_names[idx],
                               OBJECT(s->spi[idx]));
+    /*
+     * The header controllers hand the chip select straight to whatever is
+     * attached, so let them drive the line as well.  SPI2 carries the
+     * on-board PMIC instead, and boards that route the select through a GPIO
+     * keep the default and drive it themselves.
+     */
+    if (dev != RK3588_DEV_SPI2) {
+        qdev_prop_set_bit(s->spi[idx], "mirror-cs", true);
+    }
     sbd = SYS_BUS_DEVICE(s->spi[idx]);
     if (!sysbus_realize(sbd, errp)) {
         return false;
