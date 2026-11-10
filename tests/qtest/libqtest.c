@@ -42,7 +42,7 @@
 #include "qobject/qstring.h"
 #include "qobject/qbool.h"
 
-#define MAX_IRQ 256
+#define MAX_IRQ 512
 
 #ifndef _WIN32
 # define SOCKET_TIMEOUT 50

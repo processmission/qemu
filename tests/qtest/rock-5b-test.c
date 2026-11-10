@@ -11,6 +11,7 @@
 #include "qemu/bswap.h"
 #include "qemu/cutils.h"
 #include "qemu/units.h"
+#include "qemu/sockets.h"
 #include "libqtest.h"
 
 #define ROCK5B_LOW_RAM_BASE     0x00000000ULL
@@ -20,6 +21,7 @@
 #define ROCK5B_SFC_BASE         0xfe2b0000ULL
 #define ROCK5B_SDMMC_BASE       0xfe2c0000ULL
 #define ROCK5B_UART2_BASE       0xfeb50000ULL
+#define ROCK5B_UART3_BASE       0xfeb60000ULL
 #define ROCK5B_USB3OTG0_BASE    0xfc000000ULL
 #define ROCK5B_PCIE2X1L2_APB    0xfe190000ULL
 #define ROCK5B_PCIE2X1L2_DBI    0xa41000000ULL
@@ -56,7 +58,26 @@
 #define DWC3_GCTL_RESET         0x30c13004
 
 /* DW8250 UART status register, 32-bit register window. */
+#define DW_UART_THR             0x00
+#define DW_UART_RBR             0x00
+#define DW_UART_IER             0x04
+#define DW_UART_IIR             0x08
+#define DW_UART_FCR             0x08
+#define DW_UART_SCR             0x1c
+#define DW_UART_LSR             0x14
 #define DW_UART_USR             0x7c
+
+#define DW_UART_IER_RDI         BIT(0)
+#define DW_UART_IIR_NO_INT      BIT(0)
+#define DW_UART_IIR_RDI         0x04
+#define DW_UART_IIR_FIFO_MASK   0xc0
+#define DW_UART_FCR_FE          BIT(0)
+#define DW_UART_FCR_ITL_4       0x40
+#define DW_UART_LSR_DR          BIT(0)
+#define DW_UART_LSR_THRE        BIT(5)
+#define DW_UART_LSR_TEMT        BIT(6)
+#define DW_UART_USR_RFNE        BIT(3)
+#define ROCK5B_UART2_IRQ        333
 
 /* dw_mmc core register offsets (DesignWare Mobile Storage Host). */
 #define DW_MMC_CTRL             0x000
@@ -125,6 +146,255 @@
 static uint32_t mmio_read32(QTestState *qts, uint64_t addr)
 {
     return qtest_readl(qts, addr);
+}
+
+static void rock5b_uart_write(QTestState *qts, uint64_t base,
+                              uint32_t reg, uint32_t value)
+{
+    qtest_writel(qts, base + reg, value);
+}
+
+static uint32_t rock5b_uart_read(QTestState *qts, uint64_t base,
+                                 uint32_t reg)
+{
+    return qtest_readl(qts, base + reg);
+}
+
+static char *rock5b_uart_socket_path(void)
+{
+    g_autofree char *dir = g_dir_make_tmp("rock5b-uart-XXXXXX", NULL);
+
+    g_assert_nonnull(dir);
+    return g_build_filename(dir, "serial.sock", NULL);
+}
+
+static int rock5b_uart_connect(const char *socket_path)
+{
+    Error *err = NULL;
+    int fd = unix_connect(socket_path, &err);
+
+    g_assert_null(err);
+    g_assert_cmpint(fd, >=, 0);
+#ifndef _WIN32
+    {
+        struct timeval timeout = { .tv_sec = 2 };
+
+        g_assert_cmpint(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                                   &timeout, sizeof(timeout)), ==, 0);
+    }
+#endif
+    return fd;
+}
+
+static char rock5b_uart_recv_byte(int fd)
+{
+    char data;
+    ssize_t ret;
+
+    do {
+        ret = recv(fd, &data, sizeof(data), 0);
+    } while (ret < 0 && errno == EINTR);
+    g_assert_cmpint(ret, ==, sizeof(data));
+    return data;
+}
+
+static void rock5b_uart_send(int fd, const char *data, size_t size)
+{
+    g_assert_cmpint(qemu_write_full(fd, data, size), ==, size);
+}
+
+static void rock5b_uart_wait_lsr(QTestState *qts, uint64_t base,
+                                 uint32_t mask, uint32_t value)
+{
+    uint32_t status = 0;
+
+    for (unsigned int i = 0; i < 1000; i++) {
+        status = rock5b_uart_read(qts, base, DW_UART_LSR);
+        if ((status & mask) == value) {
+            return;
+        }
+        g_usleep(1000);
+    }
+    g_assert_cmphex(status & mask, ==, value);
+}
+
+static void rock5b_uart_wait_irq(QTestState *qts, int irq, bool level)
+{
+    for (unsigned int i = 0; i < 1000; i++) {
+        if (qtest_get_irq(qts, irq) == level) {
+            return;
+        }
+        g_usleep(1000);
+    }
+    g_assert_cmpint(qtest_get_irq(qts, irq), ==, level);
+}
+
+static void rock5b_uart_qtest_quit(QTestState *qts, int fd,
+                                  const char *socket_path)
+{
+    g_autofree char *socket_dir = g_path_get_dirname(socket_path);
+
+    close(fd);
+    qtest_quit(qts);
+    g_unlink(socket_path);
+    g_rmdir(socket_dir);
+}
+
+static QTestState *rock5b_uart2_qtest_init(int *serial_fd,
+                                           char **socket_path)
+{
+    QTestState *qts;
+
+    *socket_path = rock5b_uart_socket_path();
+    /* Slot 0 is Type-C CDC; slot 1 is UART2 on the board header. */
+    qts = qtest_initf("-machine rock-5b -m 256M "
+                      "-chardev socket,id=uart2,path=%s,server=on,wait=off "
+                      "-serial null -serial chardev:uart2 -display none",
+                      *socket_path);
+    *serial_fd = rock5b_uart_connect(*socket_path);
+    return qts;
+}
+
+static void test_uart2_chardev(void)
+{
+    int serial_fd;
+    g_autofree char *socket_path = NULL;
+    QTestState *qts = rock5b_uart2_qtest_init(&serial_fd, &socket_path);
+    const char rx_data[] = "R";
+
+    /* A guest write to THR must arrive at the UART2 character backend. */
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_THR, 'T');
+    g_assert_cmpint(rock5b_uart_recv_byte(serial_fd), ==, 'T');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    (DW_UART_LSR_THRE | DW_UART_LSR_TEMT), ==,
+                    DW_UART_LSR_THRE | DW_UART_LSR_TEMT);
+
+    /* Host input must become readable from RBR and clear the RX-ready bit. */
+    rock5b_uart_send(serial_fd, rx_data, sizeof(rx_data) - 1);
+    rock5b_uart_wait_lsr(qts, ROCK5B_UART2_BASE, DW_UART_LSR_DR,
+                         DW_UART_LSR_DR);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, DW_UART_LSR_DR);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_USR) &
+                    DW_UART_USR_RFNE, ==, DW_UART_USR_RFNE);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'R');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, 0);
+
+    rock5b_uart_qtest_quit(qts, serial_fd, socket_path);
+}
+
+static void test_uart2_rx_fifo_irq(void)
+{
+    int serial_fd;
+    g_autofree char *socket_path = NULL;
+    QTestState *qts = rock5b_uart2_qtest_init(&serial_fd, &socket_path);
+
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_FCR,
+                      DW_UART_FCR_FE | DW_UART_FCR_ITL_4);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_IIR) &
+                    DW_UART_IIR_FIFO_MASK, ==, DW_UART_IIR_FIFO_MASK);
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_IER, DW_UART_IER_RDI);
+
+    /* Four bytes reach the FIFO trigger level and raise the UART2 IRQ. */
+    rock5b_uart_send(serial_fd, "AB", 2);
+    rock5b_uart_wait_lsr(qts, ROCK5B_UART2_BASE, DW_UART_LSR_DR,
+                         DW_UART_LSR_DR);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_UART2_IRQ));
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_IIR) &
+                    DW_UART_IIR_FIFO_MASK, ==, DW_UART_IIR_FIFO_MASK);
+    rock5b_uart_send(serial_fd, "CD", 2);
+    rock5b_uart_wait_irq(qts, ROCK5B_UART2_IRQ, true);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, DW_UART_LSR_DR);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_IIR) &
+                    0x0f, ==, DW_UART_IIR_RDI);
+    rock5b_uart_wait_irq(qts, ROCK5B_UART2_IRQ, true);
+
+    /* Masking drops the IRQ without discarding the pending FIFO contents. */
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_IER, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_UART2_IRQ));
+
+    /* Re-enabling RDI reasserts the IRQ while the trigger condition remains. */
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_IER, DW_UART_IER_RDI);
+    g_assert_true(qtest_get_irq(qts, ROCK5B_UART2_IRQ));
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'A');
+    g_assert_false(qtest_get_irq(qts, ROCK5B_UART2_IRQ));
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'B');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'C');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'D');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, 0);
+
+    /* A reset must clear a fresh pending receive interrupt and its data. */
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_FCR, 0);
+    rock5b_uart_send(serial_fd, "X", 1);
+    rock5b_uart_wait_irq(qts, ROCK5B_UART2_IRQ, true);
+    qtest_system_reset(qts);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_UART2_IRQ));
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_IER),
+                    ==, 0);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_IIR) &
+                    0x0f, ==, DW_UART_IIR_NO_INT);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, 0);
+
+    rock5b_uart_qtest_quit(qts, serial_fd, socket_path);
+}
+
+static void test_uart3_isolation(void)
+{
+    g_autofree char *uart2_path = rock5b_uart_socket_path();
+    g_autofree char *uart3_path = rock5b_uart_socket_path();
+    int uart2_fd, uart3_fd;
+    QTestState *qts = qtest_initf("-machine rock-5b -m 256M "
+        "-chardev socket,id=uart2,path=%s,server=on,wait=off "
+        "-chardev socket,id=uart3,path=%s,server=on,wait=off "
+        "-serial null -serial chardev:uart2 -serial null "
+        "-serial chardev:uart3 -display none", uart2_path, uart3_path);
+
+    uart2_fd = rock5b_uart_connect(uart2_path);
+    uart3_fd = rock5b_uart_connect(uart3_path);
+
+    /* UART2 is slot 1 and UART3 is slot 3; each has a distinct backend. */
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_SCR, 0x52);
+    rock5b_uart_write(qts, ROCK5B_UART3_BASE, DW_UART_SCR, 0x53);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_SCR),
+                    ==, 0x52);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART3_BASE, DW_UART_SCR),
+                    ==, 0x53);
+
+    rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_THR, '2');
+    rock5b_uart_write(qts, ROCK5B_UART3_BASE, DW_UART_THR, '3');
+    g_assert_cmpint(rock5b_uart_recv_byte(uart2_fd), ==, '2');
+    g_assert_cmpint(rock5b_uart_recv_byte(uart3_fd), ==, '3');
+
+    rock5b_uart_send(uart2_fd, "a", 1);
+    rock5b_uart_send(uart3_fd, "b", 1);
+    rock5b_uart_wait_lsr(qts, ROCK5B_UART2_BASE, DW_UART_LSR_DR,
+                         DW_UART_LSR_DR);
+    rock5b_uart_wait_lsr(qts, ROCK5B_UART3_BASE, DW_UART_LSR_DR,
+                         DW_UART_LSR_DR);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_RBR),
+                    ==, 'a');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART3_BASE, DW_UART_RBR),
+                    ==, 'b');
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART2_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, 0);
+    g_assert_cmphex(rock5b_uart_read(qts, ROCK5B_UART3_BASE, DW_UART_LSR) &
+                    DW_UART_LSR_DR, ==, 0);
+
+    rock5b_uart_qtest_quit(qts, uart2_fd, uart2_path);
+    close(uart3_fd);
+    g_unlink(uart3_path);
+    g_autofree char *uart3_dir = g_path_get_dirname(uart3_path);
+    g_rmdir(uart3_dir);
 }
 
 static void test_machine_topology(void)
@@ -574,6 +844,9 @@ int main(int argc, char **argv)
     qtest_add_func("/rock-5b/sdmmc", test_sdmmc);
     qtest_add_func("/rock-5b/cru", test_cru_reset_bank);
     qtest_add_func("/rock-5b/sdmmc-idmac", test_sdmmc_idmac);
+    qtest_add_func("/rock-5b/uart2-chardev", test_uart2_chardev);
+    qtest_add_func("/rock-5b/uart2-rx-fifo-irq", test_uart2_rx_fifo_irq);
+    qtest_add_func("/rock-5b/uart3-isolation", test_uart3_isolation);
 
     return g_test_run();
 }
