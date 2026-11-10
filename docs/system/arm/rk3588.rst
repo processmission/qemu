@@ -327,14 +327,18 @@ The modeled controllers carry the qdev ids ``spi0``, ``spi1`` and ``spi3``, so
 a peripheral can be attached to their bus by name.  A serial flash answers the
 JEDEC read-ID command on SPI0 as follows::
 
-  qemu-system-aarch64 -M rock-5b -m 256M -serial null -display none \
-      -device n25q256a,bus=/spi0/spi/ -monitor stdio
+  qemu-system-aarch64 -M rock-5b -m 256M -bios u-boot-dtb.bin \
+      -serial null -display none -device n25q256a,bus=/spi0/spi/ \
+      -monitor stdio
 
 Program ``CTRLR0`` with an 8-bit frame format, set ``SER`` for chip select 0,
 ``SSIENR`` to enable the block and ``BAUDR`` for the bus clock, then push
 ``0x9f`` and three dummy bytes into ``TXDR``.  The receive FIFO returns
 ``00 20 ba 19``: the byte clocked out during the command, then the three ID
 bytes of the ``n25q256a`` model.
+
+The controllers drive the chip select of the peripheral attached to them, so
+``SER`` alone selects the device; there is no separate GPIO to toggle.
 
 Chip select polarity comes from bit 23 (chip select 0) and bit 24 (chip select
 1) of ``CTRLR0``.  Setting bit 23 while the flash expects an active-low select
