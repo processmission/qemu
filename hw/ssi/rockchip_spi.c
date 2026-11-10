@@ -120,8 +120,21 @@ static void rockchip_spi_update(RockchipSPIState *s)
     for (unsigned i = 0; i < ARRAY_SIZE(s->cs); i++) {
         bool active_high = (s->ctrlr0 >> (23 + i)) & 1;
         bool selected = (s->ser >> i) & 1;
+        bool level = selected == active_high;
+        DeviceState *dev = ssi_get_cs(s->spi, i);
 
-        qemu_set_irq(s->cs[i], selected == active_high);
+        qemu_set_irq(s->cs[i], level);
+        /*
+         * When the board hands the chip select directly to the peripheral,
+         * mirror the pin level onto the SSI bus as well: the peripheral only
+         * answers while its own chip select is asserted.  Boards that keep a
+         * GPIO in between leave this alone, and peripherals without a chip
+         * select of their own handle the framing themselves.
+         */
+        if (s->mirror_cs && dev &&
+            SSI_PERIPHERAL_GET_CLASS(dev)->cs_polarity != SSI_CS_NONE) {
+            qemu_set_irq(qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0), level);
+        }
     }
     rockchip_spi_schedule(s);
 }
@@ -521,6 +534,12 @@ static const VMStateDescription vmstate_rockchip_spi = {
 
 static const Property rockchip_spi_properties[] = {
     DEFINE_PROP_UINT32("clock-hz", RockchipSPIState, clock_hz, 200000000),
+    /*
+     * Boards that wire a chip select straight to the peripheral want the
+     * controller to drive it; boards that route it through a GPIO must not,
+     * or the two drivers fight over the same line.
+     */
+    DEFINE_PROP_BOOL("mirror-cs", RockchipSPIState, mirror_cs, false),
 };
 
 static void rockchip_spi_finalize(Object *obj)

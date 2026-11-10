@@ -34,6 +34,7 @@ struct RockchipSPIState {
     QEMUTimer *timer;
     Clock *clock;
     uint32_t clock_hz;
+    bool mirror_cs;
 
     RegisterInfoArray *reg_array;
     RegisterInfo regs_info[ROCKCHIP_SPI_REG_COUNT];

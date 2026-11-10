@@ -65,6 +65,7 @@ The ``rock-5b`` machine supports the following devices:
 * the architectural timers
 * UART1 through UART9
 * Rockchip SFC with a 16 MiB SPI NOR flash (XTX XT25F128)
+* SPI0, SPI1 and SPI3, the three controllers routed to the 40-pin header
 * Clock and reset unit (CRU); clock, soft-reset and vendor reset-status
   registers are modeled as storage registers with the Rockchip high-word
   write mask, including the reset read-back used by real firmware
@@ -87,7 +88,7 @@ interrupt, the ROCK 5B board connection and the modeling status of the
 peripherals that a bring-up has to locate.
 
 Window and interrupt numbers are those of ``rk3588_memmap[]``,
-``rk3588_unimpl_devices[]`` and the ``RK3588_*_SPI`` macros in
+``rk3588_unimpl_devices[]`` and the ``RK3588_SPI0_SPI`` macro in
 ``hw/arm/rk3588.c``, and they match the RK3588 device tree.  Header pin
 numbers, mux functions and header voltages are from Radxa's ROCK 5B hardware
 interface documentation; the on-board wiring is from
@@ -294,23 +295,24 @@ controller drives one group at a time.
      - 326
      - 19 (``SPI0_MOSI_M2``), 21 (``SPI0_MISO_M2``), 23 (``SPI0_CLK_M2``),
        24 (``SPI0_CS0_M2``), 26 (``SPI0_CS1_M2``)
-     - unimplemented
+     - modeled
    * - SPI1
      - ``0xfeb10000``
      - 327
      - 13 (``SPI1_MOSI_M1``), 15 (``SPI1_MISO_M1``), 11 (``SPI1_CLK_M1``),
        32 (``SPI1_CS0_M1``), 7 (``SPI1_CS1_M1``)
-     - unimplemented
+     - modeled
    * - SPI2
      - ``0xfeb20000``
      - 328
      - ``RK806`` PMIC on chip select 0 (``SPI2_M2``), not on the header
-     - unimplemented
+     - unimplemented on ``rock-5b``; modeled on the legacy machines, which
+       attach the PMIC here
    * - SPI3
      - ``0xfeb30000``
      - 329
      - 28 (``SPI3_MOSI_M0``), 18 (``SPI3_MISO_M0``), 27 (``SPI3_CLK_M0``)
-     - unimplemented
+     - modeled
    * - SPI4
      - ``0xfecb0000``
      - 330
@@ -320,6 +322,27 @@ controller drives one group at a time.
 The SPI NOR flash is not on this list: it sits behind the SFC controller,
 which is modeled, and is attached with ``-drive if=mtd,index=0`` as described
 above.
+
+The modeled controllers carry the qdev ids ``spi0``, ``spi1`` and ``spi3``, so
+a peripheral can be attached to their bus by name.  A serial flash answers the
+JEDEC read-ID command on SPI0 as follows::
+
+  qemu-system-aarch64 -M rock-5b -m 256M -bios u-boot-dtb.bin \
+      -serial null -display none -device n25q256a,bus=/spi0/spi/ \
+      -monitor stdio
+
+Program ``CTRLR0`` with an 8-bit frame format, set ``SER`` for chip select 0,
+``SSIENR`` to enable the block and ``BAUDR`` for the bus clock, then push
+``0x9f`` and three dummy bytes into ``TXDR``.  The receive FIFO returns
+``00 20 ba 19``: the byte clocked out during the command, then the three ID
+bytes of the ``n25q256a`` model.
+
+The controllers drive the chip select of the peripheral attached to them, so
+``SER`` alone selects the device; there is no separate GPIO to toggle.
+
+Chip select polarity comes from bit 23 (chip select 0) and bit 24 (chip select
+1) of ``CTRLR0``.  Setting bit 23 while the flash expects an active-low select
+leaves it deselected, and the receive FIFO returns zeros.
 
 .. list-table:: PWM, SARADC, RTC, watchdog and timers
    :header-rows: 1
