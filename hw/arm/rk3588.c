@@ -180,7 +180,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("emmc-ioc", 0xfd5fd000, 4 * KiB),
     RK3588_UNIMPLEMENTED("i2c0", 0xfd880000, 64 * KiB),
     RK3588_UNIMPLEMENTED("uart0", 0xfd890000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("gpio0", 0xfd8a0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pwm0", 0xfd8b0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pvtm-pmu", 0xfd8c0000, 32 * KiB),
     RK3588_UNIMPLEMENTED("hptimer", 0xfd8c8000, 16 * KiB),
@@ -301,10 +300,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("pwm3", 0xfebf0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("tsadc", 0xfec00000, 64 * KiB),
     RK3588_UNIMPLEMENTED("saradc", 0xfec10000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("gpio1", 0xfec20000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("gpio2", 0xfec30000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("gpio3", 0xfec40000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("gpio4", 0xfec50000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox0", 0xfec60000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox1", 0xfec70000, 64 * KiB),
     RK3588_UNIMPLEMENTED("i2c6", 0xfec80000, 64 * KiB),
@@ -860,6 +855,7 @@ static bool rk3588_soc_create_gpio(RK3588SoCState *s, Error **errp)
         sysbus_connect_irq(sbd, 0,
                            qdev_get_gpio_in(DEVICE(&s->gic),
                                             RK3588_GPIO0_SPI + i));
+        object_unref(OBJECT(s->gpio[i]));
     }
     return true;
 }
@@ -990,7 +986,8 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    if (!rk3588_soc_create_gic(s, errp)) {
+    if (!rk3588_soc_create_gic(s, errp) ||
+        !rk3588_soc_create_gpio(s, errp)) {
         return;
     }
     if (s->legacy_firmware) {
@@ -1011,7 +1008,6 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
             !rk3588_soc_create_rng(s, errp) ||
             !rk3588_soc_create_dmac1(s, errp) ||
             !rk3588_soc_create_stimer(s, errp) ||
-            !rk3588_soc_create_gpio(s, errp) ||
             !rk3588_soc_create_i2c6(s, errp) ||
             !rk3588_soc_create_gmac(s, errp)) {
             return;

@@ -66,6 +66,7 @@ The ``rock-5b`` machine supports the following devices:
 * UART1 through UART9
 * Rockchip SFC with a 16 MiB SPI NOR flash (XTX XT25F128)
 * SPI0, SPI1 and SPI3, the three controllers routed to the 40-pin header
+* GPIO0 through GPIO4 using the Rockchip GPIO v2 bank model
 * Clock and reset unit (CRU); clock, soft-reset and vendor reset-status
   registers are modeled as storage registers with the Rockchip high-word
   write mask, including the reset read-back used by real firmware
@@ -185,35 +186,42 @@ the real UART would.
      - ``0xfd8a0000``
      - 277
      - 8, 10, 37 (also the on-board status LED, ``GPIO0_B7``)
-     - unimplemented
+     - modeled
    * - GPIO1
      - ``0xfec20000``
      - 278
      - 19, 21, 23, 24, 26, 29, 31
-     - unimplemented
+     - modeled
    * - GPIO2
      - ``0xfec30000``
      - 279
      - not routed on the header
-     - unimplemented
+     - modeled
    * - GPIO3
      - ``0xfec40000``
      - 280
      - 7, 11, 12, 13, 15, 16, 32, 33, 35, 36, 38, 40
-     - unimplemented
+     - modeled
    * - GPIO4
      - ``0xfec50000``
      - 281
      - 3, 5, 18, 27, 28
-     - unimplemented
+     - modeled
 
-A bank model exists (``hw/gpio/rockchip_gpio.c``): it implements the Rockchip
+All five banks use ``hw/gpio/rockchip_gpio.c``, which implements the Rockchip
 GPIO v2 register layout, 32 lines with direction, external level read-back and
-the edge/level interrupt block.  ``rock-5b`` does not instantiate it, so the
-five windows stay unimplemented.  Pin muxing itself lives in the IOC blocks,
-which the machine does not model either, so once the banks are wired up a
-guest will still not be able to switch a pin between GPIO and a peripheral
-function.
+the edge/level interrupt block.  The banks are available in both firmware
+paths and are exposed as the QOM children ``gpio0`` through ``gpio4`` below
+``/machine/soc``.  qtest can drive their ``unnamed-gpio-in`` lines, observe
+the ``gpio-out`` lines and check the bank interrupts at GIC SPIs 277-281.
+
+From an ``aarch64-softmmu`` build directory, the bank-level test is run with::
+
+  ninja tests/qtest/rk3588-gpio-test
+  QTEST_QEMU_BINARY=./qemu-system-aarch64 ./tests/qtest/rk3588-gpio-test
+
+Pin muxing itself lives in the IOC blocks, which the machine does not model,
+so a guest cannot yet switch a pin between GPIO and a peripheral function.
 
 .. list-table:: I2C
    :header-rows: 1
@@ -724,7 +732,7 @@ RK3588 kernel and firmware smoke tests:
   map to ``-serial`` slots 1..4 in table order.  The remaining
   ports (UART0, UART5, UART6, UART8, UART9) are modeled without
   external output.
-* Rockchip GPIO banks.
+* GPIO0 through GPIO4 through the Rockchip GPIO v2 bank model.
 * Dedicated RK3588 PMU0/PMU1/SYS GRF banks, plus reusable Rockchip RAM-backed
   syscon blocks for IOC and firewall-style register banks.
 * Dedicated RK3588 DDR controller/PHY windows and the BL31 DDR runtime
@@ -939,4 +947,3 @@ The verified ``extlinux.conf`` passes:
 U-Boot loads the kernel, initramfs, and DTB from eMMC, prints
 ``Starting kernel ...``, and the smoke initramfs reaches
 ``=== init done, exec sh ===``.
-
