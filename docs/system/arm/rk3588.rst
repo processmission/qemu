@@ -457,6 +457,16 @@ The machine test covers the modeled side of the map::
    ok 3 /aarch64/rock-5b/sdmmc
    ok 4 /aarch64/rock-5b/cru
    ok 5 /aarch64/rock-5b/sdmmc-idmac
+   ok 6 /aarch64/rock-5b/uart2-chardev
+   ok 7 /aarch64/rock-5b/uart2-rx-fifo-irq
+   ok 8 /aarch64/rock-5b/uart3-isolation
+
+The UART tests attach socket character backends to the documented
+``-serial`` slots: slot 1 for UART2 and slot 3 for UART3.  They check UART2
+transmit and receive bytes, FIFO enable and receive-ready status, the
+four-byte receive interrupt threshold, IRQ masking and re-enabling,
+clearing pending data, and reset.  The UART3 test checks that its registers
+and character backend remain independent of UART2.
 
 For the serial console, the slot assignment above is what makes
 ``-serial null -serial mon:stdio`` print the UART2 console: an image that

@@ -34,7 +34,7 @@
 #include "qom/qom-qobject.h"
 #include "qobject/qobject.h"
 
-#define MAX_IRQ 256
+#define MAX_IRQ 512
 
 #define TYPE_QTEST "qtest"
 
