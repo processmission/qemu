@@ -311,6 +311,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rock-5b-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-gpio-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-spi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-saradc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') and                            \
    config_all_devices.has_key('CONFIG_RTL8125_PCI') and slirp.found() ?       \
    ['rtl8125-test'] : []) +                                                   \
