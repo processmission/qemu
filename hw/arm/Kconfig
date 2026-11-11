@@ -306,6 +306,7 @@ config RK3588
     select ROCKCHIP_SYSCON
     select RK3588_SCMI
     select RK3588_TSADC
+    select RK3588_SARADC
     select OR_IRQ
     select ROCKCHIP_GPIO
     select ROCKCHIP_IOMMU

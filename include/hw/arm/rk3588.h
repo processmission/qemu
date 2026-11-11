@@ -92,6 +92,7 @@ struct RK3588SoCState {
     DeviceState *secure_otp;
     DeviceState *crypto;
     DeviceState *tsadc;
+    DeviceState *saradc;
     DeviceState *spi[RK3588_NUM_SPIS];
     DeviceState *dmac1;
     DeviceState *gpio[5];
