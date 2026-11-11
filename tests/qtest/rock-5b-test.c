@@ -168,7 +168,7 @@ static char *rock5b_uart_socket_path(void)
     return g_build_filename(dir, "serial.sock", NULL);
 }
 
-static int rock5b_uart_connect(const char *socket_path)
+static int rock5b_uart_connect(QTestState *qts, const char *socket_path)
 {
     Error *err = NULL;
     int fd = unix_connect(socket_path, &err);
@@ -183,6 +183,7 @@ static int rock5b_uart_connect(const char *socket_path)
                                    &timeout, sizeof(timeout)), ==, 0);
     }
 #endif
+    qtest_qmp_assert_success(qts, "{ 'execute' : 'query-status'}");
     return fd;
 }
 
@@ -251,7 +252,7 @@ static QTestState *rock5b_uart2_qtest_init(int *serial_fd,
                       "-chardev socket,id=uart2,path=%s,server=on,wait=off "
                       "-serial null -serial chardev:uart2 -display none",
                       *socket_path);
-    *serial_fd = rock5b_uart_connect(*socket_path);
+    *serial_fd = rock5b_uart_connect(qts, *socket_path);
     return qts;
 }
 
@@ -359,8 +360,8 @@ static void test_uart3_isolation(void)
         "-serial null -serial chardev:uart2 -serial null "
         "-serial chardev:uart3 -display none", uart2_path, uart3_path);
 
-    uart2_fd = rock5b_uart_connect(uart2_path);
-    uart3_fd = rock5b_uart_connect(uart3_path);
+    uart2_fd = rock5b_uart_connect(qts, uart2_path);
+    uart3_fd = rock5b_uart_connect(qts, uart3_path);
 
     /* UART2 is slot 1 and UART3 is slot 3; each has a distinct backend. */
     rock5b_uart_write(qts, ROCK5B_UART2_BASE, DW_UART_SCR, 0x52);
