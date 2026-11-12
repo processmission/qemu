@@ -7,11 +7,9 @@ Rockchip RK3588 Boards
 QEMU models four machines built around the Rockchip RK3588 SoC.  The
 ``rock-5b`` and ``rock-5b-plus`` models are the two ROCK 5B variants and
 are documented together as the ROCK 5B family; the ``rk3588-evb`` and
-``rk3588s-roc-pc`` models are the legacy RK3588 EVB and ROC-RK3588S-PC
+``rk3588s-roc-pc`` models are the RK3588 EVB and ROC-RK3588S-PC
 boards.  All of them support Linux and firmware images built for Rockchip
-RK3588 boards.  The ``rock-5b`` machine supports the current RK3588 SoC
-device split; ``rock-5b-plus`` and the two EVB/ROC models use the legacy
-machine implementation.
+RK3588 boards.  All four machines use the ``rk3588`` SoC device.
 
 .. list-table:: Supported RK3588 machines
    :header-rows: 1
@@ -27,27 +25,28 @@ machine implementation.
      - U-Boot/``-kernel`` boot, Type-C USB CDC, PCIe/RTL8125, SD/MMC
    * - ``rock-5b-plus``
      - Radxa ROCK 5B+
-     - legacy machine
+     - ``rk3588`` SoC device
      - Radxa SDK/image firmware boot, SPI NOR + SD payloads, PCIe
    * - ``rk3588-evb``
      - Rockchip RK3588 EVB
-     - legacy machine
+     - ``rk3588`` SoC device
      - RKNS firmware boot, direct Linux, GMAC, RKNPU
    * - ``rk3588s-roc-pc``
      - Firefly ROC-RK3588S-PC
-     - legacy machine
+     - ``rk3588`` SoC device
      - SD boot, DWMAC4, RKNPU
 
-Implementation status
----------------------
+All four machines accept 128 MiB to 16 GiB of RAM when the size is
+representable by the RK3588 DRAM geometry registers.
 
-Each RK3588 board has a self-contained machine implementation in its
-own board file.  ``rock-5b`` uses the split RK3588 SoC device
-(``hw/arm/rk3588.c``); ``rk3588-evb``, ``rk3588s-roc-pc`` and
-``rock-5b-plus`` currently carry their existing device and
-firmware-boot implementation directly in their board files.  There is
-no shared ``rk3588-machine.c`` base; duplicated board code is
-intentional while the board device sets are unified.
+Implementation
+--------------
+
+The ``rk3588`` SoC device (``hw/arm/rk3588.c``) creates the internal devices
+and connects their MMIO regions, interrupts, and internal buses.  Each board
+retains its machine initialization, FDT, RAM layout, serial slots, external
+devices, and firmware boot handling.  Board configuration supplies the SoC
+parameters and external connections.
 
 ROCK 5B
 -------
@@ -63,7 +62,7 @@ The ``rock-5b`` machine supports the following devices:
 * 4 Cortex-A55 and 4 Cortex-A76 CPUs
 * GICv3 with two ITS blocks, including LPIs and MSI
 * the architectural timers
-* UART1 through UART9
+* UART0 through UART9
 * Rockchip SFC with a 16 MiB SPI NOR flash (XTX XT25F128)
 * SPI0, SPI1 and SPI3, the three controllers routed to the 40-pin header
 * GPIO0 through GPIO4 using the Rockchip GPIO v2 bank model
@@ -77,9 +76,9 @@ The ``rock-5b`` machine supports the following devices:
 * PCIe2x1l2 host bridge with an RTL8125 2.5GbE endpoint (RX/TX, MSI and
   PHY link state; attach a QEMU network backend with ``-nic``)
 * SD/MMC controller (dw_mmc) with an SD card on ``if=sd,index=2``
+* SDHCI eMMC controller with an optional eMMC on ``if=sd,index=0``
 
-The machine always uses all eight CPUs and supports 128 MiB to 16 GiB
-of RAM, with 2 GiB as the default.
+The machine always uses all eight CPUs and defaults to 2 GiB of RAM.
 
 Peripheral mapping
 ~~~~~~~~~~~~~~~~~~
@@ -117,7 +116,7 @@ are 40-pin header positions.
      - ``0xfd890000``
      - 331
      - not routed on the board (PMU power domain)
-     - unimplemented
+     - no external serial backend
    * - UART1
      - ``0xfeb40000``
      - 332
@@ -167,7 +166,7 @@ are 40-pin header positions.
      - not routed on the board
      - ``-serial`` slot 9
 
-UART0 is reserved for the PMU domain and stays an unimplemented window.  The
+UART0 is modeled without an external serial backend.  The
 slot order is set by ``rock5b_connect_serial()``: slot 0 is the Type-C USB CDC
 console, slot 1 is UART2, and slots 2 to 9 carry UART1 and UART3 through
 UART9.  Every port uses the 16550-compatible ``serial_mm`` core with the
@@ -347,25 +346,6 @@ Program ``CTRLR0`` with an 8-bit frame format, set ``SER`` for chip select 0,
 ``00 20 ba 19``: the byte clocked out during the command, then the three ID
 bytes of the ``n25q256a`` model.
 
-The SAR ADC is a v2 controller, which is not register compatible with the
-rk3566 one: eight channels, 12-bit results, and a separate enable and status
-register for the end-of-conversion interrupt.  What the channels are wired to
-is board specific, so the machine leaves every input at zero and each one is a
-device property; ``-global`` drives one from the command line::
-
-  qemu-system-aarch64 -M rock-5b -m 256M -bios u-boot-dtb.bin \
-      -serial null -display none \
-      -global rk3588-saradc.vin4-uv=1800000
-
-``reference-uv`` is the full-scale voltage (1.8 V by default) and ``clock-hz``
-the ADC clock (1 MHz).  Writing ``START``, the single-shot bit and a channel
-number to ``CONV_CON`` starts a conversion that finishes
-``T_PD_SOC + T_DAS_SOC + 12`` ADC clocks later, which is 56 us with the values
-Linux programs.  The result lands in ``DATA_BASE + 4 * channel``, ``STATUS``
-reports busy until then, and ``END_INT_ST`` bit 0 is raised; the interrupt
-fires while that flag and ``END_INT_EN`` bit 0 are both set.  A channel that
-has never been converted, or that is not wired up, reads back as zero.
-
 The controllers drive the chip select of the peripheral attached to them, so
 ``SER`` alone selects the device; there is no separate GPIO to toggle.
 
@@ -489,6 +469,25 @@ reset output levels.  Migration is checked while a channel is running by
 verifying its register state, counter phase, output level and next waveform
 edge on the destination.
 
+The SAR ADC is a v2 controller, which is not register compatible with the
+rk3566 one: eight channels, 12-bit results, and a separate enable and status
+register for the end-of-conversion interrupt.  What the channels are wired to
+is board specific, so the machine leaves every input at zero and each one is a
+device property; ``-global`` drives one from the command line::
+
+  qemu-system-aarch64 -M rock-5b -m 256M -bios u-boot-dtb.bin \
+      -serial null -display none \
+      -global rk3588-saradc.vin4-uv=1800000
+
+``reference-uv`` is the full-scale voltage (1.8 V by default) and ``clock-hz``
+the ADC clock (1 MHz).  Writing ``START``, the single-shot bit and a channel
+number to ``CONV_CON`` starts a conversion that finishes
+``T_PD_SOC + T_DAS_SOC + 12`` ADC clocks later, which is 56 us with the values
+Linux programs.  The result lands in ``DATA_BASE + 4 * channel``, ``STATUS``
+reports busy until then, and ``END_INT_ST`` bit 0 is raised; the interrupt
+fires while that flag and ``END_INT_EN`` bit 0 are both set.  A channel that
+has never been converted, or that is not wired up, reads back as zero.
+
 The watchdog and the non-secure timer also exist per domain (``wdt-pmu`` at
 ``0xfd8e0000``, ``wdt-npu`` at ``0xfdaf8000``, ``timer-npu`` at
 ``0xfdb00000``); none of them is modeled.
@@ -511,7 +510,6 @@ under its own name, while an unimplemented window appears as
    (qemu) info mtree -f
    00000000feb40000-00000000feb4001f (prio 1, i/o): serial
    ...
-   00000000fd890000-00000000fd89ffff (prio -1000, i/o): rk3588.uart0
    00000000fec80000-00000000fec8ffff (prio -1000, i/o): rk3588.i2c6
 
 A guest access to one of those windows is reported with ``-d unimp`` and the
@@ -671,10 +669,6 @@ media from ``if=sd,index=2`` (the controller selected by U-Boot's
 ``mmc dev 1``).  A complete legacy Radxa image at ``if=sd,index=0`` remains
 accepted when no SPI drive is supplied.
 
-The machine is still built on the legacy monolithic RK3588 machine base and
-shares the legacy device models with the boards described below.  Its
-board-specific firmware layout follows.
-
 Radxa ROCK 5B+ Firmware Image
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -768,8 +762,8 @@ up at 1 Gbit/s with DHCP (10.0.2.15) and working ping/HTTP through
 ``-netdev user``.  (The stock Radxa kernel does not ship virtio PCI drivers;
 the image-shipped e1000e driver is used for the real-boot check.)
 
-Legacy RK3588 board machines
-----------------------------
+RK3588 EVB and ROC-RK3588S-PC
+--------------------------------
 
 The RK3588 machines are local downstream models for booting Linux and firmware
 images built for Rockchip RK3588 boards.  They support QEMU's direct Arm Linux
@@ -777,9 +771,8 @@ boot path and a downstream firmware path that runs the Rockchip TPL/SPL image,
 validates the U-Boot FIT loadables, hands off to U-Boot proper, and lets
 U-Boot boot Linux or firmware test images from modeled MMC media.
 
-Two legacy board machines are available.  Each board has its own machine source
-file and build-time Kconfig entry; the common ``rk3588`` type is abstract and
-contains only shared SoC construction and boot orchestration:
+Each board has its own machine source file and build-time Kconfig entry,
+and instantiates the common ``rk3588`` SoC device:
 
 ``rk3588-evb``
   Rockchip RK3588 EVB-style board.  Firmware boot reads the Rockchip RKNS
@@ -805,9 +798,9 @@ RK3588 kernel and firmware smoke tests:
   firmware paths.  The RK3588 machines do not install RK3588-only CPU
   compatibility properties for EL2 FP/SIMD traps or EL2 PAN handling.
 * GICv3 with two ITS blocks and LPI support.
-* All ten RK3588 UARTs (UART0-UART9) through QEMU's ``serial_mm``
-  16550-compatible model, each with a DesignWare APB UART vendor
-  register cover (USR @0x7c).  Only the ports with I/O routed out on
+* All ten RK3588 UARTs (UART0-UART9) through QEMU's ``dw8250``
+  model with a 16550-compatible core and DesignWare APB UART registers
+  (USR @0x7c).  Only the ports with I/O routed out on
   the ROCK 5B+ (UART1, UART2, UART3, UART4, UART7) bind a serial
   chardev: UART2 keeps ``serial_hd(0)`` as the console, the others
   map to ``-serial`` slots 1..4 in table order.  The remaining
@@ -877,9 +870,8 @@ than as RK3588-only devices:
   firmware.
 * ``rk3588-pwm`` covers the four-channel RK3588 PWM register block and its
   continuous left-aligned digital outputs.
-* ``dw-apb-uart-vendor`` covers the Synopsys DesignWare APB UART extension
-  window above the 16550-compatible core.  The UART core itself is QEMU's
-  reusable ``serial_mm`` 16550-compatible model.
+* ``dw8250`` combines QEMU's reusable 16550-compatible serial core with
+  Synopsys DesignWare APB UART registers.
 * ``rockchip-dwcmshc-vendor`` covers the Rockchip vendor window above the
   SDHCI core for DWCMSHC eMMC controllers.  The SDHCI SDMA buffer-boundary
   behavior is generic SDHCI logic, not RK3588-specific logic.
@@ -887,18 +879,19 @@ than as RK3588-only devices:
   ports, and IDMAC descriptor flow used by the RK3588 SD-card controller.
 * ``rockchip-pcie-host`` wraps QEMU's DesignWare PCIe host and adds the
   Rockchip APB vendor window expected by the ``dw-rockchip`` Linux driver.
-  Address mapping, compatible strings, MSI routing, and interrupt numbers stay
-  in the RK3588 board code.
+  The SoC maps the controller registers and connects interrupts.  Board code
+  supplies controller configuration, attaches endpoints, and describes PCIe
+  in the FDT.
 
 All MMIO register behavior is implemented outside the machine sources.  The
-RK3588 CRU, GRF, DDR, ATF DDR runtime descriptor, firmware compatibility MMIO,
-SCMI, secure OTP, and firmware USB2 host windows live in independently built
-devices under the corresponding ``hw/*`` subsystem directories.  The common
-machine source only maps and wires those devices and implements SoC boot-flow
-orchestration such as BootROM loading, PSCI/GIC handoff, and the
-SPL/BL31-to-U-Boot compatibility path.  The USB2 device is intentionally a
-firmware-oriented register model; it supplies the reset-visible EHCI/OHCI state
-U-Boot needs while scanning boot devices.
+RK3588 CRU, GRF, DDR, ATF DDR runtime descriptor, SCMI, OTP, and firmware USB2
+host windows live in independently built devices under the corresponding
+``hw/*`` subsystem directories.  The SoC maps and connects the peripheral
+devices.  Board code provides the ATF DDR runtime descriptor and handles
+BootROM loading, PSCI/GIC handoff, and the SPL/BL31-to-U-Boot compatibility
+path.  The USB2 device is intentionally a firmware-oriented register model;
+it supplies the reset-visible EHCI/OHCI state U-Boot needs while scanning boot
+devices.
 
 Direct Linux Boot
 ~~~~~~~~~~~~~~~~~

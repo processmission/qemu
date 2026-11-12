@@ -273,10 +273,10 @@ static uint64_t rockchip_sfc_status_read(RegisterInfo *reg, uint64_t value)
         return s->regs[R_RISR] & ~s->regs[R_IMR];
     case A_FSR:
         if (s->started && !s->write && s->remaining) {
-            return (32 << 8) | BIT(1) |
+            return (31 << 8) | BIT(1) |
                    (MIN(DIV_ROUND_UP(s->remaining, 4), 31) << 16);
         }
-        return (32 << 8) | BIT(1) | BIT(2);
+        return (31 << 8) | BIT(1) | BIT(2);
     case A_SR:
         return s->pending ? 1 : 0;
     case A_DATA:

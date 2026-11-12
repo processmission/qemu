@@ -17,6 +17,8 @@
 #include "hw/arm/rk3588.h"
 #include "hw/adc/rk3588_saradc.h"
 #include "hw/arm/bsa.h"
+#include "hw/arm/linux-boot-if.h"
+#include "hw/core/or-irq.h"
 #include "hw/core/qdev-properties.h"
 #include "net/net.h"
 #include "hw/core/sysbus.h"
@@ -24,28 +26,31 @@
 #include "hw/misc/unimp.h"
 #include "hw/core/register.h"
 #include "hw/gpio/rockchip_gpio.h"
-#include "hw/i2c/i2c.h"
 #include "hw/i2c/rk3x_i2c.h"
 #include "hw/misc/rockchip_crypto_v2.h"
+#include "hw/misc/rk3588_ddr.h"
+#include "hw/misc/rk3588_grf.h"
 #include "hw/misc/rk3588_pl330.h"
 #include "hw/misc/rk3588_pwm.h"
 #include "hw/misc/rk3588_rng.h"
+#include "hw/misc/rk3588_rknpu.h"
+#include "hw/misc/rk3588_scmi.h"
 #include "hw/misc/rk3588_tsadc.h"
+#include "hw/misc/rockchip_iommu.h"
+#include "hw/misc/rockchip_syscon.h"
 #include "hw/net/dwmac4.h"
 #include "hw/nvram/rk3588_secure_otp.h"
-#include "hw/net/rtl8125.h"
 #include "hw/pci-host/rockchip_pcie.h"
-#include "hw/rtc/hym8563.h"
 #include "hw/sd/dw_mmc.h"
-#include "hw/ssi/rk806.h"
+#include "hw/sd/rockchip_dwcmshc.h"
+#include "hw/sd/sdhci.h"
 #include "hw/ssi/rockchip_spi.h"
 #include "hw/timer/rockchip_stimer.h"
 #include "hw/usb/dwc3-udc.h"
+#include "hw/usb/rk3588_usb2_host.h"
 #include "migration/vmstate.h"
 #include "net/net.h"
 #include "qobject/qlist.h"
-#include "system/block-backend.h"
-#include "system/blockdev.h"
 #include "target/arm/gtimer.h"
 
 /* MPIDR Aff0 values per Aff1: 1 (one CPU per RK3588 cluster). */
@@ -53,14 +58,13 @@
 
 #define RK3588_CNTFRQ                24000000
 #define RK3588_SDMMC_SPI             203
+#define RK3588_SDHCI_SPI             205
 #define RK3588_SFC_SPI               206
 #define RK3588_USB3OTG0_SPI          220
-/* pcie2x1l2 interrupt lines, as wired in the RK3588 device tree. */
-#define RK3588_PCIE2X1L2_LEGACY_SPI  250
-#define RK3588_PCIE2X1L2_MSG_SPI     251
-#define RK3588_PCIE2X1L2_ERR_SPI     249
-#define RK3588_PCIE2X1L2_PMC_SPI     252
-#define RK3588_PCIE2X1L2_SYS_SPI     253
+#define RK3588_USB2_HOST0_EHCI_BASE  0xfc800000ULL
+#define RK3588_USB2_HOST0_OHCI_BASE  0xfc840000ULL
+#define RK3588_USB2_HOST1_EHCI_BASE  0xfc880000ULL
+#define RK3588_USB2_HOST1_OHCI_BASE  0xfc8c0000ULL
 #define RK3588_GIC_NUM_IRQS          512
 
 #define RK3588_GMAC0_BASE            0xfe1b0000
@@ -82,10 +86,13 @@
 #define RK3588_GPIO0_SPI             277
 #define RK3588_I2C6_BASE             0xfec80000
 #define RK3588_I2C6_SPI              323
+#define RK3588_DDR_LEGACY_BASE       0xf7000000ULL
+#define RK3588_DDR_LEGACY_PHY_BASE   0xfd800000ULL
+#define RK3588_DDR_LEGACY_PHY_AUX_BASE 0xfe000000ULL
+#define RK3588_DDRPHY_BASE           0xfd8d8000ULL
+#define RK3588_DDR_PHY_GATE_BASE     0xfe0c0000ULL
 
-/* UART0 in the PMU power domain is reserved; UART1-UART9 are modeled. */
-#define RK3588_FIRST_UART            (1)
-#define RK3588_UART1_SPI             332
+#define RK3588_UART0_SPI             331
 #define RK3588_UART_CLOCK            24000000
 #define RK3588_UART_BAUD_BASE        (RK3588_UART_CLOCK / 16)
 
@@ -100,12 +107,15 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_DEV_PWM1]       = { 0xfebd0000, 0x00000100 },
     [RK3588_DEV_PWM2]       = { 0xfebe0000, 0x00000100 },
     [RK3588_DEV_PWM3]       = { 0xfebf0000, 0x00000100 },
+    [RK3588_DEV_PMU0_GRF]   = { 0xfd588000, RK3588_GRF_MMIO_SIZE },
+    [RK3588_DEV_PMU1_GRF]   = { 0xfd58a000, RK3588_GRF_MMIO_SIZE },
+    [RK3588_DEV_SYS_GRF]    = { 0xfd58c000, RK3588_GRF_MMIO_SIZE },
     [RK3588_DEV_OTP]        = { 0xfecc0000, 0x00000400 },
     [RK3588_DEV_SFC]        = { 0xfe2b0000, 0x00004000 },
     [RK3588_DEV_SDMMC]      = { 0xfe2c0000, 0x00004000 },
+    [RK3588_DEV_SDHCI]      = { 0xfe2e0000, 0x00010000 },
     [RK3588_DEV_USB3OTG0]   = { 0xfc000000, 0x00400000 },
-    [RK3588_DEV_PCIE2X1L2_APB] = { 0xfe190000, 0x00010000 },
-    [RK3588_DEV_PCIE2X1L2_DBI] = { 0xa41000000ULL, 0x00400000 },
+    [RK3588_DEV_UART0]      = { 0xfd890000, 0x00010000 },
     [RK3588_DEV_UART1]      = { 0xfeb40000, 0x00010000 },
     [RK3588_DEV_UART2]      = { 0xfeb50000, 0x00010000 },
     [RK3588_DEV_UART3]      = { 0xfeb60000, 0x00010000 },
@@ -133,7 +143,10 @@ static const char *const rk3588_pwm_names[RK3588_NUM_PWMS] = {
 #define RK3588_UNIMPLEMENTED(name, base, size) \
     { "unimpl-" name, "rk3588." name, base, size, -1000 }
 
-/* Peripheral windows from RK3588 TRM v1.0, Table 1-1. */
+/*
+ * Peripheral windows from RK3588 TRM v1.0, Table 1-1.
+ * Implemented devices take priority over these fallback regions.
+ */
 static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("pcie3x4-config", 0xf0000000, 16 * MiB),
     RK3588_UNIMPLEMENTED("pcie3x2-config", 0xf1000000, 16 * MiB),
@@ -143,14 +156,19 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("pcie3x2-dbi-low", 0xf5400000, 4 * MiB),
     RK3588_UNIMPLEMENTED("pcie2x1l0-dbi-low", 0xf5800000, 4 * MiB),
     RK3588_UNIMPLEMENTED("pcie2x1l1-dbi-low", 0xf5c00000, 4 * MiB),
+    RK3588_UNIMPLEMENTED("ddrctl0", 0xf7000000, 16 * MiB),
+    RK3588_UNIMPLEMENTED("ddrctl1", 0xf8000000, 16 * MiB),
+    RK3588_UNIMPLEMENTED("ddrctl2", 0xf9000000, 16 * MiB),
+    RK3588_UNIMPLEMENTED("ddrctl3", 0xfa000000, 16 * MiB),
     RK3588_UNIMPLEMENTED("gpu-g610", 0xfb000000, 16 * MiB),
     RK3588_UNIMPLEMENTED("usb3-1", 0xfc400000, 4 * MiB),
-    RK3588_UNIMPLEMENTED("usb2host0", 0xfc800000, 512 * KiB),
-    RK3588_UNIMPLEMENTED("usb2host1", 0xfc880000, 512 * KiB),
     RK3588_UNIMPLEMENTED("mmu600-pcie", 0xfc900000, 2 * MiB),
     RK3588_UNIMPLEMENTED("mmu600-php", 0xfcb00000, 2 * MiB),
     RK3588_UNIMPLEMENTED("usb3-2", 0xfcd00000, 4 * MiB),
     RK3588_UNIMPLEMENTED("daplite2", 0xfd100000, 512 * KiB),
+    RK3588_UNIMPLEMENTED("pmu1-sgrf", 0xfd582000, 8 * KiB),
+    RK3588_UNIMPLEMENTED("bus-sgrf", 0xfd586000, 4 * KiB),
+    RK3588_UNIMPLEMENTED("dsu-sgrf", 0xfd587000, 4 * KiB),
     RK3588_UNIMPLEMENTED("pmu0-grf", 0xfd588000, 8 * KiB),
     RK3588_UNIMPLEMENTED("pmu1-grf", 0xfd58a000, 8 * KiB),
     RK3588_UNIMPLEMENTED("sys-grf", 0xfd58c000, 16 * KiB),
@@ -158,6 +176,8 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("bigcore1-grf", 0xfd592000, 8 * KiB),
     RK3588_UNIMPLEMENTED("litcore-grf", 0xfd594000, 16 * KiB),
     RK3588_UNIMPLEMENTED("dsu-grf", 0xfd598000, 16 * KiB),
+    RK3588_UNIMPLEMENTED("ddr01-grf", 0xfd59c000, 4 * KiB),
+    RK3588_UNIMPLEMENTED("ddr23-grf", 0xfd59d000, 4 * KiB),
     RK3588_UNIMPLEMENTED("center-grf", 0xfd59e000, 8 * KiB),
     RK3588_UNIMPLEMENTED("gpu-grf", 0xfd5a0000, 8 * KiB),
     RK3588_UNIMPLEMENTED("npu-grf", 0xfd5a2000, 8 * KiB),
@@ -184,7 +204,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("mipidcphy1-grf", 0xfd5ec000, 16 * KiB),
     RK3588_UNIMPLEMENTED("pmu1-ioc", 0xfd5f0000, 16 * KiB),
     RK3588_UNIMPLEMENTED("pmu2-ioc", 0xfd5f4000, 16 * KiB),
-    RK3588_UNIMPLEMENTED("bus-ioc", 0xfd5f8000, 4 * KiB),
     RK3588_UNIMPLEMENTED("vccio1-4-ioc", 0xfd5f9000, 4 * KiB),
     RK3588_UNIMPLEMENTED("vccio3-5-ioc", 0xfd5fa000, 4 * KiB),
     RK3588_UNIMPLEMENTED("vccio2-ioc", 0xfd5fb000, 4 * KiB),
@@ -266,6 +285,7 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("edp1", 0xfded0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("hdmi-rx", 0xfdee0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("interconnect", 0xfdf30000, 896 * KiB),
+    RK3588_UNIMPLEMENTED("firewall-dsuddr", 0xfe010000, 32 * KiB),
     RK3588_UNIMPLEMENTED("ahb2apb", 0xfe128000, 32 * KiB),
     RK3588_UNIMPLEMENTED("pcie3x4-apb", 0xfe150000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pcie3x2-apb", 0xfe160000, 64 * KiB),
@@ -277,7 +297,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("sata1", 0xfe220000, 64 * KiB),
     RK3588_UNIMPLEMENTED("sata2", 0xfe230000, 64 * KiB),
     RK3588_UNIMPLEMENTED("sdio", 0xfe2d0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("emmc", 0xfe2e0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("crypto-ns", 0xfe370000, 32 * KiB),
     RK3588_UNIMPLEMENTED("trng-ns", 0xfe378000, 32 * KiB),
     RK3588_UNIMPLEMENTED("i2s0", 0xfe470000, 64 * KiB),
@@ -369,20 +388,18 @@ static bool rk3588_soc_create_gic(RK3588SoCState *s, Error **errp)
     SysBusDevice *gicsbd = SYS_BUS_DEVICE(gicdev);
     QList *redist_region_count = qlist_new();
 
-    unsigned int num_irqs = s->legacy_firmware ?
-        RK3588_GIC_NUM_IRQS + GIC_INTERNAL : RK3588_GIC_NUM_IRQS;
+    unsigned int num_irqs = RK3588_GIC_NUM_IRQS;
 
     qdev_prop_set_uint32(gicdev, "num-cpu", s->num_cpus);
+    /* RK3588 TRM, Table 11-1: 480 SPIs and security extensions. */
     qdev_prop_set_uint32(gicdev, "num-irq", num_irqs);
+    qdev_prop_set_bit(gicdev, "has-security-extensions", true);
     qlist_append_int(redist_region_count, s->num_cpus);
     qdev_prop_set_array(gicdev, "redist-region-count", redist_region_count);
     object_property_set_link(OBJECT(gicdev), "sysmem",
                              OBJECT(s->memory), &error_abort);
     /* The RK3588 GICv3 exposes LPIs so that its ITS instances can realize. */
     qdev_prop_set_bit(gicdev, "has-lpi", true);
-    if (s->legacy_firmware) {
-        qdev_prop_set_bit(gicdev, "has-security-extensions", true);
-    }
 
     if (!sysbus_realize(gicsbd, errp)) {
         return false;
@@ -434,6 +451,14 @@ static bool rk3588_soc_create_gic(RK3588SoCState *s, Error **errp)
     return true;
 }
 
+void rk3588_soc_prepare_nonsecure_interrupts(RK3588SoCState *s)
+{
+    ARMLinuxBootIf *albif = ARM_LINUX_BOOT_IF(&s->gic);
+    ARMLinuxBootIfClass *albifc = ARM_LINUX_BOOT_IF_GET_CLASS(albif);
+
+    albifc->arm_linux_init(albif, false);
+}
+
 static bool rk3588_soc_create_its(RK3588SoCState *s, Error **errp)
 {
     static const int its_memmap[] = {
@@ -476,6 +501,139 @@ static bool rk3588_soc_create_cru(RK3588SoCState *s, Error **errp)
     memory_region_add_subregion(s->memory,
         rk3588_memmap[RK3588_DEV_CRU].base,
         sysbus_mmio_get_region(cru, 0));
+
+    return true;
+}
+
+static bool rk3588_soc_create_grf(RK3588SoCState *s, Error **errp)
+{
+    static const unsigned int grf_memmap[RK3588_GRF_MMIO_COUNT] = {
+        [RK3588_GRF_MMIO_PMU0] = RK3588_DEV_PMU0_GRF,
+        [RK3588_GRF_MMIO_PMU1] = RK3588_DEV_PMU1_GRF,
+        [RK3588_GRF_MMIO_SYS] = RK3588_DEV_SYS_GRF,
+    };
+    DeviceState *dev = qdev_new(TYPE_RK3588_GRF);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_child(OBJECT(s), "grf", OBJECT(dev));
+    object_unref(OBJECT(dev));
+    qdev_prop_set_uint64(dev, "ram-size", s->ram_size);
+    qdev_prop_set_uint32(dev, "dram-type", s->dram_type);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(grf_memmap); i++) {
+        memory_region_add_subregion(s->memory,
+            rk3588_memmap[grf_memmap[i]].base,
+            sysbus_mmio_get_region(sbd, i));
+    }
+
+    return true;
+}
+
+static bool rk3588_soc_create_syscons(RK3588SoCState *s, Error **errp)
+{
+    static const struct {
+        const char *name;
+        hwaddr base;
+        uint32_t size;
+    } syscons[] = {
+        { "php-grf", 0xfd5b0000, 4 * KiB },
+        { "usb-grf", 0xfd5ac000, 4 * KiB },
+        { "pmu1-ioc", 0xfd5f0000, 4 * KiB },
+        { "pmu2-ioc", 0xfd5f4000, 4 * KiB },
+        { "bus-ioc", 0xfd5f8000, 4 * KiB },
+        { "firewall-ddr", 0xfe030000, 4 * KiB },
+        { "firewall-sysmem", 0xfe038000, 4 * KiB },
+        { "combphy0", 0xfee00000, 0x100 },
+        { "combphy1", 0xfee10000, 0x100 },
+        { "combphy2", 0xfee20000, 0x100 },
+        { "pcie30phy", 0xfee80000, 128 * KiB },
+        { "pipe-phy-grf0", 0xfd5bc000, 4 * KiB },
+        { "pipe-phy-grf1", 0xfd5c0000, 4 * KiB },
+        { "pipe-phy-grf2", 0xfd5c4000, 4 * KiB },
+    };
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(syscons); i++) {
+        DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SYSCON);
+        SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+        qdev_prop_set_uint32(dev, "size", syscons[i].size);
+        object_property_add_child(OBJECT(s), syscons[i].name, OBJECT(dev));
+        object_unref(OBJECT(dev));
+        if (!sysbus_realize(sbd, errp)) {
+            return false;
+        }
+        sysbus_mmio_map(sbd, 0, syscons[i].base);
+    }
+
+    return true;
+}
+
+static bool rk3588_soc_create_scmi(RK3588SoCState *s, Error **errp)
+{
+    SysBusDevice *sbd;
+
+    s->scmi = qdev_new(TYPE_RK3588_SCMI);
+    object_property_add_child(OBJECT(s), "scmi", OBJECT(s->scmi));
+    object_unref(OBJECT(s->scmi));
+    sbd = SYS_BUS_DEVICE(s->scmi);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+    /* Board RAM takes precedence over the emulated firmware mailbox. */
+    sysbus_mmio_map_overlap(sbd, 0, RK3588_SCMI_SHMEM_BASE, -1);
+    return true;
+}
+
+bool rk3588_soc_handle_scmi_smc(RK3588SoCState *s, ARMCPU *cpu)
+{
+    CPUARMState *env = &cpu->env;
+    uint64_t fn = is_a64(env) ? env->xregs[0] : env->regs[0];
+
+    if ((uint32_t)fn != RK3588_SCMI_SMC_ID) {
+        return false;
+    }
+    rk3588_scmi_handle_smc(RK3588_SCMI(s->scmi));
+    if (is_a64(env)) {
+        env->xregs[0] = 0;
+    } else {
+        env->regs[0] = 0;
+    }
+    return true;
+}
+
+static bool rk3588_soc_create_ddr(RK3588SoCState *s, Error **errp)
+{
+    DeviceState *dev = qdev_new(TYPE_RK3588_DDR);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    s->ddr = dev;
+    object_property_add_child(OBJECT(s), "ddr", OBJECT(dev));
+    object_unref(OBJECT(dev));
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+
+    for (unsigned int i = 0; i < RK3588_DDR_LEGACY_CHANNEL_COUNT; i++) {
+        hwaddr base = RK3588_DDR_LEGACY_BASE +
+                      i * RK3588_DDR_LEGACY_CHANNEL_STRIDE;
+
+        for (unsigned int j = 0;
+             j < RK3588_DDR_LEGACY_CTRL_WINDOWS_PER_CHANNEL; j++) {
+            sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY(i, j),
+                            base + j * RK3588_DDR_LEGACY_WINDOW_STRIDE);
+        }
+        sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_GATE(i),
+                        RK3588_DDR_PHY_GATE_BASE +
+                        i * RK3588_DDR_LEGACY_WINDOW_STRIDE);
+    }
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY,
+                    RK3588_DDR_LEGACY_PHY_BASE);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY_AUX,
+                    RK3588_DDR_LEGACY_PHY_AUX_BASE);
+    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_DDRPHY, RK3588_DDRPHY_BASE);
 
     return true;
 }
@@ -526,9 +684,6 @@ static bool rk3588_soc_create_sdmmc(RK3588SoCState *s, Error **errp)
     object_property_add_child(OBJECT(s), "sdmmc", OBJECT(s->sdmmc));
     object_unref(OBJECT(s->sdmmc));
     SysBusDevice *sbd = SYS_BUS_DEVICE(s->sdmmc);
-    DriveInfo *di;
-    BusState *bus;
-    DeviceState *card;
 
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -548,33 +703,56 @@ static bool rk3588_soc_create_sdmmc(RK3588SoCState *s, Error **errp)
     sysbus_connect_irq(sbd, 0,
                        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_SDMMC_SPI));
 
-    /*
-     * The legacy -drive if=sd,index=2 interface is the board's microSD slot;
-     * indices 0 and 1 are the eMMC and SDIO controllers, which are not
-     * modeled.  With no drive the slot stays empty (no card).
-     */
-    di = drive_get(IF_SD, 0, 2);
-    if (!di) {
-        return true;
-    }
+    return true;
+}
 
-    bus = qdev_get_child_bus(s->sdmmc, "sd-bus");
-    if (!bus) {
-        error_setg(errp, "rk3588: sdmmc has no sd-bus");
+static bool rk3588_soc_create_sdhci(RK3588SoCState *s, Error **errp)
+{
+    SysBusDevice *sbd;
+    DeviceState *vendor;
+    SysBusDevice *vendor_sbd;
+
+    s->sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
+    object_property_add_child(OBJECT(s), "sdhci", OBJECT(s->sdhci));
+    object_unref(OBJECT(s->sdhci));
+    object_property_set_uint(OBJECT(s->sdhci), "sd-spec-version", 3,
+                             &error_abort);
+    object_property_set_uint(OBJECT(s->sdhci), "capareg", 0x280737ec6481,
+                             &error_abort);
+    object_property_set_uint(OBJECT(s->sdhci), "uhs", UHS_I, &error_abort);
+    object_property_set_uint(OBJECT(s->sdhci), "vendor-area1", 0x500,
+                             &error_abort);
+    object_property_set_uint(OBJECT(s->sdhci), "vendor-area2", 0x800,
+                             &error_abort);
+    sbd = SYS_BUS_DEVICE(s->sdhci);
+    if (!sysbus_realize(sbd, errp)) {
         return false;
     }
+    memory_region_add_subregion(s->memory,
+        rk3588_memmap[RK3588_DEV_SDHCI].base,
+        sysbus_mmio_get_region(sbd, 0));
+    sysbus_connect_irq(sbd, 0,
+                       qdev_get_gpio_in(DEVICE(&s->gic), RK3588_SDHCI_SPI));
 
-    card = qdev_new(TYPE_SD_CARD);
-    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(di),
-                            &error_fatal);
-    return qdev_realize_and_unref(card, bus, errp);
+    vendor = qdev_new(TYPE_ROCKCHIP_DWCMSHC_VENDOR);
+    vendor_sbd = SYS_BUS_DEVICE(vendor);
+    object_property_add_child(OBJECT(s), "sdhci-vendor", OBJECT(vendor));
+    object_unref(OBJECT(vendor));
+    if (!sysbus_realize(vendor_sbd, errp)) {
+        return false;
+    }
+    memory_region_add_subregion(s->memory,
+        rk3588_memmap[RK3588_DEV_SDHCI].base +
+        ROCKCHIP_DWCMSHC_VENDOR_BASE,
+        sysbus_mmio_get_region(vendor_sbd, 0));
+
+    return true;
 }
 
 static bool rk3588_soc_create_uart(RK3588SoCState *s, Error **errp)
 {
-    for (unsigned int i = RK3588_FIRST_UART; i < RK3588_NUM_UARTS; i++) {
+    for (unsigned int i = 0; i < RK3588_NUM_UARTS; i++) {
         SysBusDevice *uart = SYS_BUS_DEVICE(&s->uart[i]);
-        unsigned int n = i - RK3588_FIRST_UART;
 
         qdev_prop_set_uint32(DEVICE(uart), "baudbase", RK3588_UART_BAUD_BASE);
         if (!sysbus_realize(uart, errp)) {
@@ -582,11 +760,11 @@ static bool rk3588_soc_create_uart(RK3588SoCState *s, Error **errp)
         }
 
         memory_region_add_subregion(s->memory,
-            rk3588_memmap[RK3588_DEV_UART1 + n].base,
+            rk3588_memmap[RK3588_DEV_UART0 + i].base,
             sysbus_mmio_get_region(uart, 0));
         sysbus_connect_irq(uart, 0,
                            qdev_get_gpio_in(DEVICE(&s->gic),
-                                            RK3588_UART1_SPI + n));
+                                            RK3588_UART0_SPI + i));
     }
 
     return true;
@@ -610,78 +788,184 @@ static bool rk3588_soc_create_usb(RK3588SoCState *s, Error **errp)
     return true;
 }
 
-/*
- * pcie2x1l2 is the DesignWare controller whose single lane feeds the onboard
- * RTL8125 2.5GbE endpoint on the ROCK 5B family.  The DesignWare host itself is
- * a rockchip-pcie-host subclass; the endpoint is realized on the host root
- * port's secondary bus, which is where the unmodified Zephyr
- * pcie_dw_rockchip driver expects to enumerate it (bus 1, device 0, function
- * 0).
- */
+static bool rk3588_soc_create_usb2_host(RK3588SoCState *s, Error **errp)
+{
+    static const hwaddr bases[RK3588_USB2_HOST_MMIO_COUNT] = {
+        [RK3588_USB2_HOST_EHCI0] = RK3588_USB2_HOST0_EHCI_BASE,
+        [RK3588_USB2_HOST_OHCI0] = RK3588_USB2_HOST0_OHCI_BASE,
+        [RK3588_USB2_HOST_EHCI1] = RK3588_USB2_HOST1_EHCI_BASE,
+        [RK3588_USB2_HOST_OHCI1] = RK3588_USB2_HOST1_OHCI_BASE,
+    };
+    SysBusDevice *sbd;
+
+    s->usb2_host = RK3588_USB2_HOST(qdev_new(TYPE_RK3588_USB2_HOST));
+    object_property_add_child(OBJECT(s), "usb2-host",
+                              OBJECT(s->usb2_host));
+    object_unref(OBJECT(s->usb2_host));
+    sbd = SYS_BUS_DEVICE(s->usb2_host);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+    for (unsigned int i = 0; i < ARRAY_SIZE(bases); i++) {
+        memory_region_add_subregion(s->memory, bases[i],
+                                    sysbus_mmio_get_region(sbd, i));
+    }
+
+    rk3588_usb2_host_set_active(s->usb2_host, true);
+
+    return true;
+}
+
+static bool rk3588_soc_create_rknpu(RK3588SoCState *s, Error **errp)
+{
+    static const struct {
+        hwaddr base;
+        hwaddr mmu[2];
+        int spi;
+    } cores[] = {
+        { 0xfdab0000, { 0xfdab9000, 0xfdaba000 }, 110 },
+        { 0xfdac0000, { 0xfdaca000, 0 }, 111 },
+        { 0xfdad0000, { 0xfdada000, 0 }, 112 },
+    };
+    /* Sysbus MMIO order: PC, CNA, CORE, DPU, GLOBAL, PPU, PPU_RDMA. */
+    static const hwaddr offsets[] = {
+        0, 0x1000, 0x3000, ROCKCHIP_RKNN_DPU_OFFSET,
+        ROCKCHIP_RKNN_GLOBAL_OFFSET, ROCKCHIP_RKNN_PPU_OFFSET,
+        ROCKCHIP_RKNN_PPU_RDMA_OFFSET,
+    };
+    DeviceState *mmu[ARRAY_SIZE(cores)];
+    DeviceState *irq_or[ARRAY_SIZE(cores)];
+
+    if (!s->rknpu) {
+        return true;
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(cores); i++) {
+        g_autofree char *name = g_strdup_printf("rknn-mmu%u", i);
+        g_autofree char *irq_name = g_strdup_printf("rknn-irq-or%u", i);
+        unsigned int num_mmu = cores[i].mmu[1] ? 2 : 1;
+        SysBusDevice *sbd;
+
+        mmu[i] = qdev_new(TYPE_ROCKCHIP_IOMMU);
+        qdev_prop_set_uint32(mmu[i], "num-mmu", num_mmu);
+        qdev_prop_set_uint32(mmu[i], "core-index", i);
+        object_property_add_child(OBJECT(s), name, OBJECT(mmu[i]));
+        object_unref(OBJECT(mmu[i]));
+        sbd = SYS_BUS_DEVICE(mmu[i]);
+        if (!sysbus_realize(sbd, errp)) {
+            return false;
+        }
+        for (unsigned int j = 0; j < num_mmu; j++) {
+            sysbus_mmio_map(sbd, j, cores[i].mmu[j]);
+        }
+
+        irq_or[i] = qdev_new(TYPE_OR_IRQ);
+        qdev_prop_set_uint16(irq_or[i], "num-lines", 2);
+        object_property_add_child(OBJECT(s), irq_name, OBJECT(irq_or[i]));
+        object_unref(OBJECT(irq_or[i]));
+        if (!qdev_realize(irq_or[i], NULL, errp)) {
+            return false;
+        }
+        qdev_connect_gpio_out(irq_or[i], 0,
+                              qdev_get_gpio_in(DEVICE(&s->gic), cores[i].spi));
+        sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(irq_or[i], 0));
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(cores); i++) {
+        g_autofree char *name = g_strdup_printf("rknn%u", i);
+        MemoryRegion *dma_mr = rockchip_iommu_get_memory_region(
+            ROCKCHIP_IOMMU(mmu[i]));
+        DeviceState *dev = qdev_new(TYPE_RK3588_RKNPU);
+        SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+        qdev_prop_set_uint32(dev, "core-index", i);
+        object_property_set_link(OBJECT(dev), "dma", OBJECT(dma_mr),
+                                 &error_abort);
+        object_property_add_child(OBJECT(s), name, OBJECT(dev));
+        object_unref(OBJECT(dev));
+        if (!sysbus_realize(sbd, errp)) {
+            return false;
+        }
+        for (unsigned int j = 0; j < ARRAY_SIZE(offsets); j++) {
+            sysbus_mmio_map(sbd, j, cores[i].base + offsets[j]);
+        }
+        sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(irq_or[i], 1));
+        qdev_connect_gpio_out_named(s->cru, "rknpu-reset", i,
+                                    qdev_get_gpio_in_named(dev, "reset", 0));
+    }
+
+    return true;
+}
+
 static bool rk3588_soc_create_pcie(RK3588SoCState *s, Error **errp)
 {
-    s->pcie2x1l2 = qdev_new(TYPE_ROCKCHIP_PCIE_HOST);
-    object_property_add_child(OBJECT(s), "pcie2x1l2",
-                              OBJECT(s->pcie2x1l2));
-    object_unref(OBJECT(s->pcie2x1l2));
-    DeviceState *host = s->pcie2x1l2;
-    SysBusDevice *host_sbd = SYS_BUS_DEVICE(host);
-    PCIBus *secbus;
-    DeviceState *endpoint;
+    static const struct {
+        const char *name;
+        hwaddr dbi;
+        hwaddr apb;
+        int err_spi;
+        int legacy_spi;
+        int msg_spi;
+        int pmc_spi;
+        int sys_spi;
+    } hosts[RK3588_PCIE_COUNT] = {
+        [RK3588_PCIE3X4] = {
+            "pcie3x4", 0xa40000000ULL, 0xfe150000,
+            259, 260, 261, 262, 263,
+        },
+        [RK3588_PCIE3X2] = {
+            "pcie3x2", 0xa40400000ULL, 0xfe160000,
+            254, 255, 256, 257, 258,
+        },
+        [RK3588_PCIE2X1L0] = {
+            "pcie2x1l0", 0xa40800000ULL, 0xfe170000,
+            239, 240, 241, 242, 243,
+        },
+        [RK3588_PCIE2X1L2] = {
+            "pcie2x1l2", 0xa41000000ULL, 0xfe190000,
+            249, 250, 251, 252, 253,
+        },
+    };
 
-    qdev_prop_set_uint8(host, "bus-nr", 0);
-    qdev_prop_set_bit(host, "link-up", true);
-    if (!sysbus_realize(host_sbd, errp)) {
-        return false;
-    }
+    for (unsigned int i = 0; i < ARRAY_SIZE(hosts); i++) {
+        const RK3588PCIEConfig *config = &s->pcie_config[i];
+        DeviceState *host;
+        SysBusDevice *sbd;
 
-    /*
-     * Map the DBI window (4 KiB DesignWare core + RAZ/WI tail up to 4 MiB)
-     * and the Rockchip APB vendor window.  The CFG window at 0xf4000000 and
-     * the outbound memory apertures are created dynamically by the DesignWare
-     * iATU viewports when the guest programs them.
-     */
-    memory_region_add_subregion(s->memory,
-        rk3588_memmap[RK3588_DEV_PCIE2X1L2_DBI].base,
-        sysbus_mmio_get_region(host_sbd, 0));
-    memory_region_add_subregion(s->memory,
-        rk3588_memmap[RK3588_DEV_PCIE2X1L2_APB].base,
-        sysbus_mmio_get_region(host_sbd, 1));
-    memory_region_add_subregion(s->memory,
-        rk3588_memmap[RK3588_DEV_PCIE2X1L2_DBI].base +
-            ROCKCHIP_PCIE_DBI_CORE_SIZE,
-        sysbus_mmio_get_region(host_sbd, 2));
+        if (!config->enabled) {
+            continue;
+        }
+        host = qdev_new(TYPE_ROCKCHIP_PCIE_HOST);
+        s->pcie[i] = host;
+        host->id = g_strdup(config->id);
+        qdev_prop_set_uint32(host, "domain", config->domain);
+        qdev_prop_set_uint8(host, "bus-nr", config->bus_nr);
+        qdev_prop_set_bit(host, "link-up", config->link_up);
+        object_property_add_child(OBJECT(s), hosts[i].name, OBJECT(host));
+        object_unref(OBJECT(host));
+        sbd = SYS_BUS_DEVICE(host);
+        if (!sysbus_realize(sbd, errp)) {
+            return false;
+        }
 
-    /* INTA..INTD share the legacy line; MSI and the RK error lines follow. */
-    for (unsigned int i = 0; i < 4; i++) {
-        sysbus_connect_irq(host_sbd, i,
-            qdev_get_gpio_in(DEVICE(&s->gic),
-                             RK3588_PCIE2X1L2_LEGACY_SPI));
-    }
-    sysbus_connect_irq(host_sbd, ROCKCHIP_PCIE_MSG_IRQ,
-        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_PCIE2X1L2_MSG_SPI));
-    sysbus_connect_irq(host_sbd, ROCKCHIP_PCIE_ERR_IRQ,
-        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_PCIE2X1L2_ERR_SPI));
-    sysbus_connect_irq(host_sbd, ROCKCHIP_PCIE_PMC_IRQ,
-        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_PCIE2X1L2_PMC_SPI));
-    sysbus_connect_irq(host_sbd, ROCKCHIP_PCIE_SYS_IRQ,
-        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_PCIE2X1L2_SYS_SPI));
+        /* CFG and outbound memory windows are mapped by the guest's iATU. */
+        sysbus_mmio_map(sbd, 0, hosts[i].dbi);
+        sysbus_mmio_map(sbd, 1, hosts[i].apb);
+        sysbus_mmio_map(sbd, 2, hosts[i].dbi + ROCKCHIP_PCIE_DBI_CORE_SIZE);
 
-    secbus = rockchip_pcie_host_secondary_bus(host);
-    if (!secbus) {
-        error_setg(errp, "rk3588: pcie2x1l2 root port has no secondary bus");
-        return false;
-    }
-
-    endpoint = qdev_new(TYPE_RTL8125_PCI);
-    /*
-     * The onboard 2.5GbE endpoint is always physically present, so the SoC
-     * creates it unconditionally; bind a -nic configuration to it when one
-     * is supplied (match_default=false: model=rtl8125 / rtl8125-pci only).
-     */
-    qemu_configure_nic_device(endpoint, false, "rtl8125");
-    if (!qdev_realize_and_unref(endpoint, BUS(secbus), errp)) {
-        return false;
+        /* INTA..INTD share the legacy SPI. */
+        for (unsigned int j = 0; j < 4; j++) {
+            sysbus_connect_irq(sbd, j,
+                qdev_get_gpio_in(DEVICE(&s->gic), hosts[i].legacy_spi));
+        }
+        sysbus_connect_irq(sbd, ROCKCHIP_PCIE_MSG_IRQ,
+            qdev_get_gpio_in(DEVICE(&s->gic), hosts[i].msg_spi));
+        sysbus_connect_irq(sbd, ROCKCHIP_PCIE_ERR_IRQ,
+            qdev_get_gpio_in(DEVICE(&s->gic), hosts[i].err_spi));
+        sysbus_connect_irq(sbd, ROCKCHIP_PCIE_PMC_IRQ,
+            qdev_get_gpio_in(DEVICE(&s->gic), hosts[i].pmc_spi));
+        sysbus_connect_irq(sbd, ROCKCHIP_PCIE_SYS_IRQ,
+            qdev_get_gpio_in(DEVICE(&s->gic), hosts[i].sys_spi));
     }
 
     return true;
@@ -698,6 +982,7 @@ static bool rk3588_soc_create_secure_otp(RK3588SoCState *s, Error **errp)
     s->secure_otp = qdev_new(TYPE_RK3588_SECURE_OTP);
     object_property_add_child(OBJECT(s), "secure-otp",
                               OBJECT(s->secure_otp));
+    object_unref(OBJECT(s->secure_otp));
     sbd = SYS_BUS_DEVICE(s->secure_otp);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -716,6 +1001,7 @@ static bool rk3588_soc_create_crypto(RK3588SoCState *s, Error **errp)
 
     s->crypto = qdev_new(TYPE_ROCKCHIP_CRYPTO_V2);
     object_property_add_child(OBJECT(s), "crypto", OBJECT(s->crypto));
+    object_unref(OBJECT(s->crypto));
     sbd = SYS_BUS_DEVICE(s->crypto);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -730,6 +1016,7 @@ static bool rk3588_soc_create_tsadc(RK3588SoCState *s, Error **errp)
 
     s->tsadc = qdev_new(TYPE_RK3588_TSADC);
     object_property_add_child(OBJECT(s), "tsadc", OBJECT(s->tsadc));
+    object_unref(OBJECT(s->tsadc));
     sbd = SYS_BUS_DEVICE(s->tsadc);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -740,18 +1027,13 @@ static bool rk3588_soc_create_tsadc(RK3588SoCState *s, Error **errp)
     return true;
 }
 
-/*
- * The SAR ADC block is shared between the 40-pin header (channel 4 on
- * pin 22) and the on-board rails (channel 0 is the Maskrom/BOOT strap), so
- * the model exposes one voltage property per channel and leaves them all
- * at zero.  A machine, or a command line -global, can wire a channel up.
- */
 static bool rk3588_soc_create_saradc(RK3588SoCState *s, Error **errp)
 {
     SysBusDevice *sbd;
 
     s->saradc = qdev_new(TYPE_RK3588_SARADC);
     object_property_add_child(OBJECT(s), "saradc", OBJECT(s->saradc));
+    object_unref(OBJECT(s->saradc));
     sbd = SYS_BUS_DEVICE(s->saradc);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -762,15 +1044,8 @@ static bool rk3588_soc_create_saradc(RK3588SoCState *s, Error **errp)
     return true;
 }
 
-/*
- * Model one Rockchip SPI controller.  Every RK3588 SPI instance is the same
- * IP block, so the window and the interrupt line follow from the memmap
- * index.  The controller also gets a qdev id so that SPI peripherals can be
- * attached to its bus by name, like the PCIe hosts; the legacy machines
- * additionally attach the RK806 PMIC to SPI2.
- */
-static bool rk3588_soc_create_spi(RK3588SoCState *s, unsigned int dev,
-                                  Error **errp)
+static bool rk3588_soc_create_spi_controller(RK3588SoCState *s,
+                                            unsigned int dev, Error **errp)
 {
     unsigned int idx = dev - RK3588_DEV_SPI0;
     SysBusDevice *sbd;
@@ -781,12 +1056,8 @@ static bool rk3588_soc_create_spi(RK3588SoCState *s, unsigned int dev,
     s->spi[idx]->id = g_strdup(rk3588_spi_names[idx]);
     object_property_add_child(OBJECT(s), rk3588_spi_names[idx],
                               OBJECT(s->spi[idx]));
-    /*
-     * The header controllers hand the chip select straight to whatever is
-     * attached, so let them drive the line as well.  SPI2 carries the
-     * on-board PMIC instead, and boards that route the select through a GPIO
-     * keep the default and drive it themselves.
-     */
+    object_unref(OBJECT(s->spi[idx]));
+    /* SPI2 peripherals use the board's existing chip-select wiring. */
     if (dev != RK3588_DEV_SPI2) {
         qdev_prop_set_bit(s->spi[idx], "mirror-cs", true);
     }
@@ -801,18 +1072,14 @@ static bool rk3588_soc_create_spi(RK3588SoCState *s, unsigned int dev,
     return true;
 }
 
-static bool rk3588_soc_create_spi2(RK3588SoCState *s, Error **errp)
+static bool rk3588_soc_create_spi(RK3588SoCState *s, Error **errp)
 {
-    unsigned int idx = RK3588_DEV_SPI2 - RK3588_DEV_SPI0;
-    DeviceState *pmic;
-
-    if (!rk3588_soc_create_spi(s, RK3588_DEV_SPI2, errp)) {
-        return false;
+    for (unsigned int i = 0; i < RK3588_NUM_SPIS; i++) {
+        if (!rk3588_soc_create_spi_controller(s, RK3588_DEV_SPI0 + i, errp)) {
+            return false;
+        }
     }
-
-    pmic = qdev_new(TYPE_RK806);
-    return qdev_realize_and_unref(pmic, BUS(ROCKCHIP_SPI(s->spi[idx])->spi),
-                                  errp);
+    return true;
 }
 
 static bool rk3588_soc_create_rng(RK3588SoCState *s, Error **errp)
@@ -821,13 +1088,13 @@ static bool rk3588_soc_create_rng(RK3588SoCState *s, Error **errp)
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     object_property_add_child(OBJECT(s), "rng", OBJECT(dev));
+    object_unref(OBJECT(dev));
     if (!sysbus_realize(sbd, errp)) {
         return false;
     }
     sysbus_mmio_map(sbd, 0, RK3588_RNG_BASE);
     sysbus_connect_irq(sbd, 0,
                        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_RNG_SPI));
-    object_unref(OBJECT(dev));
     return true;
 }
 
@@ -837,6 +1104,7 @@ static bool rk3588_soc_create_dmac1(RK3588SoCState *s, Error **errp)
 
     s->dmac1 = qdev_new(TYPE_RK3588_PL330);
     object_property_add_child(OBJECT(s), "dmac1", OBJECT(s->dmac1));
+    object_unref(OBJECT(s->dmac1));
     sbd = SYS_BUS_DEVICE(s->dmac1);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -856,11 +1124,11 @@ static bool rk3588_soc_create_stimer(RK3588SoCState *s, Error **errp)
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     object_property_add_child(OBJECT(s), "stimer", OBJECT(dev));
+    object_unref(OBJECT(dev));
     if (!sysbus_realize(sbd, errp)) {
         return false;
     }
     sysbus_mmio_map(sbd, 0, RK3588_STIMER_BASE);
-    object_unref(OBJECT(dev));
     return true;
 }
 
@@ -876,6 +1144,7 @@ static bool rk3588_soc_create_gpio(RK3588SoCState *s, Error **errp)
 
         s->gpio[i] = qdev_new(TYPE_ROCKCHIP_GPIO);
         object_property_add_child(OBJECT(s), name, OBJECT(s->gpio[i]));
+        object_unref(OBJECT(s->gpio[i]));
         sbd = SYS_BUS_DEVICE(s->gpio[i]);
         if (!sysbus_realize(sbd, errp)) {
             return false;
@@ -884,7 +1153,6 @@ static bool rk3588_soc_create_gpio(RK3588SoCState *s, Error **errp)
         sysbus_connect_irq(sbd, 0,
                            qdev_get_gpio_in(DEVICE(&s->gic),
                                             RK3588_GPIO0_SPI + i));
-        object_unref(OBJECT(s->gpio[i]));
     }
     return true;
 }
@@ -908,11 +1176,10 @@ static bool rk3588_soc_create_pwm(RK3588SoCState *s, Error **errp)
 static bool rk3588_soc_create_i2c6(RK3588SoCState *s, Error **errp)
 {
     SysBusDevice *sbd;
-    DeviceState *rtc;
-    I2CBus *bus;
 
     s->i2c6 = qdev_new(TYPE_RK3X_I2C);
     object_property_add_child(OBJECT(s), "i2c6", OBJECT(s->i2c6));
+    object_unref(OBJECT(s->i2c6));
     sbd = SYS_BUS_DEVICE(s->i2c6);
     if (!sysbus_realize(sbd, errp)) {
         return false;
@@ -921,10 +1188,6 @@ static bool rk3588_soc_create_i2c6(RK3588SoCState *s, Error **errp)
     sysbus_connect_irq(sbd, 0,
                        qdev_get_gpio_in(DEVICE(&s->gic), RK3588_I2C6_SPI));
 
-    bus = I2C_BUS(qdev_get_child_bus(s->i2c6, "i2c-bus"));
-    rtc = DEVICE(i2c_slave_create_simple(bus, TYPE_HYM8563, 0x51));
-    qdev_connect_gpio_out_named(rtc, "irq", 0,
-                                qdev_get_gpio_in(s->gpio[0], 8));
     return true;
 }
 
@@ -951,6 +1214,7 @@ static bool rk3588_soc_create_gmac(RK3588SoCState *s, Error **errp)
                                   OBJECT(s->gmac[i]));
         qemu_configure_nic_device(s->gmac[i], gmacs[i].match_default,
                                   gmacs[i].name);
+        object_unref(OBJECT(s->gmac[i]));
         sbd = SYS_BUS_DEVICE(s->gmac[i]);
         if (!sysbus_realize(sbd, errp)) {
             return false;
@@ -1010,21 +1274,6 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
             object_property_set_bool(OBJECT(cpu), "start-powered-off", true,
                                      &error_abort);
         }
-        if (s->legacy_firmware) {
-            if (object_property_find(OBJECT(cpu), "has_el2")) {
-                object_property_set_bool(OBJECT(cpu), "has_el2", true,
-                                         &error_abort);
-            }
-            if (object_property_find(OBJECT(cpu), "has_el3")) {
-                object_property_set_bool(OBJECT(cpu), "has_el3", true,
-                                         &error_abort);
-            }
-            if (object_property_find(OBJECT(cpu), "reset-cbar")) {
-                object_property_set_int(OBJECT(cpu), "reset-cbar",
-                                        rk3588_memmap[RK3588_DEV_GIC_DIST].base,
-                                        &error_abort);
-            }
-        }
 
         if (!qdev_realize(DEVICE(cpu), NULL, errp)) {
             return;
@@ -1032,47 +1281,33 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
     }
 
     if (!rk3588_soc_create_gic(s, errp) ||
-        !rk3588_soc_create_gpio(s, errp) ||
-        !rk3588_soc_create_pwm(s, errp)) {
-        return;
-    }
-    if (s->legacy_firmware) {
-        for (unsigned int i = RK3588_FIRST_UART; i < RK3588_NUM_UARTS; i++) {
-            qdev_prop_set_uint32(DEVICE(&s->uart[i]), "baudbase",
-                                 RK3588_UART_BAUD_BASE);
-            if (!sysbus_realize(SYS_BUS_DEVICE(&s->uart[i]), errp)) {
-                return;
-            }
-        }
-        if (!sysbus_realize(SYS_BUS_DEVICE(s->usb3otg0), errp)) {
-            return;
-        }
-        if (!rk3588_soc_create_secure_otp(s, errp) ||
-            !rk3588_soc_create_crypto(s, errp) ||
-            !rk3588_soc_create_tsadc(s, errp) ||
-            !rk3588_soc_create_spi2(s, errp) ||
-            !rk3588_soc_create_rng(s, errp) ||
-            !rk3588_soc_create_dmac1(s, errp) ||
-            !rk3588_soc_create_stimer(s, errp) ||
-            !rk3588_soc_create_i2c6(s, errp) ||
-            !rk3588_soc_create_gmac(s, errp)) {
-            return;
-        }
-        return;
-    }
-
-    if (!rk3588_soc_create_its(s, errp) ||
-        !rk3588_soc_create_cru(s, errp) ||
-        !rk3588_soc_create_otp(s, errp) ||
-        !rk3588_soc_create_sfc(s, errp) ||
-        !rk3588_soc_create_sdmmc(s, errp) ||
+        !rk3588_soc_create_its(s, errp) ||
         !rk3588_soc_create_uart(s, errp) ||
-        !rk3588_soc_create_spi(s, RK3588_DEV_SPI0, errp) ||
-        !rk3588_soc_create_spi(s, RK3588_DEV_SPI1, errp) ||
-        !rk3588_soc_create_spi(s, RK3588_DEV_SPI3, errp) ||
-        !rk3588_soc_create_saradc(s, errp) ||
+        !rk3588_soc_create_sdhci(s, errp) ||
+        !rk3588_soc_create_sdmmc(s, errp) ||
+        !rk3588_soc_create_sfc(s, errp) ||
+        !rk3588_soc_create_usb2_host(s, errp) ||
         !rk3588_soc_create_usb(s, errp) ||
-        !rk3588_soc_create_pcie(s, errp)) {
+        !rk3588_soc_create_cru(s, errp) ||
+        !rk3588_soc_create_grf(s, errp) ||
+        !rk3588_soc_create_syscons(s, errp) ||
+        !rk3588_soc_create_ddr(s, errp) ||
+        !rk3588_soc_create_scmi(s, errp) ||
+        !rk3588_soc_create_rknpu(s, errp) ||
+        !rk3588_soc_create_pcie(s, errp) ||
+        !rk3588_soc_create_secure_otp(s, errp) ||
+        !rk3588_soc_create_crypto(s, errp) ||
+        !rk3588_soc_create_tsadc(s, errp) ||
+        !rk3588_soc_create_saradc(s, errp) ||
+        !rk3588_soc_create_spi(s, errp) ||
+        !rk3588_soc_create_rng(s, errp) ||
+        !rk3588_soc_create_dmac1(s, errp) ||
+        !rk3588_soc_create_stimer(s, errp) ||
+        !rk3588_soc_create_gpio(s, errp) ||
+        !rk3588_soc_create_pwm(s, errp) ||
+        !rk3588_soc_create_i2c6(s, errp) ||
+        !rk3588_soc_create_gmac(s, errp) ||
+        !rk3588_soc_create_otp(s, errp)) {
         return;
     }
 
@@ -1085,7 +1320,7 @@ static void rk3588_soc_instance_init(Object *obj)
 
     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GICV3);
 
-    for (unsigned int i = RK3588_FIRST_UART; i < RK3588_NUM_UARTS; i++) {
+    for (unsigned int i = 0; i < RK3588_NUM_UARTS; i++) {
         g_autofree char *name = g_strdup_printf("uart%u", i);
         g_autofree char *alias = g_strdup_printf("uart%u-chardev", i);
 
@@ -1105,10 +1340,11 @@ static void rk3588_soc_instance_init(Object *obj)
 static const Property rk3588_soc_properties[] = {
     DEFINE_PROP_LINK("memory", RK3588SoCState, memory, TYPE_MEMORY_REGION,
                      MemoryRegion *),
-    DEFINE_PROP_BOOL("legacy-firmware", RK3588SoCState, legacy_firmware,
-                     false),
     DEFINE_PROP_UINT32("num-cpus", RK3588SoCState, num_cpus,
                        RK3588_NUM_CPUS),
+    DEFINE_PROP_UINT64("ram-size", RK3588SoCState, ram_size, 0),
+    DEFINE_PROP_BOOL("rknpu", RK3588SoCState, rknpu, false),
+    DEFINE_PROP_UINT32("dram-type", RK3588SoCState, dram_type, 0),
     DEFINE_PROP_UINT32("gmac-mask", RK3588SoCState, gmac_mask, 0),
     DEFINE_PROP_BOOL("secure-otp-unfused", RK3588SoCState,
                      secure_otp_unfused, false),

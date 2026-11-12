@@ -13,6 +13,7 @@
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "hw/core/irq.h"
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
@@ -21,28 +22,45 @@
 OBJECT_DECLARE_SIMPLE_TYPE(RockchipCRUState, ROCKCHIP_CRU)
 
 #define ROCKCHIP_CRU_SIZE 0x5c000
-#define ROCKCHIP_CRU_NUM_REGS (9 * 4 + 10)
+#define ROCKCHIP_CRU_NUM_PLL_REGS (4 * 3 + 5 * 4)
+#define ROCKCHIP_CRU_NUM_REGS (ROCKCHIP_CRU_NUM_PLL_REGS + 10 + 31 + 5)
 #define ROCKCHIP_CRU_NUM_WORDS (ROCKCHIP_CRU_SIZE / 4)
+#define ROCKCHIP_CRU_RKNPU_RESET_COUNT 3
+#define CRU_SOFTRST_CON(n) (0xa00 + (n) * 4)
 
 struct RockchipCRUState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     RegisterInfo regs_info[ROCKCHIP_CRU_NUM_REGS];
     uint32_t regs[ROCKCHIP_CRU_NUM_REGS];
-    /*
-     * Every other CRU register, including the clock gates, soft resets and
-     * the vendor reset-status banks, is a plain storage register with the
-     * Rockchip high-word write mask.  U-Boot and downstream firmware program
-     * these banks
-     * and read them back (for example reset 0x30a04 must read 0x3000 after
-     * a 0x30003000 write), so ignoring the writes leaves real firmware in an
-     * inconsistent state.
-     */
+    /* Other registers use storage with a high-word write mask. */
     uint32_t generic[ROCKCHIP_CRU_NUM_WORDS];
+    qemu_irq rknpu_reset[ROCKCHIP_CRU_RKNPU_RESET_COUNT];
 };
 
 #define PLL_POWER_DOWN BIT(13)
 #define PLL_LOCKED BIT(15)
+
+static const struct {
+    hwaddr offset;
+    uint32_t mask;
+} rockchip_cru_rknpu_resets[ROCKCHIP_CRU_RKNPU_RESET_COUNT] = {
+    [0] = { CRU_SOFTRST_CON(30), BIT(6) | BIT(8) },
+    [1] = { CRU_SOFTRST_CON(27), BIT(0) | BIT(2) },
+    [2] = { CRU_SOFTRST_CON(28), BIT(0) | BIT(2) },
+};
+
+static void rockchip_cru_update_rknpu_reset(RockchipCRUState *s, hwaddr offset,
+                                           uint32_t value)
+{
+    for (unsigned int i = 0; i < ARRAY_SIZE(rockchip_cru_rknpu_resets); i++) {
+        if (offset == rockchip_cru_rknpu_resets[i].offset) {
+            qemu_set_irq(s->rknpu_reset[i],
+                         !!(value & rockchip_cru_rknpu_resets[i].mask));
+            return;
+        }
+    }
+}
 
 static uint64_t rockchip_cru_masked_write(RegisterInfo *reg, uint64_t value)
 {
@@ -52,44 +70,85 @@ static uint64_t rockchip_cru_masked_write(RegisterInfo *reg, uint64_t value)
     return (old & ~mask) | (value & mask);
 }
 
+static RegisterInfo *rockchip_cru_register(RockchipCRUState *s, hwaddr offset)
+{
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
+        if (s->regs_info[i].access->addr == offset) {
+            return &s->regs_info[i];
+        }
+    }
+    return NULL;
+}
+
 static uint64_t rockchip_cru_pll_lock(RegisterInfo *reg, uint64_t value)
 {
     RockchipCRUState *s = ROCKCHIP_CRU(reg->opaque);
-    size_t index = reg - s->regs_info;
-    /* Each PLL entry contains CON0, CON1, CON2 and CON6, in that order. */
-    bool powered = !(s->regs[index - 2] & PLL_POWER_DOWN);
-    bool configured = (s->regs[index - 3] & 0x3ff) &&
-                      (s->regs[index - 2] & 0x3f);
+    hwaddr base = reg->access->addr - 0x18;
+    uint32_t con0 = *(uint32_t *)rockchip_cru_register(s, base)->data;
+    uint32_t con1 = *(uint32_t *)rockchip_cru_register(s, base + 4)->data;
+    bool powered = !(con1 & PLL_POWER_DOWN);
+    bool configured = (con0 & 0x3ff) >= 64 &&
+                      (con1 & 0x3f) &&
+                      extract32(con1, 6, 3) <= 6;
 
     /* PLL settling is synchronous after configuration and power-up. */
     return powered && configured ? PLL_LOCKED : 0;
 }
 
-#define CRU_PLL(label, base) \
-    { \
+#define CRU_PLL_CON0(label, base) \
     { .name = label "_CON0", .addr = base, \
-      .pre_write = rockchip_cru_masked_write }, \
-    { .name = label "_CON1", .addr = base + 4, .reset = PLL_POWER_DOWN, \
-      .pre_write = rockchip_cru_masked_write }, \
-    { .name = label "_CON2", .addr = base + 8, \
-      .pre_write = rockchip_cru_masked_write }, \
+      .pre_write = rockchip_cru_masked_write }
+
+#define CRU_PLL_CON1(label, base) \
+    { .name = label "_CON1", .addr = base + 4, \
+      .pre_write = rockchip_cru_masked_write }
+
+#define CRU_PLL_CON2(label, base) \
+    { .name = label "_CON2", .addr = base + 8, .ro = 0xffff0000 }
+
+#define CRU_PLL_CON6(label, base) \
     { .name = label "_CON6", .addr = base + 0x18, .ro = UINT32_MAX, \
-      .post_read = rockchip_cru_pll_lock } \
-    }
+      .post_read = rockchip_cru_pll_lock }
 
 #define CRU_CLOCK(label, offset) \
     { .name = label, .addr = offset, .pre_write = rockchip_cru_masked_write }
 
-static const RegisterAccessInfo rockchip_cru_pll_regs[][4] = {
-    CRU_PLL("B0PLL", 0x50000),
-    CRU_PLL("B1PLL", 0x52020),
-    CRU_PLL("LPLL", 0x58040),
-    CRU_PLL("V0PLL", 0x00160),
-    CRU_PLL("AUPLL", 0x00180),
-    CRU_PLL("CPLL", 0x001a0),
-    CRU_PLL("GPLL", 0x001c0),
-    CRU_PLL("NPLL", 0x001e0),
-    CRU_PLL("PPLL", 0x08200),
+#define CRU_FRAC(label, offset, reset_value) \
+    { .name = label, .addr = offset, .reset = reset_value }
+
+static const RegisterAccessInfo rockchip_cru_pll_regs[] = {
+    CRU_PLL_CON0("B0PLL", 0x50000),
+    CRU_PLL_CON1("B0PLL", 0x50000),
+    CRU_PLL_CON6("B0PLL", 0x50000),
+    CRU_PLL_CON0("B1PLL", 0x52020),
+    CRU_PLL_CON1("B1PLL", 0x52020),
+    CRU_PLL_CON6("B1PLL", 0x52020),
+    CRU_PLL_CON0("LPLL", 0x58040),
+    CRU_PLL_CON1("LPLL", 0x58040),
+    CRU_PLL_CON6("LPLL", 0x58040),
+    CRU_PLL_CON0("V0PLL", 0x00160),
+    CRU_PLL_CON1("V0PLL", 0x00160),
+    CRU_PLL_CON2("V0PLL", 0x00160),
+    CRU_PLL_CON6("V0PLL", 0x00160),
+    CRU_PLL_CON0("AUPLL", 0x00180),
+    CRU_PLL_CON1("AUPLL", 0x00180),
+    CRU_PLL_CON2("AUPLL", 0x00180),
+    CRU_PLL_CON6("AUPLL", 0x00180),
+    CRU_PLL_CON0("CPLL", 0x001a0),
+    CRU_PLL_CON1("CPLL", 0x001a0),
+    CRU_PLL_CON2("CPLL", 0x001a0),
+    CRU_PLL_CON6("CPLL", 0x001a0),
+    CRU_PLL_CON0("GPLL", 0x001c0),
+    CRU_PLL_CON1("GPLL", 0x001c0),
+    CRU_PLL_CON2("GPLL", 0x001c0),
+    CRU_PLL_CON6("GPLL", 0x001c0),
+    CRU_PLL_CON0("NPLL", 0x001e0),
+    CRU_PLL_CON1("NPLL", 0x001e0),
+    CRU_PLL_CON6("NPLL", 0x001e0),
+    CRU_PLL_CON0("PPLL", 0x08200),
+    CRU_PLL_CON1("PPLL", 0x08200),
+    CRU_PLL_CON2("PPLL", 0x08200),
+    CRU_PLL_CON6("PPLL", 0x08200),
 };
 
 static const RegisterAccessInfo rockchip_cru_clock_regs[] = {
@@ -103,19 +162,62 @@ static const RegisterAccessInfo rockchip_cru_clock_regs[] = {
     CRU_CLOCK("BIGCORE0_MODE_CON0", 0x50280),
     CRU_CLOCK("BIGCORE1_MODE_CON0", 0x52280),
     CRU_CLOCK("DSU_MODE_CON0", 0x58280),
+
+    /* Fractional dividers store the numerator and denominator in 32 bits. */
+    CRU_FRAC("CLKSEL_CON25", 0x00364, 0x03355460),
+    CRU_FRAC("CLKSEL_CON27", 0x0036c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON29", 0x00374, 0x03355460),
+    CRU_FRAC("CLKSEL_CON31", 0x0037c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON33", 0x00384, 0x03355460),
+    CRU_FRAC("CLKSEL_CON35", 0x0038c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON42", 0x003a8, 0x001403de),
+    CRU_FRAC("CLKSEL_CON44", 0x003b0, 0x001403de),
+    CRU_FRAC("CLKSEL_CON46", 0x003b8, 0x001403de),
+    CRU_FRAC("CLKSEL_CON48", 0x003c0, 0x001403de),
+    CRU_FRAC("CLKSEL_CON50", 0x003c8, 0x001403de),
+    CRU_FRAC("CLKSEL_CON52", 0x003d0, 0x001403de),
+    CRU_FRAC("CLKSEL_CON54", 0x003d8, 0x001403de),
+    CRU_FRAC("CLKSEL_CON56", 0x003e0, 0x001403de),
+    CRU_FRAC("CLKSEL_CON58", 0x003e8, 0x001403de),
+    CRU_FRAC("CLKSEL_CON119", 0x004dc, 0x03355460),
+    CRU_FRAC("CLKSEL_CON121", 0x004e4, 0x03355460),
+    CRU_FRAC("CLKSEL_CON123", 0x004ec, 0x03355460),
+    CRU_FRAC("CLKSEL_CON125", 0x004f4, 0x03355460),
+    CRU_FRAC("CLKSEL_CON130", 0x00508, 0x03355460),
+    CRU_FRAC("CLKSEL_CON139", 0x0052c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON141", 0x00534, 0x03355460),
+    CRU_FRAC("CLKSEL_CON145", 0x00544, 0x03355460),
+    CRU_FRAC("CLKSEL_CON147", 0x0054c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON149", 0x00554, 0x03355460),
+    CRU_FRAC("CLKSEL_CON151", 0x0055c, 0x03355460),
+    CRU_FRAC("CLKSEL_CON154", 0x00568, 0x03355460),
+    CRU_FRAC("CLKSEL_CON156", 0x00570, 0x03355460),
+    CRU_FRAC("PMU1_CLKSEL_CON4", 0x30310, 0x001403de),
+    CRU_FRAC("PMU1_CLKSEL_CON6", 0x30318, 0x03355460),
+    CRU_FRAC("PMU1_CLKSEL_CON8", 0x30320, 0x03355460),
+
+    { .name = "GLB_CNT_TH", .addr = 0xc00, .reset = 0x64,
+      .ro = 0xfffffc00 },
+    { .name = "GLBRST_ST", .addr = 0xc04, .ro = 0xffff0000 },
+    { .name = "GLB_SRST_FST_VALUE", .addr = 0xc08, .ro = 0xffff0000 },
+    { .name = "GLB_SRST_SND_VALUE", .addr = 0xc0c, .ro = 0xffff0000 },
+    { .name = "GLB_RST_CON", .addr = 0xc10, .ro = 0xffff0020 },
 };
 
-G_STATIC_ASSERT(ARRAY_SIZE(rockchip_cru_pll_regs) * 4 +
+G_STATIC_ASSERT(ARRAY_SIZE(rockchip_cru_pll_regs) +
                 ARRAY_SIZE(rockchip_cru_clock_regs) == ROCKCHIP_CRU_NUM_REGS);
 
-static RegisterInfo *rockchip_cru_register(RockchipCRUState *s, hwaddr offset)
+static bool rockchip_cru_reserved_pll_con2(hwaddr offset)
 {
-    for (unsigned int i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
-        if (s->regs_info[i].access->addr == offset) {
-            return &s->regs_info[i];
-        }
+    switch (offset) {
+    case 0x50008: /* B0PLL */
+    case 0x52028: /* B1PLL */
+    case 0x58048: /* LPLL */
+    case 0x001e8: /* NPLL */
+        return true;
+    default:
+        return false;
     }
-    return NULL;
 }
 
 static uint64_t rockchip_cru_read(void *opaque, hwaddr offset, unsigned size)
@@ -125,6 +227,9 @@ static uint64_t rockchip_cru_read(void *opaque, hwaddr offset, unsigned size)
 
     if (reg) {
         return register_read(reg, UINT32_MAX, TYPE_ROCKCHIP_CRU, false);
+    }
+    if (rockchip_cru_reserved_pll_con2(offset)) {
+        return 0;
     }
     if ((offset & (sizeof(uint32_t) - 1)) == 0 &&
         offset + sizeof(uint32_t) <= ROCKCHIP_CRU_SIZE) {
@@ -146,6 +251,9 @@ static void rockchip_cru_write(void *opaque, hwaddr offset, uint64_t value,
         register_write(reg, value, UINT32_MAX, TYPE_ROCKCHIP_CRU, false);
         return;
     }
+    if (rockchip_cru_reserved_pll_con2(offset)) {
+        return;
+    }
     if ((offset & (sizeof(uint32_t) - 1)) == 0 &&
         offset + sizeof(uint32_t) <= ROCKCHIP_CRU_SIZE) {
         uint32_t *slot = &s->generic[offset / sizeof(uint32_t)];
@@ -153,6 +261,7 @@ static void rockchip_cru_write(void *opaque, hwaddr offset, uint64_t value,
 
         /* Rockchip high-word write mask: only masked low bits are written. */
         *slot = (*slot & ~mask) | (value & mask);
+        rockchip_cru_update_rknpu_reset(s, offset, *slot);
         return;
     }
     qemu_log_mask(LOG_GUEST_ERROR,
@@ -176,6 +285,9 @@ static void rockchip_cru_reset(DeviceState *dev)
         register_reset(&s->regs_info[i]);
     }
     memset(s->generic, 0, sizeof(s->generic));
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->rknpu_reset); i++) {
+        qemu_set_irq(s->rknpu_reset[i], 0);
+    }
 }
 
 static void rockchip_cru_init(Object *obj)
@@ -185,10 +297,10 @@ static void rockchip_cru_init(Object *obj)
     /* Keep sparse CRU addresses in a compact RegisterInfo array. */
     for (unsigned int i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
         const RegisterAccessInfo *access;
-        unsigned int pll_regs = ARRAY_SIZE(rockchip_cru_pll_regs) * 4;
+        unsigned int pll_regs = ARRAY_SIZE(rockchip_cru_pll_regs);
 
         if (i < pll_regs) {
-            access = &rockchip_cru_pll_regs[i / 4][i % 4];
+            access = &rockchip_cru_pll_regs[i];
         } else {
             access = &rockchip_cru_clock_regs[i - pll_regs];
         }
@@ -202,6 +314,8 @@ static void rockchip_cru_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &rockchip_cru_ops, s,
                           TYPE_ROCKCHIP_CRU, ROCKCHIP_CRU_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(obj), s->rknpu_reset, "rknpu-reset",
+                             ARRAY_SIZE(s->rknpu_reset));
 }
 
 static void rockchip_cru_class_init(ObjectClass *oc, const void *data)

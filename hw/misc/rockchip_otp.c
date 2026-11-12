@@ -15,6 +15,7 @@
 #include "qemu/log.h"
 #include "hw/core/register.h"
 #include "hw/core/sysbus.h"
+#include "migration/vmstate.h"
 #include "qom/object.h"
 
 #define TYPE_ROCKCHIP_OTP "rockchip-otp"
@@ -119,11 +120,22 @@ static void rockchip_otp_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &reg_array->mem);
 }
 
+static const VMStateDescription vmstate_rockchip_otp = {
+    .name = TYPE_ROCKCHIP_OTP,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, RockchipOTPState, ROCKCHIP_OTP_NUM_REGS),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static void rockchip_otp_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     device_class_set_legacy_reset(dc, rockchip_otp_reset);
+    dc->vmsd = &vmstate_rockchip_otp;
 }
 
 static const TypeInfo rockchip_otp_type_info = {

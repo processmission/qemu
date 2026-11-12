@@ -12,23 +12,18 @@
 
 #define ROCK5B_MACHINE_NAME     "rock-5b"
 #define ROCK5BPLUS_MACHINE_NAME "rock-5b-plus"
-#define ROCK5B_GIC_DIST_BASE    0xfe600000ULL
 
-/* The three controllers routed to the 40-pin header. */
+/* SPI controller register windows. */
 #define ROCK5B_SPI0_BASE        0xfeb00000ULL
 #define ROCK5B_SPI1_BASE        0xfeb10000ULL
 #define ROCK5B_SPI2_BASE        0xfeb20000ULL
 #define ROCK5B_SPI3_BASE        0xfeb30000ULL
+#define ROCK5B_SPI4_BASE        0xfecb0000ULL
 
 /* SPI interrupts, as wired in the RK3588 device tree. */
 #define ROCK5B_SPI0_SPI         326
 #define ROCK5B_SPI1_SPI         327
 #define ROCK5B_SPI3_SPI         329
-
-/* GIC SPI N is INTID 32+N on the distributor; GICD_ISPENDR shows the level. */
-#define ROCK5B_GIC_SPI_INTID(spi)   ((spi) + 32)
-#define ROCK5B_GIC_ISPENDR(intid) \
-    (ROCK5B_GIC_DIST_BASE + 0x200 + 4 * ((intid) / 32))
 
 /* Rockchip SPI register bank, see include/hw/ssi/rockchip_spi.h. */
 enum {
@@ -169,24 +164,21 @@ static void test_spi_interrupt_lines(void)
     };
     QTestState *qts = rock5b_spi_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
     for (unsigned i = 0; i < ARRAY_SIZE(controllers); i++) {
         uint64_t base = controllers[i].base;
-        unsigned int intid = ROCK5B_GIC_SPI_INTID(controllers[i].spi);
-        uint32_t mask = BIT(intid % 32);
+        unsigned int spi = controllers[i].spi;
 
         /* Masking the source keeps the line low. */
         g_assert_cmphex(SPI_READ(base, SPI_IMR), ==, 0);
-        g_assert_cmphex(qtest_readl(qts, ROCK5B_GIC_ISPENDR(intid)) & mask,
-                        ==, 0);
+        g_assert_false(qtest_get_irq(qts, spi));
 
         /* TF_EMPTY is level based: unmask it and the GIC input goes high. */
         SPI_WRITE(base, SPI_IMR, SPI_INT_TF_EMPTY);
-        g_assert_cmphex(qtest_readl(qts, ROCK5B_GIC_ISPENDR(intid)) & mask,
-                        ==, mask);
+        g_assert_true(qtest_get_irq(qts, spi));
 
         SPI_WRITE(base, SPI_IMR, 0);
-        g_assert_cmphex(qtest_readl(qts, ROCK5B_GIC_ISPENDR(intid)) & mask,
-                        ==, 0);
+        g_assert_false(qtest_get_irq(qts, spi));
     }
 
     qtest_quit(qts);
@@ -211,8 +203,11 @@ static void test_spi_unimplemented(void)
     g_assert_cmphex(SPI_READ(ROCK5B_SPI3_BASE, SPI_VERSION), ==,
                     SPI_VERSION_RK3588);
 
-    /* SPI2 still carries the PMIC on the legacy machines and stays a stub. */
-    g_assert_cmphex(SPI_READ(ROCK5B_SPI2_BASE, SPI_VERSION), ==, 0);
+    g_assert_cmphex(SPI_READ(ROCK5B_SPI2_BASE, SPI_VERSION), ==,
+                    SPI_VERSION_RK3588);
+
+    /* SPI4 is not modeled. */
+    g_assert_cmphex(SPI_READ(ROCK5B_SPI4_BASE, SPI_VERSION), ==, 0);
 
     qtest_quit(qts);
 
@@ -220,7 +215,8 @@ static void test_spi_unimplemented(void)
     g_assert_null(strstr(log, "rk3588.spi0"));
     g_assert_null(strstr(log, "rk3588.spi1"));
     g_assert_null(strstr(log, "rk3588.spi3"));
-    g_assert_nonnull(strstr(log, "rk3588.spi2: unimplemented device"));
+    g_assert_null(strstr(log, "rk3588.spi2"));
+    g_assert_nonnull(strstr(log, "rk3588.spi4: unimplemented device"));
     unlink(log_path);
 }
 
@@ -316,12 +312,7 @@ static void test_spi_legacy_spi2(void)
 {
     QTestState *qts;
 
-    /*
-     * The legacy machines create SPI2 to carry the RK806 PMIC, so the
-     * refactored helper has to keep working for them.  They return before
-     * the unimplemented-device stubs are registered, so SPI0, SPI1 and
-     * SPI3 stay unmapped and read back as all ones.
-     */
+    /* ROCK 5B+ attaches its PMIC to the common SPI2 controller. */
     if (!qtest_has_machine(ROCK5BPLUS_MACHINE_NAME)) {
         g_test_skip(ROCK5BPLUS_MACHINE_NAME " machine is not available");
         return;
@@ -334,9 +325,12 @@ static void test_spi_legacy_spi2(void)
                     SPI_VERSION_RK3588);
     g_assert_cmphex(SPI_READ(ROCK5B_SPI2_BASE, SPI_SR), ==,
                     SPI_SR_TF_EMPTY | SPI_SR_RF_EMPTY);
-    g_assert_cmphex(SPI_READ(ROCK5B_SPI0_BASE, SPI_VERSION), ==, 0xffffffff);
-    g_assert_cmphex(SPI_READ(ROCK5B_SPI1_BASE, SPI_VERSION), ==, 0xffffffff);
-    g_assert_cmphex(SPI_READ(ROCK5B_SPI3_BASE, SPI_VERSION), ==, 0xffffffff);
+    g_assert_cmphex(SPI_READ(ROCK5B_SPI0_BASE, SPI_VERSION), ==,
+                    SPI_VERSION_RK3588);
+    g_assert_cmphex(SPI_READ(ROCK5B_SPI1_BASE, SPI_VERSION), ==,
+                    SPI_VERSION_RK3588);
+    g_assert_cmphex(SPI_READ(ROCK5B_SPI3_BASE, SPI_VERSION), ==,
+                    SPI_VERSION_RK3588);
 
     qtest_quit(qts);
 }

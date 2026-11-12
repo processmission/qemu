@@ -138,11 +138,6 @@
 #define DW_MMC_IMAGE_BLOCKS     (DW_MMC_IMAGE_SIZE / DW_MMC_BLOCK_SIZE)
 #define ROCK5B_SDMMC_SPI        203
 
-/* GIC SPI N is INTID 32+N on the distributor; GICD_ISPENDR shows the level. */
-#define ROCK5B_GIC_SPI_INTID(spi)   ((spi) + 32)
-#define ROCK5B_GIC_ISPENDR(intid) \
-    (ROCK5B_GIC_DIST_BASE + 0x200 + 4 * ((intid) / 32))
-
 static uint32_t mmio_read32(QTestState *qts, uint64_t addr)
 {
     return qtest_readl(qts, addr);
@@ -684,20 +679,15 @@ static void test_sdmmc(void)
 
     /*
      * Command completion raises the controller IRQ line that is wired to GIC
-     * SPI 203 (INTID 235).  A level-triggered GIC line reads as pending while
-     * it is asserted, and RINTSTS W1C deasserts it again.
+     * SPI 203 (INTID 235).  RINTSTS W1C deasserts it again.
      */
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
     qtest_writel(qts, ROCK5B_SDMMC_BASE + DW_MMC_CTRL, DW_MMC_CTRL_INT_ENABLE);
     qtest_writel(qts, ROCK5B_SDMMC_BASE + DW_MMC_INTMASK, DW_MMC_INT_CMD_DONE);
     rock5b_sdmmc_command(qts, 0, 0, 0);
-    g_assert_cmphex(mmio_read32(qts, ROCK5B_GIC_ISPENDR(
-                    ROCK5B_GIC_SPI_INTID(ROCK5B_SDMMC_SPI))) &
-                    BIT(ROCK5B_GIC_SPI_INTID(ROCK5B_SDMMC_SPI) % 32), ==,
-                    BIT(ROCK5B_GIC_SPI_INTID(ROCK5B_SDMMC_SPI) % 32));
+    g_assert_true(qtest_get_irq(qts, ROCK5B_SDMMC_SPI));
     qtest_writel(qts, ROCK5B_SDMMC_BASE + DW_MMC_RINTSTS, UINT32_MAX);
-    g_assert_cmphex(mmio_read32(qts, ROCK5B_GIC_ISPENDR(
-                    ROCK5B_GIC_SPI_INTID(ROCK5B_SDMMC_SPI))) &
-                    BIT(ROCK5B_GIC_SPI_INTID(ROCK5B_SDMMC_SPI) % 32), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SDMMC_SPI));
 
     /* CMD8 (SEND_IF_COND) must echo the supplied check pattern. */
     g_assert_cmphex(rock5b_sdmmc_command(qts, 8, 0x1aa,
