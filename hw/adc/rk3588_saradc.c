@@ -164,7 +164,9 @@ static void rk3588_saradc_write(void *opaque, hwaddr offset, uint64_t value,
          * empty upper half) must leave the timer of a conversion that is
          * already in flight alone instead of pushing its completion out.
          */
-        rk3588_saradc_start(s);
+        if ((mask & SARADC2_START) && (val & SARADC2_START)) {
+            rk3588_saradc_start(s);
+        }
         break;
     case SARADC_END_INT_EN:
         mask = (val >> 16) & SARADC2_EN_END_INT;

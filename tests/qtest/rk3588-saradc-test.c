@@ -310,6 +310,47 @@ static void test_saradc_inflight_invalid_channel(void)
     qtest_quit(qts);
 }
 
+static void test_saradc_inflight_write_keeps_deadline(void)
+{
+    QTestState *qts = rock5b_saradc_start(
+        "-global rk3588-saradc.vin4-uv=1800000");
+
+    /* Linux's delays put the end of the sample 56 us after the start. */
+    SARADC_WRITE(SARADC_T_PD_SOC, 0x20);
+    SARADC_WRITE(SARADC_T_DAS_SOC, 0xc);
+
+    saradc_start_conversion(qts, 4);
+    qtest_clock_step(qts, 30000);
+
+    /*
+     * A write that carries no enable bits changes nothing, so it must not
+     * reload the timer either: otherwise the guest could postpone the end
+     * of the conversion indefinitely just by touching CONV_CON.
+     */
+    SARADC_WRITE(SARADC_CONV_CON, 0);
+    g_assert_cmphex(SARADC_READ(SARADC_CONV_CON), ==,
+                    SARADC_START | SARADC_SINGLE_MODE | 4);
+
+    /*
+     * A channel-only update is the same story: it reaches the register
+     * without a START enable bit, so the conversion keeps both its
+     * deadline and the channel it latched when it began.
+     */
+    SARADC_WRITE_MASKED(SARADC_CONV_CON, SARADC_SINGLE_MODE | 5);
+    g_assert_cmphex(SARADC_READ(SARADC_CONV_CON), ==,
+                    SARADC_START | SARADC_SINGLE_MODE | 5);
+
+    qtest_clock_step(qts, 10000);
+    g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, SARADC_STATUS_BUSY);
+
+    qtest_clock_step(qts, 20000);
+    g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, 0);
+    g_assert_cmphex(SARADC_READ(SARADC_DATA(4)), ==, SARADC_FULL_SCALE);
+    g_assert_cmphex(SARADC_READ(SARADC_DATA(5)), ==, 0);
+
+    qtest_quit(qts);
+}
+
 static void test_saradc_reset(void)
 {
     QTestState *qts = rock5b_saradc_start(
@@ -363,6 +404,8 @@ int main(int argc, char **argv)
                    test_saradc_invalid_channel);
     qtest_add_func("/rk3588-saradc/inflight-invalid-channel",
                    test_saradc_inflight_invalid_channel);
+    qtest_add_func("/rk3588-saradc/inflight-write-keeps-deadline",
+                   test_saradc_inflight_write_keeps_deadline);
     qtest_add_func("/rk3588-saradc/reset", test_saradc_reset);
 
     return g_test_run();
