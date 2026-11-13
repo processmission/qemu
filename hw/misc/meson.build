@@ -200,6 +200,7 @@ system_ss.add(when: 'CONFIG_RK3588_RNG', if_true: files('rk3588_rng.c'))
 system_ss.add(when: 'CONFIG_RK3588_DDR', if_true: files('rk3588_ddr.c'))
 system_ss.add(when: 'CONFIG_RK3588_FIRMWARE_MMIO', if_true: files('rk3588_firmware_mmio.c'))
 system_ss.add(when: 'CONFIG_RK3588_GRF', if_true: files('rk3588_grf.c'))
+system_ss.add(when: 'CONFIG_RK3588_PWM', if_true: files('rk3588_pwm.c'))
 system_ss.add(when: 'CONFIG_RK3588_SCMI', if_true: files('rk3588_scmi.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_IOMMU', if_true: files('rockchip_iommu.c'))
 system_ss.add(when: 'CONFIG_ROCKCHIP_RKNPU',
