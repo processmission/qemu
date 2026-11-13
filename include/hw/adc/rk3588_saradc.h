@@ -31,6 +31,14 @@ struct RK3588SARADCState {
 
     uint32_t regs[RK3588_SARADC_MMIO_SIZE / 4];
 
+    /*
+     * Channel of the conversion in flight.  CONV_CON stays writable while
+     * the sample is being taken, so the selection is latched when the
+     * conversion starts and the result is stored according to that copy,
+     * not to whatever the guest has programmed in the meantime.
+     */
+    uint32_t conv_ch;
+
     /* Board wiring, exposed as properties. */
     uint32_t inputs_uv[RK3588_SARADC_NUM_CHANNELS];
     uint32_t reference_uv;

@@ -70,7 +70,7 @@ static void rk3588_saradc_update_irq(RK3588SARADCState *s)
 static void rk3588_saradc_complete(void *opaque)
 {
     RK3588SARADCState *s = opaque;
-    unsigned int ch = s->regs[SARADC_CONV_CON >> 2] & SARADC2_CONV_CHANNELS;
+    unsigned int ch = s->conv_ch;
     uint64_t code;
 
     assert(ch < RK3588_SARADC_NUM_CHANNELS);
@@ -91,17 +91,21 @@ static void rk3588_saradc_start(RK3588SARADCState *s)
     unsigned int ch = conv_con & SARADC2_CONV_CHANNELS;
     uint64_t clocks, delay_ns;
 
-    if (!(conv_con & SARADC2_START)) {
-        return;
-    }
-
     if (ch >= RK3588_SARADC_NUM_CHANNELS) {
+        /*
+         * Nothing is sampled and the conversion in flight, if there is
+         * one, keeps running with the channel it latched earlier.  Only
+         * the start request is dropped.
+         */
         qemu_log_mask(LOG_GUEST_ERROR,
                       "rk3588-saradc: no channel %u, conversion ignored\n",
                       ch);
         s->regs[SARADC_CONV_CON >> 2] &= ~SARADC2_START;
         return;
     }
+
+    /* CONV_CON may be rewritten while the sample is taken. */
+    s->conv_ch = ch;
 
     /*
      * The power-up and sampling delays are counted in ADC clocks and the
@@ -153,6 +157,13 @@ static void rk3588_saradc_write(void *opaque, hwaddr offset, uint64_t value,
         mask = (val >> 16) & SARADC2_CONV_CON_MASK;
         s->regs[offset >> 2] = (s->regs[offset >> 2] & ~mask) |
                                (val & mask);
+        /*
+         * Only a write that carries the enable bit for START and sets it
+         * launches a conversion.  The other accesses Linux makes to this
+         * register (a plain zero write, or channel-only updates with an
+         * empty upper half) must leave the timer of a conversion that is
+         * already in flight alone instead of pushing its completion out.
+         */
         rk3588_saradc_start(s);
         break;
     case SARADC_END_INT_EN:
@@ -207,6 +218,7 @@ static void rk3588_saradc_reset(DeviceState *dev)
 
     timer_del(s->timer);
     memset(s->regs, 0, sizeof(s->regs));
+    s->conv_ch = 0;
     qemu_set_irq(s->irq, 0);
 }
 
@@ -260,6 +272,7 @@ static const VMStateDescription vmstate_rk3588_saradc = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, RK3588SARADCState,
                              RK3588_SARADC_MMIO_SIZE / 4),
+        VMSTATE_UINT32(conv_ch, RK3588SARADCState),
         VMSTATE_TIMER_PTR(timer, RK3588SARADCState),
         VMSTATE_END_OF_LIST()
     },

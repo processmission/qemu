@@ -278,6 +278,38 @@ static void test_saradc_invalid_channel(void)
     qtest_quit(qts);
 }
 
+static void test_saradc_inflight_invalid_channel(void)
+{
+    QTestState *qts = rock5b_saradc_start(
+        "-global rk3588-saradc.vin4-uv=1800000");
+
+    SARADC_WRITE_MASKED(SARADC_END_INT_EN, SARADC_EN_END_INT);
+
+    /*
+     * Repointing CONV_CON at a channel that does not exist while a
+     * conversion is in flight drops the new start request, but it must
+     * not disturb the sample that is being taken, and above all it must
+     * not leave an out-of-range selection behind for the completion
+     * handler to pick up.
+     */
+    saradc_start_conversion(qts, 4);
+    g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, SARADC_STATUS_BUSY);
+
+    saradc_start_conversion(qts, 9);
+    g_assert_cmphex(SARADC_READ(SARADC_CONV_CON), ==, SARADC_SINGLE_MODE | 9);
+    g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, SARADC_STATUS_BUSY);
+
+    qtest_clock_step(qts, SARADC_STEP_NS);
+    g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, 0);
+    g_assert_cmphex(SARADC_READ(SARADC_DATA(4)), ==, SARADC_FULL_SCALE);
+    for (unsigned i = 5; i < 8; i++) {
+        g_assert_cmphex(SARADC_READ(SARADC_DATA(i)), ==, 0);
+    }
+    g_assert_cmphex(SARADC_READ(SARADC_END_INT_ST), ==, SARADC_EN_END_INT);
+
+    qtest_quit(qts);
+}
+
 static void test_saradc_reset(void)
 {
     QTestState *qts = rock5b_saradc_start(
@@ -329,6 +361,8 @@ int main(int argc, char **argv)
     qtest_add_func("/rk3588-saradc/irq", test_saradc_irq);
     qtest_add_func("/rk3588-saradc/invalid-channel",
                    test_saradc_invalid_channel);
+    qtest_add_func("/rk3588-saradc/inflight-invalid-channel",
+                   test_saradc_inflight_invalid_channel);
     qtest_add_func("/rk3588-saradc/reset", test_saradc_reset);
 
     return g_test_run();
