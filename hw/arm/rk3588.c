@@ -27,6 +27,7 @@
 #include "hw/i2c/rk3x_i2c.h"
 #include "hw/misc/rockchip_crypto_v2.h"
 #include "hw/misc/rk3588_pl330.h"
+#include "hw/misc/rk3588_pwm.h"
 #include "hw/misc/rk3588_rng.h"
 #include "hw/misc/rk3588_tsadc.h"
 #include "hw/net/dwmac4.h"
@@ -92,6 +93,10 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_DEV_GIC_ITS0]   = { 0xfe640000, 0x00020000 },
     [RK3588_DEV_GIC_ITS1]   = { 0xfe660000, 0x00020000 },
     [RK3588_DEV_CRU]        = { 0xfd7c0000, 0x0005c000 },
+    [RK3588_DEV_PWM0]       = { 0xfd8b0000, 0x00000100 },
+    [RK3588_DEV_PWM1]       = { 0xfebd0000, 0x00000100 },
+    [RK3588_DEV_PWM2]       = { 0xfebe0000, 0x00000100 },
+    [RK3588_DEV_PWM3]       = { 0xfebf0000, 0x00000100 },
     [RK3588_DEV_OTP]        = { 0xfecc0000, 0x00000400 },
     [RK3588_DEV_SFC]        = { 0xfe2b0000, 0x00004000 },
     [RK3588_DEV_SDMMC]      = { 0xfe2c0000, 0x00004000 },
@@ -116,6 +121,10 @@ static const MemMapEntry rk3588_memmap[] = {
 /* Object names of the SPI controllers, indexed like the state array. */
 static const char *const rk3588_spi_names[RK3588_NUM_SPIS] = {
     "spi0", "spi1", "spi2", "spi3",
+};
+
+static const char *const rk3588_pwm_names[RK3588_NUM_PWMS] = {
+    "pwm0", "pwm1", "pwm2", "pwm3",
 };
 
 #define RK3588_UNIMPLEMENTED(name, base, size) \
@@ -180,7 +189,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("emmc-ioc", 0xfd5fd000, 4 * KiB),
     RK3588_UNIMPLEMENTED("i2c0", 0xfd880000, 64 * KiB),
     RK3588_UNIMPLEMENTED("uart0", 0xfd890000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("pwm0", 0xfd8b0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pvtm-pmu", 0xfd8c0000, 32 * KiB),
     RK3588_UNIMPLEMENTED("hptimer", 0xfd8c8000, 16 * KiB),
     RK3588_UNIMPLEMENTED("pmu", 0xfd8d0000, 64 * KiB),
@@ -295,9 +303,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("timer-ns1", 0xfeae8000, 32 * KiB),
     RK3588_UNIMPLEMENTED("wdt-ns", 0xfeaf0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("spi2", 0xfeb20000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("pwm1", 0xfebd0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("pwm2", 0xfebe0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("pwm3", 0xfebf0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("tsadc", 0xfec00000, 64 * KiB),
     RK3588_UNIMPLEMENTED("saradc", 0xfec10000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox0", 0xfec60000, 64 * KiB),
@@ -860,6 +865,22 @@ static bool rk3588_soc_create_gpio(RK3588SoCState *s, Error **errp)
     return true;
 }
 
+static bool rk3588_soc_create_pwm(RK3588SoCState *s, Error **errp)
+{
+    for (unsigned int i = 0; i < RK3588_NUM_PWMS; i++) {
+        s->pwm[i] = qdev_new(TYPE_RK3588_PWM);
+        object_property_add_child(OBJECT(s), rk3588_pwm_names[i],
+                                  OBJECT(s->pwm[i]));
+        if (!sysbus_realize(SYS_BUS_DEVICE(s->pwm[i]), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(s->pwm[i]), 0,
+                        rk3588_memmap[RK3588_DEV_PWM0 + i].base);
+        object_unref(OBJECT(s->pwm[i]));
+    }
+    return true;
+}
+
 static bool rk3588_soc_create_i2c6(RK3588SoCState *s, Error **errp)
 {
     SysBusDevice *sbd;
@@ -987,7 +1008,8 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
     }
 
     if (!rk3588_soc_create_gic(s, errp) ||
-        !rk3588_soc_create_gpio(s, errp)) {
+        !rk3588_soc_create_gpio(s, errp) ||
+        !rk3588_soc_create_pwm(s, errp)) {
         return;
     }
     if (s->legacy_firmware) {
