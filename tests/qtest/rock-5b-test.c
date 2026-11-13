@@ -12,6 +12,8 @@
 #include "qemu/cutils.h"
 #include "qemu/units.h"
 #include "qemu/sockets.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "libqtest.h"
 
 #define ROCK5B_LOW_RAM_BASE     0x00000000ULL
@@ -27,6 +29,10 @@
 #define ROCK5B_PCIE2X1L2_DBI    0xa41000000ULL
 #define ROCK5B_PCIE2X1L2_CFG    0xf4000000ULL
 #define ROCK5B_CRU_BASE         0xfd7c0000ULL
+
+#define RK3X_I2C_CON            0x000
+#define RK3X_I2C_VERSION_MASK   (0x1ffu << 16)
+#define RK3X_I2C_VERSION        (5u << 16)
 
 /* RK3588 pcie2x1l2 APB vendor registers (PCIE_CLIENT_*). */
 #define RK_PCIE_CLIENT_GENERAL_CON      0x000
@@ -424,6 +430,59 @@ static void test_machine_topology(void)
     qtest_writel(qts, ROCK5B_USB3OTG0_BASE + DWC3_DCFG, 0x00000004);
     g_assert_cmphex(mmio_read32(qts, ROCK5B_USB3OTG0_BASE + DWC3_DCFG),
                     ==, 0x00000004);
+
+    qtest_quit(qts);
+}
+
+static bool rock5b_qom_has_child(QTestState *qts, const char *path,
+                                 const char *child_name)
+{
+    g_autofree char *request = g_strdup_printf(
+        "{'execute': 'qom-list', 'arguments': {'path': '%s'}}", path);
+    QDict *resp;
+    QList *children;
+    const QListEntry *entry;
+    bool found = false;
+
+    qtest_qmp_send_raw(qts, "%s", request);
+    resp = qtest_qmp_receive(qts);
+    g_assert_true(resp);
+    children = qdict_get_qlist(resp, "return");
+    g_assert_true(children);
+    QLIST_FOREACH_ENTRY(children, entry) {
+        QDict *child = qobject_to(QDict, qlist_entry_obj(entry));
+        const char *name = qdict_get_str(child, "name");
+
+        if (g_str_equal(name, child_name)) {
+            found = true;
+            break;
+        }
+    }
+    qobject_unref(resp);
+
+    return found;
+}
+
+static void test_i2c_controllers(void)
+{
+    static const uint64_t bases[] = {
+        0xfd880000, 0xfea90000, 0xfeaa0000, 0xfeab0000, 0xfeac0000,
+        0xfead0000, 0xfec80000, 0xfec90000, 0xfeca0000,
+    };
+    QTestState *qts = qtest_init("-machine rock-5b -m 128M -smp 8 "
+                                 "-serial null -display none");
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(bases); i++) {
+        uint32_t con = qtest_readl(qts, bases[i] + RK3X_I2C_CON);
+        g_autofree char *controller_name = g_strdup_printf("i2c%u", i);
+        g_autofree char *controller_path =
+            g_strdup_printf("/machine/soc/%s", controller_name);
+
+        g_assert_cmphex(con & RK3X_I2C_VERSION_MASK, ==, RK3X_I2C_VERSION);
+        g_assert_true(rock5b_qom_has_child(qts, "/machine/soc",
+                                           controller_name));
+        g_assert_true(rock5b_qom_has_child(qts, controller_path, "i2c-bus"));
+    }
 
     qtest_quit(qts);
 }
@@ -831,6 +890,7 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     qtest_add_func("/rock-5b/machine-topology", test_machine_topology);
+    qtest_add_func("/rock-5b/i2c-controllers", test_i2c_controllers);
     qtest_add_func("/rock-5b/pcie-rtl8125", test_pcie_rtl8125);
     qtest_add_func("/rock-5b/sdmmc", test_sdmmc);
     qtest_add_func("/rock-5b/cru", test_cru_reset_bank);

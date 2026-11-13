@@ -47,6 +47,9 @@ typedef enum RK3588CpuClusterId {
 /* PWM0-PWM3 each contain four channels. */
 #define RK3588_NUM_PWMS              (4)
 
+/* I2C0-I2C8 are modeled. */
+#define RK3588_NUM_I2CS              (9)
+
 typedef enum RK3588PCIEController {
     RK3588_PCIE3X4,
     RK3588_PCIE3X2,
@@ -97,6 +100,15 @@ enum {
     RK3588_DEV_SPI1,
     RK3588_DEV_SPI2,
     RK3588_DEV_SPI3,
+    RK3588_DEV_I2C0,
+    RK3588_DEV_I2C1,
+    RK3588_DEV_I2C2,
+    RK3588_DEV_I2C3,
+    RK3588_DEV_I2C4,
+    RK3588_DEV_I2C5,
+    RK3588_DEV_I2C6,
+    RK3588_DEV_I2C7,
+    RK3588_DEV_I2C8,
 };
 
 struct RK3588SoCState {
@@ -129,7 +141,7 @@ struct RK3588SoCState {
     DeviceState *spi[RK3588_NUM_SPIS];
     DeviceState *dmac1;
     DeviceState *gpio[5];
-    DeviceState *i2c6;
+    DeviceState *i2c[RK3588_NUM_I2CS];
     MemoryRegion *memory;
     bool rknpu;
     bool secure_otp_unfused;
