@@ -169,8 +169,8 @@ are 40-pin header positions.
 UART0 is modeled without an external serial backend.  The
 slot order is set by ``rock5b_connect_serial()``: slot 0 is the Type-C USB CDC
 console, slot 1 is UART2, and slots 2 to 9 carry UART1 and UART3 through
-UART9.  Every port uses the 16550-compatible ``serial_mm`` core with the
-DesignWare APB vendor window (``USR`` at ``0x7c``); the model programs the
+UART9.  Every port uses ``dw8250``, which combines the 16550-compatible
+serial core with DesignWare APB registers (``USR`` at ``0x7c``); the model uses the
 24 MHz ``RK3588_UART_CLOCK`` reference, so a guest divisor gives the baud rate
 the real UART would.
 
@@ -187,42 +187,44 @@ the real UART would.
      - ``0xfd8a0000``
      - 277
      - 8, 10, 37 (also the on-board status LED, ``GPIO0_B7``)
-     - modeled
+     - modeled Rockchip GPIO bank
    * - GPIO1
      - ``0xfec20000``
      - 278
      - 19, 21, 23, 24, 26, 29, 31
-     - modeled
+     - modeled Rockchip GPIO bank
    * - GPIO2
      - ``0xfec30000``
      - 279
      - not routed on the header
-     - modeled
+     - modeled Rockchip GPIO bank
    * - GPIO3
      - ``0xfec40000``
      - 280
      - 7, 11, 12, 13, 15, 16, 32, 33, 35, 36, 38, 40
-     - modeled
+     - modeled Rockchip GPIO bank
    * - GPIO4
      - ``0xfec50000``
      - 281
      - 3, 5, 18, 27, 28
-     - modeled
+     - modeled Rockchip GPIO bank
 
 All five banks use ``hw/gpio/rockchip_gpio.c``, which implements the Rockchip
 GPIO v2 register layout, 32 lines with direction, external level read-back and
-the edge/level interrupt block.  The banks are available in both firmware
-paths and are exposed as the QOM children ``gpio0`` through ``gpio4`` below
-``/machine/soc``.  qtest can drive their ``unnamed-gpio-in`` lines, observe
-the ``gpio-out`` lines and check the bank interrupts at GIC SPIs 277-281.
+the edge/level interrupt block.  The SoC instantiates all five banks and
+connects their interrupt outputs to the GIC.  The banks are exposed as the
+QOM children ``gpio0`` through ``gpio4`` below ``/machine/soc``.  qtest can
+drive their ``unnamed-gpio-in`` lines, observe the ``gpio-out`` lines and
+check the bank interrupts at GIC SPIs 277-281.
 
 From an ``aarch64-softmmu`` build directory, the bank-level test is run with::
 
   ninja tests/qtest/rk3588-gpio-test
   QTEST_QEMU_BINARY=./qemu-system-aarch64 ./tests/qtest/rk3588-gpio-test
 
-Pin muxing itself lives in the IOC blocks, which the machine does not model,
-so a guest cannot yet switch a pin between GPIO and a peripheral function.
+The IOC windows are mapped as generic syscon storage; their writes do not
+change pin muxing, so a guest cannot switch a pin between GPIO and a
+peripheral function through the IOC registers.
 
 .. list-table:: I2C
    :header-rows: 1
@@ -271,7 +273,8 @@ so a guest cannot yet switch a pin between GPIO and a peripheral function.
      - 323
      - ``HYM8563`` RTC @0x51 (IRQ on ``GPIO0_B0``); also the MIPI DSI touch
        bus
-     - unimplemented
+     - modeled RK3X I2C controller; no external device is attached by
+       ``rock-5b``
    * - I2C7
      - ``0xfec90000``
      - 324
@@ -315,8 +318,8 @@ controller drives one group at a time.
      - ``0xfeb20000``
      - 328
      - ``RK806`` PMIC on chip select 0 (``SPI2_M2``), not on the header
-     - unimplemented on ``rock-5b``; modeled on the legacy machines, which
-       attach the PMIC here
+     - modeled Rockchip SPI controller; no external device is attached by
+       ``rock-5b``
    * - SPI3
      - ``0xfeb30000``
      - 329
@@ -332,7 +335,7 @@ The SPI NOR flash is not on this list: it sits behind the SFC controller,
 which is modeled, and is attached with ``-drive if=mtd,index=0`` as described
 above.
 
-The modeled controllers carry the qdev ids ``spi0``, ``spi1`` and ``spi3``, so
+The header controllers carry the qdev ids ``spi0``, ``spi1`` and ``spi3``, so
 a peripheral can be attached to their bus by name.  A serial flash answers the
 JEDEC read-ID command on SPI0 as follows::
 
@@ -409,7 +412,7 @@ leaves it deselected, and the receive FIFO returns zeros.
      - ``0xfd8c8000``
      - -
      - not on the header
-     - unimplemented
+     - modeled Rockchip secure timer stub
    * - Architectural timer
      - CNTFRQ 24 MHz
      - per-CPU PPI
@@ -510,13 +513,13 @@ under its own name, while an unimplemented window appears as
    (qemu) info mtree -f
    00000000feb40000-00000000feb4001f (prio 1, i/o): serial
    ...
-   00000000fec80000-00000000fec8ffff (prio -1000, i/o): rk3588.i2c6
+   00000000fd880000-00000000fd88ffff (prio -1000, i/o): rk3588.i2c0
 
 A guest access to one of those windows is reported with ``-d unimp`` and the
 stub name, which is the quickest way to tell "not implemented yet" from "wrong
 address"::
 
-   rk3588.i2c6: unimplemented device write (size 4, offset 0x0000, value 0xdeadbeef)
+   rk3588.i2c0: unimplemented device write (size 4, offset 0x0000, value 0xdeadbeef)
 
 The machine test covers the modeled side of the map::
 
@@ -647,8 +650,8 @@ Limitations
 
 The machine is TCG-only; KVM is not supported. BootROM, DDR training,
 SPL and BL31 are not modeled; firmware boot starts U-Boot proper directly.
-The remaining RK3588 peripherals are unimplemented. Some downstream
-firmware requires the ``high-ram-base=0x400000000`` option because its
+Many RK3588 peripherals are unimplemented. Some downstream firmware requires
+the ``high-ram-base=0x400000000`` option because its
 fixed guest windows are tied to that physical RAM bank. The SD controller
 supports one card on ``if=sd,index=2`` and the RTL8125 has no PHY/MAC
 calibration data (link state and packet path are modeled, the PHY data
