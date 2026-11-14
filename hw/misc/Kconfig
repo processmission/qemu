@@ -429,6 +429,9 @@ config RK3566_PWM
     bool
     select REGISTER
 
+config RK3588_PWM
+    bool
+
 config RK3566_CSI_DPHY
     bool
     select REGISTER

@@ -363,27 +363,27 @@ leaves it deselected, and the receive FIFO returns zeros.
      - Model
    * - PWM0 (channels 0-3)
      - ``0xfd8b0000``
-     - -
+     - 344 (main), 345 (power)
      - 36 (``PWM2_M1``), 38 (``PWM3_IR_M1``); channel 1 drives the on-board
        fan
-     - unimplemented
+     - ``rk3588-pwm``
    * - PWM1 (channels 4-7)
      - ``0xfebd0000``
-     - -
+     - 346 (main), 347 (power)
      - 18 (``PWM5_M2``), 28 (``PWM6_M2``), 27 (``PWM7_IR_M3``)
-     - unimplemented
+     - ``rk3588-pwm``
    * - PWM2 (channels 8-11)
      - ``0xfebe0000``
-     - -
+     - 348 (main), 349 (power)
      - 33 (``PWM8_M0``)
-     - unimplemented
+     - ``rk3588-pwm``
    * - PWM3 (channels 12-15)
      - ``0xfebf0000``
-     - -
+     - 350 (main), 351 (power)
      - 12 (``PWM12_M0``), 31 (``PWM13_M2``), 35 (``PWM13_M0``), 5
        (``PWM14_M1``), 32 (``PWM14_M0``), 3 (``PWM15_IR_M1``), 7
        (``PWM15_IR_M0``), 29 (``PWM15_IR_M3``)
-     - unimplemented
+     - ``rk3588-pwm``
    * - SARADC
      - ``0xfec10000``
      - 398
@@ -416,9 +416,59 @@ leaves it deselected, and the receive FIFO returns zeros.
      - modeled
 
 The RK3588 has four PWM controllers, each with four channels, so a pinout name
-such as ``PWM13_M0`` selects controller 3, channel 1 at ``0xfebf0010``.  PWM
-output has no interrupt line on this SoC, hence the empty IRQ column.  The
-watchdog and the non-secure timer also exist per domain (``wdt-pmu`` at
+such as ``PWM13_M0`` selects controller 3, channel 1 at ``0xfebf0010``.
+``rk3588-pwm`` implements the TRM register layout, reset values,
+``PWM_VERSION_ID``, independent channels, continuous left-aligned output, duty
+and inactive polarity, live counters, enable/stop, period/duty/control shadow
+updates at period boundaries, and ``conlock`` staging.  Migration preserves
+the register file, active waveform configuration, counter epoch, pending
+timer and output-line levels.  The input clock can be selected with
+``clk_src_sel`` between the configurable PLL root clock ``clock-hz`` and the
+fixed oscillator root clock ``osc-clock-hz``; both default to 24 MHz on
+ROCK 5B.  Zero and full duty produce valid flat 0% and 100% outputs.  Zero
+period and duty greater than period are diagnosed as invalid guest
+configurations and do not generate a waveform.  The model exposes four named
+``pwm-out`` lines per controller for board wiring and qtests.
+
+``PWM_VERSION_ID`` follows TRM V1.0 section 18.4.1 (page 1411,
+``0x02120B34``); section 18.4.2 (page 1425) instead gives
+``0x021311B6`` and marks the fields RW.
+
+The IRQ column lists GIC SPI numbers.  The corresponding GIC INTIDs are SPI
+plus 32, giving INTIDs 376 to 383.  The TRM assigns a main IRQ and a channel 3
+power-key IRQ to each controller.  Mainline RK3588 device trees currently omit
+the PWM ``interrupts`` properties, while the Rockchip vendor DTS declares
+them.  Continuous mode does not generate interrupts, so this model leaves the
+GIC inputs disconnected; one-shot, capture, and power-key support must connect
+them.
+
+One-shot, capture, FIFO, DMA, power-key capture, center-aligned output and the
+``ch_cnt_en`` control bit are not modeled yet.  Selecting the one-shot,
+capture, or center-aligned modes, or setting ``ch_cnt_en``, is reported with
+``LOG_UNIMP``.  The ``ch_cnt_en`` bit remains readable but a configuration with
+it set does not generate a waveform.  For center-aligned output, the TRM
+requires the effective period and duty to be even and ignores bit 0 during
+waveform generation; the readback behavior of odd programmed values is not
+specified.  The exact counter behavior of an enabled zero-period configuration
+also remains unspecified.  IOC selection remains the responsibility of Issue
+#163.
+
+To run the PWM qtest:
+
+.. code-block:: shell
+
+   ninja tests/qtest/rk3588-pwm-test
+   QTEST_QEMU_BINARY=./qemu-system-aarch64 ./tests/qtest/rk3588-pwm-test
+
+The qtest covers all 10 unique controller channels routed to the 40-pin
+header, the 50 us/20 kHz on-board fan channel, runtime polarity updates, both
+input clock roots, a divided clock whose frequency is not an integer number of
+Hz, non-divisible period rounding, all 16 channel reset registers, and the 16
+reset output levels.  Migration is checked while a channel is running by
+verifying its register state, counter phase, output level and next waveform
+edge on the destination.
+
+The watchdog and the non-secure timer also exist per domain (``wdt-pmu`` at
 ``0xfd8e0000``, ``wdt-npu`` at ``0xfdaf8000``, ``timer-npu`` at
 ``0xfdb00000``); none of them is modeled.
 
@@ -804,6 +854,8 @@ than as RK3588-only devices:
   implements Rockchip HIWORD writes.
 * ``rockchip-stimer`` covers the secure timer register layout used by Rockchip
   firmware.
+* ``rk3588-pwm`` covers the four-channel RK3588 PWM register block and its
+  continuous left-aligned digital outputs.
 * ``dw-apb-uart-vendor`` covers the Synopsys DesignWare APB UART extension
   window above the 16550-compatible core.  The UART core itself is QEMU's
   reusable ``serial_mm`` 16550-compatible model.

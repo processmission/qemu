@@ -310,6 +310,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['dwc3-udc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rock-5b-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-gpio-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-pwm-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ROCK5B') ? ['rk3588-spi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') and                            \
    config_all_devices.has_key('CONFIG_RTL8125_PCI') and slirp.found() ?       \
@@ -494,6 +495,8 @@ qtests = {
   'migration-test': test_migration_files + migration_tls_files + migration_colo_files,
   'mchp_pfsoc_rtc_test': files('migration/migration-qmp.c',
                                'migration/migration-util.c'),
+  'rk3588-pwm-test': files('migration/migration-qmp.c',
+                           'migration/migration-util.c'),
   'pxe-test': files('boot-sector.c'),
   'pnv-xive2-test': files('pnv-xive2-common.c', 'pnv-xive2-flush-sync.c',
                           'pnv-xive2-nvpg_bar.c'),

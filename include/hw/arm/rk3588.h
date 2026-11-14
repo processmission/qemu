@@ -44,6 +44,9 @@ typedef enum RK3588CpuClusterId {
 /* SPI0-SPI3 carry the SPI controllers; SPI4 is not routed on the boards. */
 #define RK3588_NUM_SPIS              (4)
 
+/* PWM0-PWM3 each contain four channels. */
+#define RK3588_NUM_PWMS              (4)
+
 /* Indices into rk3588_memmap[], see hw/arm/rk3588.c. */
 enum {
     RK3588_DEV_GIC_DIST,
@@ -51,6 +54,10 @@ enum {
     RK3588_DEV_GIC_ITS0,
     RK3588_DEV_GIC_ITS1,
     RK3588_DEV_CRU,
+    RK3588_DEV_PWM0,
+    RK3588_DEV_PWM1,
+    RK3588_DEV_PWM2,
+    RK3588_DEV_PWM3,
     RK3588_DEV_OTP,
     RK3588_DEV_SFC,
     RK3588_DEV_SDMMC,
@@ -85,6 +92,7 @@ struct RK3588SoCState {
     DeviceState *usb3otg0;
     DeviceState *pcie2x1l2;
     DeviceState *cru;
+    DeviceState *pwm[RK3588_NUM_PWMS];
     DeviceState *otp;
     DeviceState *sfc;
     DeviceState *sdmmc;
