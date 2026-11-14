@@ -67,6 +67,8 @@ The ``rock-5b`` machine supports the following devices:
 * Rockchip SFC with a 16 MiB SPI NOR flash (XTX XT25F128)
 * SPI0, SPI1 and SPI3, the three controllers routed to the 40-pin header
 * GPIO0 through GPIO4 using the Rockchip GPIO v2 bank model
+* SAR ADC (v2 block), eight channels of 12-bit results with a per-channel
+  input voltage property
 * Clock and reset unit (CRU); clock, soft-reset and vendor reset-status
   registers are modeled as storage registers with the Rockchip high-word
   write mask, including the reset read-back used by real firmware
@@ -345,6 +347,25 @@ Program ``CTRLR0`` with an 8-bit frame format, set ``SER`` for chip select 0,
 ``00 20 ba 19``: the byte clocked out during the command, then the three ID
 bytes of the ``n25q256a`` model.
 
+The SAR ADC is a v2 controller, which is not register compatible with the
+rk3566 one: eight channels, 12-bit results, and a separate enable and status
+register for the end-of-conversion interrupt.  What the channels are wired to
+is board specific, so the machine leaves every input at zero and each one is a
+device property; ``-global`` drives one from the command line::
+
+  qemu-system-aarch64 -M rock-5b -m 256M -bios u-boot-dtb.bin \
+      -serial null -display none \
+      -global rk3588-saradc.vin4-uv=1800000
+
+``reference-uv`` is the full-scale voltage (1.8 V by default) and ``clock-hz``
+the ADC clock (1 MHz).  Writing ``START``, the single-shot bit and a channel
+number to ``CONV_CON`` starts a conversion that finishes
+``T_PD_SOC + T_DAS_SOC + 12`` ADC clocks later, which is 56 us with the values
+Linux programs.  The result lands in ``DATA_BASE + 4 * channel``, ``STATUS``
+reports busy until then, and ``END_INT_ST`` bit 0 is raised; the interrupt
+fires while that flag and ``END_INT_EN`` bit 0 are both set.  A channel that
+has never been converted, or that is not wired up, reads back as zero.
+
 The controllers drive the chip select of the peripheral attached to them, so
 ``SER`` alone selects the device; there is no separate GPIO to toggle.
 
@@ -388,7 +409,7 @@ leaves it deselected, and the receive FIFO returns zeros.
      - ``0xfec10000``
      - 398
      - 22 (channel 4); channel 0 is the Maskrom/BOOT strap
-     - unimplemented
+     - modeled
    * - HYM8563 RTC
      - I2C6 @0x51
      - ``GPIO0_B0``
