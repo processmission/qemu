@@ -87,7 +87,6 @@
 #define RK3588_I2C6_BASE             0xfec80000
 #define RK3588_I2C6_SPI              323
 #define RK3588_DDR_LEGACY_BASE       0xf7000000ULL
-#define RK3588_DDR_LEGACY_PHY_BASE   0xfd800000ULL
 #define RK3588_DDR_LEGACY_PHY_AUX_BASE 0xfe000000ULL
 #define RK3588_DDRPHY_BASE           0xfd8d8000ULL
 #define RK3588_DDR_PHY_GATE_BASE     0xfe0c0000ULL
@@ -629,8 +628,6 @@ static bool rk3588_soc_create_ddr(RK3588SoCState *s, Error **errp)
                         RK3588_DDR_PHY_GATE_BASE +
                         i * RK3588_DDR_LEGACY_WINDOW_STRIDE);
     }
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY,
-                    RK3588_DDR_LEGACY_PHY_BASE);
     sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY_AUX,
                     RK3588_DDR_LEGACY_PHY_AUX_BASE);
     sysbus_mmio_map(sbd, RK3588_DDR_MMIO_DDRPHY, RK3588_DDRPHY_BASE);

@@ -23,7 +23,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(RockchipCRUState, ROCKCHIP_CRU)
 
 #define ROCKCHIP_CRU_SIZE 0x5c000
 #define ROCKCHIP_CRU_NUM_PLL_REGS (4 * 3 + 5 * 4)
-#define ROCKCHIP_CRU_NUM_REGS (ROCKCHIP_CRU_NUM_PLL_REGS + 10 + 31 + 5)
+#define ROCKCHIP_CRU_NUM_DDR_REGS (4 * (2 * 7 + 3))
+#define ROCKCHIP_CRU_NUM_REGS (ROCKCHIP_CRU_NUM_PLL_REGS + 10 + 31 + 5 + \
+                             ROCKCHIP_CRU_NUM_DDR_REGS)
 #define ROCKCHIP_CRU_NUM_WORDS (ROCKCHIP_CRU_SIZE / 4)
 #define ROCKCHIP_CRU_RKNPU_RESET_COUNT 3
 #define CRU_SOFTRST_CON(n) (0xa00 + (n) * 4)
@@ -92,7 +94,7 @@ static uint64_t rockchip_cru_pll_lock(RegisterInfo *reg, uint64_t value)
                       extract32(con1, 6, 3) <= 6;
 
     /* PLL settling is synchronous after configuration and power-up. */
-    return powered && configured ? PLL_LOCKED : 0;
+    return (value & ~PLL_LOCKED) | (powered && configured ? PLL_LOCKED : 0);
 }
 
 #define CRU_PLL_CON0(label, base) \
@@ -204,11 +206,102 @@ static const RegisterAccessInfo rockchip_cru_clock_regs[] = {
     { .name = "GLB_RST_CON", .addr = 0xc10, .ro = 0xffff0020 },
 };
 
-G_STATIC_ASSERT(ARRAY_SIZE(rockchip_cru_pll_regs) +
-                ARRAY_SIZE(rockchip_cru_clock_regs) == ROCKCHIP_CRU_NUM_REGS);
+#define CRU_DDR_HIWORD(label, offset, mask, reset_value) \
+    { .name = label, .addr = offset, .reset = reset_value, \
+      .ro = (uint16_t)~(mask), .pre_write = rockchip_cru_masked_write }
 
-static bool rockchip_cru_reserved_pll_con2(hwaddr offset)
+#define CRU_DDR_PLL_CON6(label, base) \
+    { .name = label "_CON6", .addr = base + 0x18, .ro = 0x03ff, \
+      .pre_write = rockchip_cru_masked_write, \
+      .post_read = rockchip_cru_pll_lock }
+
+/* DDR CRU registers: RK3588 TRM Part1, sections 2.5-2.8. */
+static const RegisterAccessInfo rockchip_cru_ddr_regs[] = {
+    CRU_DDR_HIWORD("D0APLL_CON0", 0x40000, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D0APLL_CON1", 0x40004, 0x21ff, 0),
+    CRU_PLL_CON2("D0APLL", 0x40000),
+    CRU_DDR_HIWORD("D0APLL_CON3", 0x4000c, 0xffff, 0),
+    CRU_DDR_HIWORD("D0APLL_CON4", 0x40010, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D0APLL_CON5", 0x40014, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D0APLL", 0x40000),
+    CRU_DDR_HIWORD("D0BPLL_CON0", 0x40020, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D0BPLL_CON1", 0x40024, 0x21ff, 0),
+    CRU_PLL_CON2("D0BPLL", 0x40020),
+    CRU_DDR_HIWORD("D0BPLL_CON3", 0x4002c, 0xffff, 0),
+    CRU_DDR_HIWORD("D0BPLL_CON4", 0x40030, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D0BPLL_CON5", 0x40034, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D0BPLL", 0x40020),
+    CRU_DDR_HIWORD("DDR0CRU_CLKSEL_CON00", 0x40300, 0x1, 0),
+    CRU_DDR_HIWORD("DDR0CRU_GATE_CON00", 0x40800, 0x38, 0),
+    CRU_DDR_HIWORD("DDR0CRU_SOFTRST_CON00", 0x40a00, 0x1e, 0x6),
+
+    CRU_DDR_HIWORD("D1APLL_CON0", 0x44000, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D1APLL_CON1", 0x44004, 0x21ff, 0),
+    CRU_PLL_CON2("D1APLL", 0x44000),
+    CRU_DDR_HIWORD("D1APLL_CON3", 0x4400c, 0xffff, 0),
+    CRU_DDR_HIWORD("D1APLL_CON4", 0x44010, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D1APLL_CON5", 0x44014, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D1APLL", 0x44000),
+    CRU_DDR_HIWORD("D1BPLL_CON0", 0x44020, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D1BPLL_CON1", 0x44024, 0x21ff, 0),
+    CRU_PLL_CON2("D1BPLL", 0x44020),
+    CRU_DDR_HIWORD("D1BPLL_CON3", 0x4402c, 0xffff, 0),
+    CRU_DDR_HIWORD("D1BPLL_CON4", 0x44030, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D1BPLL_CON5", 0x44034, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D1BPLL", 0x44020),
+    CRU_DDR_HIWORD("DDR1CRU_CLKSEL_CON00", 0x44300, 0x1, 0),
+    CRU_DDR_HIWORD("DDR1CRU_GATE_CON00", 0x44800, 0x38, 0),
+    CRU_DDR_HIWORD("DDR1CRU_SOFTRST_CON00", 0x44a00, 0x1e, 0x6),
+
+    CRU_DDR_HIWORD("D2APLL_CON0", 0x48000, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D2APLL_CON1", 0x48004, 0x21ff, 0),
+    CRU_PLL_CON2("D2APLL", 0x48000),
+    CRU_DDR_HIWORD("D2APLL_CON3", 0x4800c, 0xffff, 0),
+    CRU_DDR_HIWORD("D2APLL_CON4", 0x48010, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D2APLL_CON5", 0x48014, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D2APLL", 0x48000),
+    CRU_DDR_HIWORD("D2BPLL_CON0", 0x48020, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D2BPLL_CON1", 0x48024, 0x21ff, 0),
+    CRU_PLL_CON2("D2BPLL", 0x48020),
+    CRU_DDR_HIWORD("D2BPLL_CON3", 0x4802c, 0xffff, 0),
+    CRU_DDR_HIWORD("D2BPLL_CON4", 0x48030, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D2BPLL_CON5", 0x48034, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D2BPLL", 0x48020),
+    CRU_DDR_HIWORD("DDR2CRU_CLKSEL_CON00", 0x48300, 0x1, 0),
+    CRU_DDR_HIWORD("DDR2CRU_GATE_CON00", 0x48800, 0x38, 0),
+    CRU_DDR_HIWORD("DDR2CRU_SOFTRST_CON00", 0x48a00, 0x1e, 0x6),
+
+    CRU_DDR_HIWORD("D3APLL_CON0", 0x4c000, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D3APLL_CON1", 0x4c004, 0x21ff, 0),
+    CRU_PLL_CON2("D3APLL", 0x4c000),
+    CRU_DDR_HIWORD("D3APLL_CON3", 0x4c00c, 0xffff, 0),
+    CRU_DDR_HIWORD("D3APLL_CON4", 0x4c010, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D3APLL_CON5", 0x4c014, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D3APLL", 0x4c000),
+    CRU_DDR_HIWORD("D3BPLL_CON0", 0x4c020, 0x83ff, 0x8000),
+    CRU_DDR_HIWORD("D3BPLL_CON1", 0x4c024, 0x21ff, 0),
+    CRU_PLL_CON2("D3BPLL", 0x4c020),
+    CRU_DDR_HIWORD("D3BPLL_CON3", 0x4c02c, 0xffff, 0),
+    CRU_DDR_HIWORD("D3BPLL_CON4", 0x4c030, 0xc1f9, 0),
+    CRU_DDR_HIWORD("D3BPLL_CON5", 0x4c034, 0x0001, 0),
+    CRU_DDR_PLL_CON6("D3BPLL", 0x4c020),
+    CRU_DDR_HIWORD("DDR3CRU_CLKSEL_CON00", 0x4c300, 0x1, 0),
+    CRU_DDR_HIWORD("DDR3CRU_GATE_CON00", 0x4c800, 0x38, 0),
+    CRU_DDR_HIWORD("DDR3CRU_SOFTRST_CON00", 0x4ca00, 0x1e, 0x6),
+};
+
+G_STATIC_ASSERT(ARRAY_SIZE(rockchip_cru_ddr_regs) == ROCKCHIP_CRU_NUM_DDR_REGS);
+G_STATIC_ASSERT(ARRAY_SIZE(rockchip_cru_pll_regs) +
+                ARRAY_SIZE(rockchip_cru_clock_regs) +
+                ARRAY_SIZE(rockchip_cru_ddr_regs) == ROCKCHIP_CRU_NUM_REGS);
+
+static bool rockchip_cru_reserved(hwaddr offset)
 {
+    /* Unlisted offsets in DDR0..3 CRU are reserved. */
+    if (offset >= 0x40000 && offset < 0x50000) {
+        return true;
+    }
+
     switch (offset) {
     case 0x50008: /* B0PLL */
     case 0x52028: /* B1PLL */
@@ -228,7 +321,7 @@ static uint64_t rockchip_cru_read(void *opaque, hwaddr offset, unsigned size)
     if (reg) {
         return register_read(reg, UINT32_MAX, TYPE_ROCKCHIP_CRU, false);
     }
-    if (rockchip_cru_reserved_pll_con2(offset)) {
+    if (rockchip_cru_reserved(offset)) {
         return 0;
     }
     if ((offset & (sizeof(uint32_t) - 1)) == 0 &&
@@ -251,7 +344,7 @@ static void rockchip_cru_write(void *opaque, hwaddr offset, uint64_t value,
         register_write(reg, value, UINT32_MAX, TYPE_ROCKCHIP_CRU, false);
         return;
     }
-    if (rockchip_cru_reserved_pll_con2(offset)) {
+    if (rockchip_cru_reserved(offset)) {
         return;
     }
     if ((offset & (sizeof(uint32_t) - 1)) == 0 &&
@@ -298,11 +391,14 @@ static void rockchip_cru_init(Object *obj)
     for (unsigned int i = 0; i < ARRAY_SIZE(s->regs_info); i++) {
         const RegisterAccessInfo *access;
         unsigned int pll_regs = ARRAY_SIZE(rockchip_cru_pll_regs);
+        unsigned int clock_regs = ARRAY_SIZE(rockchip_cru_clock_regs);
 
         if (i < pll_regs) {
             access = &rockchip_cru_pll_regs[i];
-        } else {
+        } else if (i < pll_regs + clock_regs) {
             access = &rockchip_cru_clock_regs[i - pll_regs];
+        } else {
+            access = &rockchip_cru_ddr_regs[i - pll_regs - clock_regs];
         }
         s->regs_info[i] = (RegisterInfo) {
             .data = &s->regs[i],
