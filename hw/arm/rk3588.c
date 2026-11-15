@@ -1198,12 +1198,15 @@ static bool rk3588_soc_create_i2c(RK3588SoCState *s, unsigned int index,
                                   Error **errp)
 {
     SysBusDevice *sbd;
+    g_autofree char *bus_name = NULL;
     g_autofree char *name = NULL;
 
     assert(index < RK3588_NUM_I2CS);
 
     name = g_strdup_printf("i2c%u", index);
     s->i2c[index] = qdev_new(TYPE_RK3X_I2C);
+    bus_name = g_strdup_printf("i2c%u-bus", index);
+    rk3x_i2c_init_bus(s->i2c[index], bus_name);
     object_property_add_child(OBJECT(s), name, OBJECT(s->i2c[index]));
     object_unref(OBJECT(s->i2c[index]));
     sbd = SYS_BUS_DEVICE(s->i2c[index]);
