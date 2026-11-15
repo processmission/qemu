@@ -446,7 +446,13 @@ static void rk3x_i2c_realize(DeviceState *dev, Error **errp)
 {
     Rk3xI2CState *s = RK3X_I2C(dev);
 
-    s->bus = i2c_init_bus(dev, "i2c-bus");
+    /*
+     * RK3588 supplies a unique name before realize.  Keep the historical
+     * name for other RK3X users that do not initialize the bus themselves.
+     */
+    if (!s->bus) {
+        s->bus = i2c_init_bus(dev, "i2c-bus");
+    }
     memory_region_init_io(&s->iomem, OBJECT(dev), &rk3x_i2c_ops, s,
                           TYPE_RK3X_I2C, RK3X_I2C_MMIO_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
@@ -501,6 +507,14 @@ static void rk3x_i2c_class_init(ObjectClass *klass, const void *data)
     dc->realize = rk3x_i2c_realize;
     device_class_set_legacy_reset(dc, rk3x_i2c_reset);
     dc->vmsd = &vmstate_rk3x_i2c;
+}
+
+void rk3x_i2c_init_bus(DeviceState *dev, const char *name)
+{
+    Rk3xI2CState *s = RK3X_I2C(dev);
+
+    assert(!s->bus);
+    s->bus = i2c_init_bus(dev, name);
 }
 
 static const TypeInfo rk3x_i2c_info = {

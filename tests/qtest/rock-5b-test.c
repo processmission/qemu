@@ -31,8 +31,29 @@
 #define ROCK5B_CRU_BASE         0xfd7c0000ULL
 
 #define RK3X_I2C_CON            0x000
+#define RK3X_I2C_MRXADDR        0x008
+#define RK3X_I2C_MRXRADDR       0x00c
+#define RK3X_I2C_MTXCNT         0x010
+#define RK3X_I2C_MRXCNT         0x014
+#define RK3X_I2C_IPD            0x01c
+#define RK3X_I2C_FCNT           0x020
+#define RK3X_I2C_TXBUFFER       0x100
+#define RK3X_I2C_RXBUFFER       0x200
+
+#define RK3X_I2C_CON_EN         (1u << 0)
+#define RK3X_I2C_CON_MOD_REGISTER_TX (1u << 1)
+#define RK3X_I2C_CON_START      (1u << 3)
+#define RK3X_I2C_CON_STOP       (1u << 4)
+#define RK3X_I2C_CON_LASTACK    (1u << 5)
+#define RK3X_I2C_CON_ACTACK     (1u << 6)
 #define RK3X_I2C_VERSION_MASK   (0x1ffu << 16)
 #define RK3X_I2C_VERSION        (5u << 16)
+
+#define RK3X_I2C_INT_MBTF       (1u << 2)
+#define RK3X_I2C_INT_MBRF       (1u << 3)
+#define RK3X_I2C_INT_STOP       (1u << 5)
+
+#define TMP105_REG_CONFIG       0x01
 
 /* RK3588 pcie2x1l2 APB vendor registers (PCIE_CLIENT_*). */
 #define RK_PCIE_CLIENT_GENERAL_CON      0x000
@@ -479,6 +500,7 @@ static void test_i2c_controllers(void)
 
     for (unsigned int i = 0; i < ARRAY_SIZE(bases); i++) {
         uint32_t con = qtest_readl(qts, bases[i] + RK3X_I2C_CON);
+        g_autofree char *bus_name = g_strdup_printf("i2c%u-bus", i);
         g_autofree char *controller_name = g_strdup_printf("i2c%u", i);
         g_autofree char *controller_path =
             g_strdup_printf("/machine/soc/%s", controller_name);
@@ -486,8 +508,82 @@ static void test_i2c_controllers(void)
         g_assert_cmphex(con & RK3X_I2C_VERSION_MASK, ==, RK3X_I2C_VERSION);
         g_assert_true(rock5b_qom_has_child(qts, "/machine/soc",
                                            controller_name));
-        g_assert_true(rock5b_qom_has_child(qts, controller_path, "i2c-bus"));
+        g_assert_true(rock5b_qom_has_child(qts, controller_path, bus_name));
     }
+
+    qtest_quit(qts);
+}
+
+static void rock5b_i2c_write_config(QTestState *qts, uint32_t base,
+                                    uint8_t address, uint8_t value)
+{
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER,
+                 address | (TMP105_REG_CONFIG << 8) | (value << 16));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 3);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+}
+
+static uint8_t rock5b_i2c_read_config(QTestState *qts, uint32_t base,
+                                      uint8_t address)
+{
+    uint8_t value;
+
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, address);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR,
+                 TMP105_REG_CONFIG | (1u << 24));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    value = qtest_readl(qts, base + RK3X_I2C_RXBUFFER) & 0xff;
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+
+    return value;
+}
+
+static void test_i2c_real_devices(void)
+{
+    const uint32_t base0 = 0xfd880000;
+    const uint32_t base1 = 0xfea90000;
+    uint32_t fcnt0;
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48 "
+        "-device tmp105,bus=i2c1-bus,address=0x49");
+
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+
+    rock5b_i2c_write_config(qts, base0, 0x90, 0x60);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base0, 0x90), ==, 0x60);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+
+    fcnt0 = qtest_readl(qts, base0 + RK3X_I2C_FCNT);
+    rock5b_i2c_write_config(qts, base1, 0x92, 0x20);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base1, 0x92), ==, 0x20);
+    g_assert_cmphex(qtest_readl(qts, base0 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base0 + RK3X_I2C_FCNT), ==, fcnt0);
 
     qtest_quit(qts);
 }
@@ -901,6 +997,7 @@ int main(int argc, char **argv)
 
     qtest_add_func("/rock-5b/machine-topology", test_machine_topology);
     qtest_add_func("/rock-5b/i2c-controllers", test_i2c_controllers);
+    qtest_add_func("/rock-5b/i2c-real-devices", test_i2c_real_devices);
     qtest_add_func("/rock-5b/pcie-rtl8125", test_pcie_rtl8125);
     qtest_add_func("/rock-5b/sdmmc", test_sdmmc);
     qtest_add_func("/rock-5b/cru", test_cru_reset_bank);

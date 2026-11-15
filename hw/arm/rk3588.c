@@ -928,12 +928,15 @@ static bool rk3588_soc_create_i2c(RK3588SoCState *s, unsigned int index,
                                   Error **errp)
 {
     SysBusDevice *sbd;
+    g_autofree char *bus_name = NULL;
     g_autofree char *name = NULL;
 
     assert(index < RK3588_NUM_I2CS);
 
     name = g_strdup_printf("i2c%u", index);
     s->i2c[index] = qdev_new(TYPE_RK3X_I2C);
+    bus_name = g_strdup_printf("i2c%u-bus", index);
+    rk3x_i2c_init_bus(s->i2c[index], bus_name);
     object_property_add_child(OBJECT(s), name, OBJECT(s->i2c[index]));
     sbd = SYS_BUS_DEVICE(s->i2c[index]);
     if (!sysbus_realize(sbd, errp)) {
@@ -957,7 +960,7 @@ static bool rk3588_soc_create_i2c6(RK3588SoCState *s, Error **errp)
         return false;
     }
 
-    bus = I2C_BUS(qdev_get_child_bus(s->i2c[6], "i2c-bus"));
+    bus = I2C_BUS(qdev_get_child_bus(s->i2c[6], "i2c6-bus"));
     rtc = DEVICE(i2c_slave_create_simple(bus, TYPE_HYM8563, 0x51));
     qdev_connect_gpio_out_named(rtc, "irq", 0,
                                 qdev_get_gpio_in(s->gpio[0], 8));
