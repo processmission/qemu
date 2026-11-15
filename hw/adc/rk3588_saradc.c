@@ -75,7 +75,7 @@ static void rk3588_saradc_complete(void *opaque)
 
     assert(ch < RK3588_SARADC_NUM_CHANNELS);
 
-    code = (uint64_t)s->inputs_uv[ch] * RK3588_SARADC_DATA_MASK;
+    code = (uint64_t)s->inputs_uv[ch] * RK3588_SARADC_STEPS;
     s->regs[(SARADC_DATA_BASE >> 2) + ch] =
         MIN(code / s->reference_uv, RK3588_SARADC_DATA_MASK);
 

@@ -36,7 +36,12 @@ enum {
 #define SARADC_STATUS_BUSY      BIT(0)
 #define SARADC_CHANNEL_MASK     0xf
 
+/*
+ * 12 bits of resolution: the reference maps to 2^12 steps but saturates
+ * at the mask, and half of the reference maps to the middle code.
+ */
 #define SARADC_FULL_SCALE       0xfff
+#define SARADC_HALF_SCALE       0x800
 
 /* Linux programs 32 power-up and 12 sampling clocks, at 1 MHz. */
 #define SARADC_STEP_NS          100000
@@ -184,7 +189,7 @@ static void test_saradc_conversion(void)
     /* 0.9 V is half of the reference, so half of the 12-bit range. */
     saradc_start_conversion(qts, 5);
     qtest_clock_step(qts, SARADC_STEP_NS);
-    g_assert_cmphex(SARADC_READ(SARADC_DATA(5)), ==, SARADC_FULL_SCALE / 2);
+    g_assert_cmphex(SARADC_READ(SARADC_DATA(5)), ==, SARADC_HALF_SCALE);
     g_assert_cmphex(SARADC_READ(SARADC_DATA(4)), ==, SARADC_FULL_SCALE);
 
     /* Results are written by the conversion alone. */

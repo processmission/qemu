@@ -20,7 +20,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(RK3588SARADCState, RK3588_SARADC)
 
 /* The v2 controller converts 12 bits, unlike the 10-bit rk3566 block. */
 #define RK3588_SARADC_RESOLUTION   12
-#define RK3588_SARADC_DATA_MASK    ((1U << RK3588_SARADC_RESOLUTION) - 1)
+/*
+ * The reference is divided into 2^12 steps, so a conversion scales by
+ * RK3588_SARADC_STEPS and saturates at RK3588_SARADC_DATA_MASK.  The
+ * two are not interchangeable: the mask is one step short, so using it
+ * as the multiplier under-reports every input below full scale.
+ */
+#define RK3588_SARADC_STEPS        (1U << RK3588_SARADC_RESOLUTION)
+#define RK3588_SARADC_DATA_MASK    (RK3588_SARADC_STEPS - 1)
 
 struct RK3588SARADCState {
     SysBusDevice parent_obj;
