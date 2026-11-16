@@ -89,6 +89,7 @@ typedef enum {
     RK3X_I2C_STATE_IDLE,
     RK3X_I2C_STATE_TX,
     RK3X_I2C_STATE_RX,
+    RK3X_I2C_STATE_RX_DATA,
 } Rk3xI2CStateMode;
 
 struct Rk3xI2CState {
@@ -181,10 +182,13 @@ static void rk3x_i2c_transfer_tx(Rk3xI2CState *s)
         s->xfer_active = false;
     }
     if (nak) {
+        rk3x_i2c_end_transfer(s);
+        s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
                                ((s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP) ?
                                 RK3X_I2C_INT_STOP : 0));
     } else if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
+        s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
     } else {
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_MBTF);
@@ -218,38 +222,48 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
         }
 
         if (reg_len) {
-            /* Write the register address(es), then restart for the read. */
             if (i2c_start_transfer(s->bus, addr7, false)) {
                 nak = true;
             } else {
+                s->xfer_active = true;
                 for (i = 0; i < reg_len; i++) {
                     if (i2c_send(s->bus, (s->mrxraddr >> (i * 8)) & 0xff)) {
                         nak = true;
                         break;
                     }
                 }
-                i2c_end_transfer(s->bus);
             }
         }
     }
 
-    if (!nak) {
+    if (!nak && s->state != RK3X_I2C_STATE_RX_DATA) {
         if (i2c_start_transfer(s->bus, addr7, true)) {
             nak = true;
         } else {
-            for (i = 0; i < n; i++) {
-                s->rxbuf[i] = i2c_recv(s->bus);
-            }
-            i2c_end_transfer(s->bus);
+            s->xfer_active = true;
+            s->state = RK3X_I2C_STATE_RX_DATA;
+        }
+    }
+
+    if (!nak) {
+        for (i = 0; i < n; i++) {
+            s->rxbuf[i] = i2c_recv(s->bus);
+        }
+        if (s->con & RK3X_I2C_CON_LASTACK) {
+            i2c_nack(s->bus);
         }
     }
     s->fcnt = n;
 
     if (nak) {
+        rk3x_i2c_end_transfer(s);
+        s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
                                ((s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP) ?
                                 RK3X_I2C_INT_STOP : 0));
     } else if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
+        rk3x_i2c_end_transfer(s);
+        s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
     } else {
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_MBRF);
@@ -329,7 +343,9 @@ static void rk3x_i2c_write(void *opaque, hwaddr offset, uint64_t value,
         return;
     case RK3X_I2C_MRXCNT:
         s->mrxcnt = val;
-        if ((s->con & RK3X_I2C_CON_EN) && s->state == RK3X_I2C_STATE_RX) {
+        if ((s->con & RK3X_I2C_CON_EN) &&
+            (s->state == RK3X_I2C_STATE_RX ||
+             s->state == RK3X_I2C_STATE_RX_DATA)) {
             rk3x_i2c_transfer_rx(s);
         }
         return;
@@ -423,6 +439,7 @@ static void rk3x_i2c_reset(DeviceState *dev)
 {
     Rk3xI2CState *s = RK3X_I2C(dev);
 
+    rk3x_i2c_end_transfer(s);
     s->con = 0;
     s->clkdiv = 0;
     s->mrxaddr = 0;
