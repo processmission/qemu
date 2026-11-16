@@ -54,6 +54,7 @@
 
 #define RK3X_I2C_INT_MBTF       (1u << 2)
 #define RK3X_I2C_INT_MBRF       (1u << 3)
+#define RK3X_I2C_INT_START      (1u << 4)
 #define RK3X_I2C_INT_STOP       (1u << 5)
 #define RK3X_I2C_INT_NAKRCV     (1u << 6)
 
@@ -628,6 +629,35 @@ static void test_i2c_nack_recovery(void)
     qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
     g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD), ==, 0);
     qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+
+    /*
+     * Match the Linux rk3x-i2c state machine: CON.START is a separate
+     * interrupt, and a NACK without CON1 auto-stop is completed by a
+     * software STOP even though the data state has already returned idle.
+     */
+    qtest_writel(qts, base + RK3X_I2C_IEN, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_START, ==, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_CON, RK3X_I2C_CON_EN);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0xfe);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_NAKRCV);
+    qtest_writel(qts, base + RK3X_I2C_IEN, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    qtest_writel(qts, base + RK3X_I2C_IEN, 0);
 
     rock5b_i2c_write_config(qts, base, 0x90, 0x40);
     g_assert_cmphex(rock5b_i2c_read_config(qts, base, 0x90), ==, 0x40);

@@ -291,9 +291,19 @@ static void rk3x_i2c_write_con(Rk3xI2CState *s, uint32_t val)
         }
         s->addr_sent = false;
         rk3x_i2c_end_transfer(s);
+        /*
+         * Linux arms CON.START and waits for START before filling the data
+         * FIFO and writing MTXCNT/MRXCNT.  The controller therefore has to
+         * report the START condition separately from the data-complete IRQ.
+         */
+        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_START);
     } else if ((s->con & RK3X_I2C_CON_STOP) &&
-               s->state != RK3X_I2C_STATE_IDLE) {
-        /* Software-generated STOP after a data interrupt. */
+               (s->con & RK3X_I2C_CON_EN)) {
+        /*
+         * Software-generated STOP.  This also completes an address NACK:
+         * the data state has already returned to IDLE, but Linux still
+         * requests STOP and waits for its interrupt.
+         */
         s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_end_transfer(s);
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
