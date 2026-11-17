@@ -18,7 +18,7 @@
  *   0x024 SCL_OE_DB
  *   0x100 TXBUFFER  8 words
  *   0x200 RXBUFFER  8 words
- *   0x228 CON1      AUTO_STOP(0) TRANSFER_AUTO_STOP(1)
+ *   0x228 CON1      AUTO_STOP(0) TX_END_AUTO_STOP(1)
  *                   NACK_AUTO_STOP(2)
  *
  * The controller reports I2C version 5 (RK_I2C_VERSION5), which makes
@@ -80,10 +80,11 @@
 #define RK3X_I2C_INT_NAKRCV BIT(6)
 
 #define RK3X_I2C_CON1_AUTO_STOP        BIT(0)
-#define RK3X_I2C_CON1_TRANSFER_AUTO_STOP BIT(1)
+#define RK3X_I2C_CON1_TX_END_AUTO_STOP BIT(1)
 #define RK3X_I2C_CON1_NACK_AUTO_STOP   BIT(2)
 
 #define RK3X_I2C_BUFFER_SIZE 32
+#define RK3X_I2C_COUNT_MASK  0x3f
 
 typedef enum {
     RK3X_I2C_STATE_IDLE,
@@ -138,6 +139,23 @@ static void rk3x_i2c_post_interrupt(Rk3xI2CState *s, uint32_t bits)
     rk3x_i2c_update_irq(s);
 }
 
+static bool rk3x_i2c_auto_stop_nack(Rk3xI2CState *s)
+{
+    return (s->con1 & RK3X_I2C_CON1_AUTO_STOP) &&
+           (s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP);
+}
+
+static bool rk3x_i2c_auto_stop_tx_end(Rk3xI2CState *s)
+{
+    return (s->con1 & RK3X_I2C_CON1_AUTO_STOP) &&
+           (s->con1 & RK3X_I2C_CON1_TX_END_AUTO_STOP);
+}
+
+static bool rk3x_i2c_stop_on_nack(Rk3xI2CState *s)
+{
+    return (s->con & RK3X_I2C_CON_ACTACK) || rk3x_i2c_auto_stop_nack(s);
+}
+
 static void rk3x_i2c_transfer_tx(Rk3xI2CState *s)
 {
     uint8_t addr7;
@@ -155,7 +173,8 @@ static void rk3x_i2c_transfer_tx(Rk3xI2CState *s)
      * each one, so keep the bus transaction open until software STOP or
      * hardware auto-stop: only the first chunk carries the address byte.
      */
-    if (!s->xfer_active) {
+    if (!s->addr_sent) {
+        s->addr_sent = true;
         addr7 = s->txbuf[0] >> 1;
         if (i2c_start_transfer(s->bus, addr7, false)) {
             nak = true;
@@ -167,27 +186,36 @@ static void rk3x_i2c_transfer_tx(Rk3xI2CState *s)
         skip = 0;
     }
 
-    if (!nak) {
+    if (!nak || !rk3x_i2c_stop_on_nack(s)) {
         for (i = skip; i < n; i++) {
             if (i2c_send(s->bus, s->txbuf[i])) {
                 nak = true;
-                break;
+                if (rk3x_i2c_stop_on_nack(s)) {
+                    break;
+                }
             }
         }
     }
     s->fcnt = n;
 
-    if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
-        i2c_end_transfer(s->bus);
-        s->xfer_active = false;
-    }
     if (nak) {
+        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV);
+        if (rk3x_i2c_auto_stop_nack(s)) {
+            rk3x_i2c_end_transfer(s);
+            s->state = RK3X_I2C_STATE_IDLE;
+            rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
+            return;
+        }
+        if (rk3x_i2c_stop_on_nack(s)) {
+            rk3x_i2c_end_transfer(s);
+            s->state = RK3X_I2C_STATE_IDLE;
+            return;
+        }
+        /* CON.ACTACK clear: report the NAK but continue the transfer. */
+    }
+
+    if (rk3x_i2c_auto_stop_tx_end(s)) {
         rk3x_i2c_end_transfer(s);
-        s->state = RK3X_I2C_STATE_IDLE;
-        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
-                               ((s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP) ?
-                                RK3X_I2C_INT_STOP : 0));
-    } else if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
         s->state = RK3X_I2C_STATE_IDLE;
         rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
     } else {
@@ -200,6 +228,7 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
     uint8_t addr7;
     unsigned int n, i;
     bool nak = false;
+    bool stop_on_nak = rk3x_i2c_stop_on_nack(s);
 
     /* The RX FIFO holds at most 32 bytes. */
     n = MIN(s->mrxcnt, RK3X_I2C_BUFFER_SIZE);
@@ -229,14 +258,17 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
                 for (i = 0; i < reg_len; i++) {
                     if (i2c_send(s->bus, (s->mrxraddr >> (i * 8)) & 0xff)) {
                         nak = true;
-                        break;
+                        if (stop_on_nak) {
+                            break;
+                        }
                     }
                 }
             }
         }
     }
 
-    if (!nak && s->state != RK3X_I2C_STATE_RX_DATA) {
+    if ((!nak || !stop_on_nak) &&
+        s->state != RK3X_I2C_STATE_RX_DATA) {
         if (i2c_start_transfer(s->bus, addr7, true)) {
             nak = true;
         } else {
@@ -245,7 +277,21 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
         }
     }
 
-    if (!nak) {
+    if (nak && rk3x_i2c_auto_stop_nack(s)) {
+        rk3x_i2c_end_transfer(s);
+        s->state = RK3X_I2C_STATE_IDLE;
+        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
+                               RK3X_I2C_INT_STOP);
+        return;
+    }
+    if (nak && stop_on_nak) {
+        rk3x_i2c_end_transfer(s);
+        s->state = RK3X_I2C_STATE_IDLE;
+        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV);
+        return;
+    }
+
+    if (!nak || !(s->con & RK3X_I2C_CON_ACTACK)) {
         for (i = 0; i < n; i++) {
             s->rxbuf[i] = i2c_recv(s->bus);
         }
@@ -256,18 +302,9 @@ static void rk3x_i2c_transfer_rx(Rk3xI2CState *s)
     s->fcnt = n;
 
     if (nak) {
-        rk3x_i2c_end_transfer(s);
-        s->state = RK3X_I2C_STATE_IDLE;
-        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV |
-                               ((s->con1 & RK3X_I2C_CON1_NACK_AUTO_STOP) ?
-                                RK3X_I2C_INT_STOP : 0));
-    } else if (s->con1 & RK3X_I2C_CON1_TRANSFER_AUTO_STOP) {
-        rk3x_i2c_end_transfer(s);
-        s->state = RK3X_I2C_STATE_IDLE;
-        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_STOP);
-    } else {
-        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_MBRF);
+        rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_NAKRCV);
     }
+    rk3x_i2c_post_interrupt(s, RK3X_I2C_INT_MBRF);
 }
 
 static void rk3x_i2c_write_con(Rk3xI2CState *s, uint32_t val)
@@ -326,9 +363,7 @@ static void rk3x_i2c_write(void *opaque, hwaddr offset, uint64_t value,
     }
     if (offset >= RK3X_I2C_RXBUFFER &&
         offset < RK3X_I2C_RXBUFFER + RK3X_I2C_BUFFER_SIZE) {
-        for (i = 0; i < 4; i++) {
-            s->rxbuf[offset - RK3X_I2C_RXBUFFER + i] = val >> (8 * i);
-        }
+        /* RXDATA is read-only. */
         return;
     }
 
@@ -346,13 +381,13 @@ static void rk3x_i2c_write(void *opaque, hwaddr offset, uint64_t value,
         s->mrxraddr = val;
         return;
     case RK3X_I2C_MTXCNT:
-        s->mtxcnt = val;
+        s->mtxcnt = val & RK3X_I2C_COUNT_MASK;
         if ((s->con & RK3X_I2C_CON_EN) && s->state == RK3X_I2C_STATE_TX) {
             rk3x_i2c_transfer_tx(s);
         }
         return;
     case RK3X_I2C_MRXCNT:
-        s->mrxcnt = val;
+        s->mrxcnt = val & RK3X_I2C_COUNT_MASK;
         if ((s->con & RK3X_I2C_CON_EN) &&
             (s->state == RK3X_I2C_STATE_RX ||
              s->state == RK3X_I2C_STATE_RX_DATA)) {
@@ -369,7 +404,7 @@ static void rk3x_i2c_write(void *opaque, hwaddr offset, uint64_t value,
         rk3x_i2c_update_irq(s);
         return;
     case RK3X_I2C_FCNT:
-        s->fcnt = val;
+        /* FCNT is read-only. */
         return;
     case RK3X_I2C_SCL_OE_DB:
         s->scl_oe_db = val;
@@ -451,7 +486,7 @@ static void rk3x_i2c_reset(DeviceState *dev)
 
     rk3x_i2c_end_transfer(s);
     s->con = 0;
-    s->clkdiv = 0;
+    s->clkdiv = 1;
     s->mrxaddr = 0;
     s->mrxraddr = 0;
     s->mtxcnt = 0;
@@ -459,7 +494,7 @@ static void rk3x_i2c_reset(DeviceState *dev)
     s->ien = 0;
     s->ipd = 0;
     s->fcnt = 0;
-    s->scl_oe_db = 0;
+    s->scl_oe_db = 0x20;
     s->con1 = 0;
     memset(s->txbuf, 0, sizeof(s->txbuf));
     memset(s->rxbuf, 0, sizeof(s->rxbuf));
