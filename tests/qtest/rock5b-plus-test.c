@@ -1148,7 +1148,8 @@ static void test_rock_5b_plus_sdhci_cmd1(void)
 #define RK3X_I2C_INT_STOP     (1u << 5)
 #define RK3X_I2C_INT_NAKRCV   (1u << 6)
 
-#define RK3X_I2C_CON1_TRANSFER_AUTO_STOP (1u << 1)
+#define RK3X_I2C_CON1_AUTO_STOP          (1u << 0)
+#define RK3X_I2C_CON1_TX_END_AUTO_STOP   (1u << 1)
 #define RK3X_I2C_CON1_NACK_AUTO_STOP     (1u << 2)
 
 #define HYM8563_SEC 0x02
@@ -1239,12 +1240,14 @@ static void test_rock_5b_plus_i2c6_read_rtc(void)
     qtest_writel(qts, b + RK3X_I2C_CON, RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
     qtest_writel(qts, b + RK3X_I2C_IPD, 0xff);
 
-    /* REGISTER_TX read of the same block, with the hardware auto-stop
-     * path enabled (as the v5 driver does). */
+    /*
+     * REGISTER_TX read of the same block.  TX_END auto-stop does not apply
+     * to RX, so the transfer is completed with a software STOP.
+     */
     qtest_writel(qts, b + RK3X_I2C_MRXADDR, 0xa2);
     qtest_writel(qts, b + RK3X_I2C_MRXRADDR, HYM8563_SEC | (1u << 24));
     qtest_writel(qts, b + RK3X_I2C_CON1,
-                 RK3X_I2C_CON1_TRANSFER_AUTO_STOP |
+                 RK3X_I2C_CON1_AUTO_STOP |
                  RK3X_I2C_CON1_NACK_AUTO_STOP);
     qtest_writel(qts, b + RK3X_I2C_CON,
                  RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
@@ -1252,9 +1255,10 @@ static void test_rock_5b_plus_i2c6_read_rtc(void)
                  RK3X_I2C_CON_ACTACK);
     qtest_writel(qts, b + RK3X_I2C_MRXCNT, 7);
 
-    /* Auto-stop posts STOP directly; the block lands in RXBUFFER. */
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_MBRF,
+                    ==, RK3X_I2C_INT_MBRF);
     g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_STOP,
-                    ==, RK3X_I2C_INT_STOP);
+                    ==, 0);
     g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_NAKRCV,
                     ==, 0);
     for (i = 0; i < 7; i++) {
@@ -1263,6 +1267,11 @@ static void test_rock_5b_plus_i2c6_read_rtc(void)
 
         g_assert_cmphex(byte, ==, date[i + 1]);
     }
+
+    qtest_writel(qts, b + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, b + RK3X_I2C_IPD) & RK3X_I2C_INT_STOP,
+                    ==, RK3X_I2C_INT_STOP);
 
     qtest_quit(qts);
 }
@@ -1325,7 +1334,7 @@ static void test_rock_5b_plus_i2c6_nak(void)
      * alongside NAKRCV. */
     qtest_writel(qts, b + RK3X_I2C_TXBUFFER, 0x000000fe);
     qtest_writel(qts, b + RK3X_I2C_CON1,
-                 RK3X_I2C_CON1_TRANSFER_AUTO_STOP |
+                 RK3X_I2C_CON1_AUTO_STOP |
                  RK3X_I2C_CON1_NACK_AUTO_STOP);
     qtest_writel(qts, b + RK3X_I2C_CON,
                  RK3X_I2C_CON_EN | RK3X_I2C_CON_START | RK3X_I2C_CON_ACTACK);
