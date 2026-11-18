@@ -1037,13 +1037,10 @@ static void rk3588_fdt_add_gmac_node(void *fdt, unsigned int id,
     qemu_fdt_setprop_string_array(fdt, gmac, "clock-names",
                                   (char **)&clock_names,
                                   ARRAY_SIZE(clock_names));
-    /*
-     * dwmac-rk.c REQUIRES rockchip,grf (probe returns -ENODEV without it)
-     * and rk3588_ops also wants rockchip,php-grf for CON0/CLK_CON1. Both
-     * are modelled as RAZ/WI syscons - see rk3588_create_grf_devices().
-     */
     qemu_fdt_setprop_cell(fdt, gmac, "rockchip,grf", sys_grf_ph);
     qemu_fdt_setprop_cell(fdt, gmac, "rockchip,php-grf", php_grf_ph);
+    /* Rockchip vendor kernels use an underscore in the PHP GRF binding. */
+    qemu_fdt_setprop_cell(fdt, gmac, "rockchip,php_grf", php_grf_ph);
     qemu_fdt_setprop_string(fdt, gmac, "phy-mode",
                             id ? "rgmii-id" : "rgmii-rxid");
     qemu_fdt_setprop_string(fdt, gmac, "status", "okay");
@@ -3340,6 +3337,7 @@ static void rk3588_init(MachineState *machine)
     qdev_prop_set_uint32(DEVICE(&s->soc), "num-cpus", machine->smp.cpus);
     qdev_prop_set_uint64(DEVICE(&s->soc), "ram-size", machine->ram_size);
     qdev_prop_set_bit(DEVICE(&s->soc), "rknpu", s->rknpu);
+    qdev_prop_set_bit(DEVICE(&s->soc), "secure-otp-unfused", true);
     qdev_prop_set_uint32(DEVICE(&s->soc), "dram-type", board->dram_type);
     qdev_prop_set_uint32(DEVICE(&s->soc), "gmac-mask",
                          board->gmac_mask);

@@ -22,7 +22,7 @@
 OBJECT_DECLARE_SIMPLE_TYPE(RockchipCRUState, ROCKCHIP_CRU)
 
 #define ROCKCHIP_CRU_SIZE 0x5c000
-#define ROCKCHIP_CRU_NUM_PLL_REGS (4 * 3 + 5 * 4)
+#define ROCKCHIP_CRU_NUM_PLL_REGS (4 * 3 + 5 * 4 + 5)
 #define ROCKCHIP_CRU_NUM_DDR_REGS (4 * (2 * 7 + 3))
 #define ROCKCHIP_CRU_NUM_REGS (ROCKCHIP_CRU_NUM_PLL_REGS + 10 + 31 + 5 + \
                              ROCKCHIP_CRU_NUM_DDR_REGS)
@@ -151,6 +151,19 @@ static const RegisterAccessInfo rockchip_cru_pll_regs[] = {
     CRU_PLL_CON1("PPLL", 0x08200),
     CRU_PLL_CON2("PPLL", 0x08200),
     CRU_PLL_CON6("PPLL", 0x08200),
+
+    /* SBUSCRU SPLL: RK3588 TRM Part1, section 2.13. */
+    { .name = "SPLL_CON0", .addr = 0x18220, .ro = 0x7c00,
+      .pre_write = rockchip_cru_masked_write },
+    { .name = "SPLL_CON1", .addr = 0x18224, .ro = 0xde00,
+      .pre_write = rockchip_cru_masked_write },
+    { .name = "SPLL_CON4", .addr = 0x18230, .reset = 0x0002,
+      .ro = 0x3e01, .pre_write = rockchip_cru_masked_write },
+    { .name = "SPLL_CON5", .addr = 0x18234, .reset = 0x07e0,
+      .ro = 0xf81e, .pre_write = rockchip_cru_masked_write },
+    { .name = "SPLL_CON6", .addr = 0x18238, .ro = 0x03ff,
+      .pre_write = rockchip_cru_masked_write,
+      .post_read = rockchip_cru_pll_lock },
 };
 
 static const RegisterAccessInfo rockchip_cru_clock_regs[] = {
@@ -307,6 +320,8 @@ static bool rockchip_cru_reserved(hwaddr offset)
     case 0x52028: /* B1PLL */
     case 0x58048: /* LPLL */
     case 0x001e8: /* NPLL */
+    case 0x18228: /* SPLL has no CON2 or CON3. */
+    case 0x1822c:
         return true;
     default:
         return false;
