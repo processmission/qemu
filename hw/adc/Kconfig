@@ -8,3 +8,6 @@ config STC8G_ADC
 config RK3566_SARADC
     bool
     select REGISTER
+
+config RK3588_SARADC
+    bool

@@ -15,6 +15,7 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "hw/arm/rk3588.h"
+#include "hw/adc/rk3588_saradc.h"
 #include "hw/arm/bsa.h"
 #include "hw/core/qdev-properties.h"
 #include "net/net.h"
@@ -70,6 +71,8 @@
 #define RK3588_CRYPTO_BASE           0xfe370000
 #define RK3588_TSADC_BASE            0xfec00000
 #define RK3588_TSADC_SPI             397
+#define RK3588_SARADC_BASE           0xfec10000
+#define RK3588_SARADC_SPI            398
 #define RK3588_SPI0_SPI              326
 #define RK3588_RNG_BASE              0xfe378000
 #define RK3588_RNG_SPI               400
@@ -304,7 +307,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("wdt-ns", 0xfeaf0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("spi2", 0xfeb20000, 64 * KiB),
     RK3588_UNIMPLEMENTED("tsadc", 0xfec00000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("saradc", 0xfec10000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox0", 0xfec60000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox1", 0xfec70000, 64 * KiB),
     RK3588_UNIMPLEMENTED("i2c6", 0xfec80000, 64 * KiB),
@@ -739,6 +741,28 @@ static bool rk3588_soc_create_tsadc(RK3588SoCState *s, Error **errp)
 }
 
 /*
+ * The SAR ADC block is shared between the 40-pin header (channel 4 on
+ * pin 22) and the on-board rails (channel 0 is the Maskrom/BOOT strap), so
+ * the model exposes one voltage property per channel and leaves them all
+ * at zero.  A machine, or a command line -global, can wire a channel up.
+ */
+static bool rk3588_soc_create_saradc(RK3588SoCState *s, Error **errp)
+{
+    SysBusDevice *sbd;
+
+    s->saradc = qdev_new(TYPE_RK3588_SARADC);
+    object_property_add_child(OBJECT(s), "saradc", OBJECT(s->saradc));
+    sbd = SYS_BUS_DEVICE(s->saradc);
+    if (!sysbus_realize(sbd, errp)) {
+        return false;
+    }
+    sysbus_mmio_map(sbd, 0, RK3588_SARADC_BASE);
+    sysbus_connect_irq(sbd, 0,
+                       qdev_get_gpio_in(DEVICE(&s->gic), RK3588_SARADC_SPI));
+    return true;
+}
+
+/*
  * Model one Rockchip SPI controller.  Every RK3588 SPI instance is the same
  * IP block, so the window and the interrupt line follow from the memmap
  * index.  The controller also gets a qdev id so that SPI peripherals can be
@@ -1046,6 +1070,7 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
         !rk3588_soc_create_spi(s, RK3588_DEV_SPI0, errp) ||
         !rk3588_soc_create_spi(s, RK3588_DEV_SPI1, errp) ||
         !rk3588_soc_create_spi(s, RK3588_DEV_SPI3, errp) ||
+        !rk3588_soc_create_saradc(s, errp) ||
         !rk3588_soc_create_usb(s, errp) ||
         !rk3588_soc_create_pcie(s, errp)) {
         return;
