@@ -38,9 +38,9 @@
 #define RK3588_RKNN0_SPI 110
 #define RK3588_RKNN1_SPI 111
 #define RK3588_RKNN2_SPI 112
-#define RK3588_RKNN0_QOM "/machine/rknn0"
-#define RK3588_RKNN1_QOM "/machine/rknn1"
-#define RK3588_RKNN2_QOM "/machine/rknn2"
+#define RK3588_RKNN0_QOM "/machine/soc/rknn0"
+#define RK3588_RKNN1_QOM "/machine/soc/rknn1"
+#define RK3588_RKNN2_QOM "/machine/soc/rknn2"
 #define RK3588_RKNN0_MMU_BASE 0xfdab9000ULL
 #define RK3588_RKNN0_MMU1_BASE 0xfdaba000ULL
 #define RK3588_RKNN1_MMU_BASE 0xfdaca000ULL
@@ -2150,7 +2150,7 @@ static void rk3588_rknn_wait_idle(QTestState *qts)
 {
     gint64 deadline = g_get_monotonic_time() + 30 * G_TIME_SPAN_SECOND;
 
-    while (qtest_qom_get_bool(qts, "/machine/rknn0",
+    while (qtest_qom_get_bool(qts, RK3588_RKNN0_QOM,
                               "x-execution-active")) {
         g_assert_cmpint(g_get_monotonic_time(), <, deadline);
         qtest_clock_step(qts, 1);
@@ -3076,7 +3076,7 @@ static void rk3588_rknn_assert_matmul_output(QTestState *qts)
     rk3588_rknn_assert_matmul_output_data(output);
 }
 
-static bool rk3588_qom_has_machine_child(QTestState *qts, const char *name)
+static bool rk3588_qom_has_soc_child(QTestState *qts, const char *name)
 {
     QDict *rsp;
     QList *children;
@@ -3085,7 +3085,7 @@ static bool rk3588_qom_has_machine_child(QTestState *qts, const char *name)
 
     rsp = qtest_qmp(qts,
                     "{ 'execute': 'qom-list',"
-                    "  'arguments': { 'path': '/machine' } }");
+                    "  'arguments': { 'path': '/machine/soc' } }");
     g_assert(qdict_haskey(rsp, "return"));
     children = qdict_get_qlist(rsp, "return");
 
@@ -3324,9 +3324,9 @@ static void test_rk3588_rknpu_disabled_by_default(void)
 {
     QTestState *qts = rk3588_qtest_start(1);
 
-    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn0"));
-    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn1"));
-    g_assert_false(rk3588_qom_has_machine_child(qts, "rknn2"));
+    g_assert_false(rk3588_qom_has_soc_child(qts, "rknn0"));
+    g_assert_false(rk3588_qom_has_soc_child(qts, "rknn1"));
+    g_assert_false(rk3588_qom_has_soc_child(qts, "rknn2"));
 
     qtest_quit(qts);
 }
@@ -3671,9 +3671,9 @@ static void test_rk3588_rknpu_version_and_cores(void)
     };
     QTestState *qts = rk3588_qtest_start_rknpu();
 
-    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn0"));
-    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn1"));
-    g_assert_true(rk3588_qom_has_machine_child(qts, "rknn2"));
+    g_assert_true(rk3588_qom_has_soc_child(qts, "rknn0"));
+    g_assert_true(rk3588_qom_has_soc_child(qts, "rknn1"));
+    g_assert_true(rk3588_qom_has_soc_child(qts, "rknn2"));
 
     for (unsigned int i = 0; i < ARRAY_SIZE(pc_bases); i++) {
         g_assert_cmphex(qtest_readl(qts, pc_bases[i] + RKNN_PC_VERSION), ==,

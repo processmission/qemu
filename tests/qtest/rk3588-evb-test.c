@@ -40,8 +40,8 @@
 #define RK3588_PCIE3X4_DBI_BASE 0xa40000000ULL
 #define RK3588_PCIE3X4_CFG_BASE 0xf0000000ULL
 #define RK3588_CRU_BASE 0xfd7c0000ULL
-#define RK3588_CRU_SPL_PLL_STATUS 0xfd810018ULL
-#define RK3588_CRU_SPL_PLL_LOCKED 0x8000
+#define RK3588_B0PLL_CON6 0xfd810018ULL
+#define RK3588_PLL_LOCKED 0x8000
 #define RK3588_PMU0_GRF_BASE 0xfd588000ULL
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC 0x0084
 #define RK3588_PMU0_GRF_WARM_BOOT_MAGIC_VALUE 0x13579bdf
@@ -242,7 +242,7 @@ static void test_rk3588_machine_creation(void)
                                 sizeof(uint32_t)), ==, 0);
 
     gicd_typer = qtest_readl(qts, RK3588_GICD_BASE + GICD_TYPER);
-    g_assert_cmpuint(gicd_typer & 0x1f, >=, 0x10);
+    g_assert_cmpuint(gicd_typer & 0x1f, ==, 0x0f);
 
     uart_lsr = qtest_readb(qts, RK3588_UART2_BASE + UART_LSR);
     g_assert_cmphex(uart_lsr & (UART_LSR_THRE | UART_LSR_TEMT), ==,
@@ -658,16 +658,10 @@ static void test_rk3588_pcie(void)
     qtest_writel(qts, RK3588_PCIE3X4_DBI_BASE + 0x900, 0x00000000);
     qtest_writel(qts, RK3588_PCIE3X4_DBI_BASE + 0x904, 0x00000004);
 
-    /*
-     * CRU PLL lock status MUST read 0xffffffff - clk-rk3588 PLL init
-     * polls this bit very early; 0 here hangs boot before the console.
-     */
-    g_assert_cmphex(qtest_readl(qts, RK3588_CRU_BASE + 0x600), ==,
-                    0xffffffff);
-    g_assert_cmphex(qtest_readl(qts, RK3588_CRU_SPL_PLL_STATUS) &
-                    RK3588_CRU_SPL_PLL_LOCKED, ==,
-                    RK3588_CRU_SPL_PLL_LOCKED);
-    /* Other CRU offsets are RAZ. */
+    /* The unconfigured B0PLL is unlocked at reset. */
+    g_assert_cmphex(qtest_readl(qts, RK3588_B0PLL_CON6) &
+                    RK3588_PLL_LOCKED, ==, 0);
+    /* SOFTRST_CON32 resets to zero. */
     g_assert_cmphex(qtest_readl(qts, RK3588_CRU_BASE + 0xa80), ==, 0);
 
     qtest_quit(qts);

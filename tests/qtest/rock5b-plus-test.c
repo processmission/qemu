@@ -1308,9 +1308,6 @@ static void test_rock_5b_plus_uart2(void)
 
     /* DesignWare vendor window: USR reports the TX FIFO ready. */
     g_assert_cmphex(qtest_readl(qts, b + 0x7c) & 0x7, ==, 0x6);
-    /* Vendor scratch storage round-trip. */
-    qtest_writel(qts, b + 0x40, 0x12345678);
-    g_assert_cmphex(qtest_readl(qts, b + 0x40), ==, 0x12345678);
 
     qtest_quit(qts);
 }

@@ -29,7 +29,6 @@
 #include "system/system.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/bsa.h"
-#include "hw/arm/linux-boot-if.h"
 #define RK3588_BROM_BOOTSOURCE_EMMC 2
 #define RK3588_BROM_BOOTSOURCE_SPINOR 3
 #define RK3588_BROM_BOOTSOURCE_SD 5
@@ -83,20 +82,14 @@ typedef struct RK3588BoardConfig {
 #include "hw/misc/rk3588_rng.h"
 #include "hw/misc/rk3588_tsadc.h"
 #include "hw/misc/rk3588_rknpu.h"
-#include "hw/misc/rockchip_syscon.h"
 #include "hw/misc/rk3588_atf_ddr.h"
-#include "hw/misc/rk3588_ddr.h"
-#include "hw/misc/rk3588_firmware_mmio.h"
-#include "hw/misc/rk3588_grf.h"
 #include "hw/misc/rk3588_scmi.h"
 #include "hw/net/dwmac4.h"
 #include "hw/nvram/rk3588_secure_otp.h"
 #include "hw/pci-host/designware.h"
-#include "hw/sd/dw_mmc.h"
-#include "hw/sd/rockchip_dwcmshc.h"
 #include "hw/sd/sd.h"
-#include "hw/sd/sdhci.h"
 #include "hw/i2c/rk3x_i2c.h"
+#include "hw/i2c/i2c.h"
 #include "hw/rtc/hym8563.h"
 #include "hw/ssi/rk806.h"
 #include "hw/ssi/rockchip_sfc.h"
@@ -104,22 +97,16 @@ typedef struct RK3588BoardConfig {
 #include "hw/misc/rk3588_pl330.h"
 #include "hw/ssi/rockchip_sfc.h"
 #include "hw/timer/rockchip_stimer.h"
-#include "hw/usb/rk3588_dwc3_udc.h"
 #include "hw/usb/rk3588_usb2_host.h"
 #include "net/net.h"
 #include "system/block-backend.h"
 #include "hw/arm/machines-qom.h"
 #include "hw/arm/rk3588.h"
-#include "hw/char/dw-apb-uart-vendor.h"
-#include "hw/char/serial-mm.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
-#include "hw/core/or-irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/intc/arm_gicv3_common.h"
-#include "hw/intc/arm_gicv3_its_common.h"
-#include "hw/misc/rk3588_cru.h"
 #include "hw/pci-host/rockchip_pcie.h"
 #include "qobject/qlist.h"
 #include "target/arm/cpu.h"
@@ -138,7 +125,6 @@ static inline RK3588MachineState *evb_machine(const void *obj)
 }
 
 #define RK3588_MAX_CPUS 8
-#define RK3588_NUM_SPI_IRQS 512
 #define RK3588_GTIMER_HZ 24000000
 #define RK3588_UART_BAUDBASE 1500000
 #define RK3588_DEFAULT_RAM_BASE 0x00200000ULL
@@ -228,13 +214,6 @@ static inline RK3588MachineState *evb_machine(const void *obj)
 #define RK3588_UBOOT_ENTRY_BRANCH 0x1400000a
 #define RK3588_SPL_ATF_CALL_ADDR 0x00002a98ULL
 #define RK3588_SECURE_OTP_BASE 0xfe3a0000ULL
-#define RK3588_DDR_LEGACY_BASE 0xf7000000ULL
-#define RK3588_DDR_LEGACY_PHY_BASE 0xfd800000ULL
-#define RK3588_DDR_LEGACY_PHY_AUX_BASE 0xfe000000ULL
-#define RK3588_DDR_GLOBAL_BASE 0xfd000000ULL
-#define RK3588_DDR_CHANNEL_BASE 0xfd100000ULL
-#define RK3588_DDRPHY_BASE 0xfd8d8000ULL
-#define RK3588_DDR_PHY_GATE_BASE 0xfe0c0000ULL
 #define RK3588_PMUSRAM_SKIP_ADDR 0xff101764ULL
 #define RK3588_BL31_BASE 0x00060000ULL
 #define RK3588_BL31_LIMIT 0x00090000ULL
@@ -261,10 +240,6 @@ static inline RK3588MachineState *evb_machine(const void *obj)
 #define RK3588_AARCH64_RET 0xd65f03c0
 #define RK3588_FIRMWARE_PATCH_INTERVAL_NS SCALE_US
 #define RK3588_FIT_METADATA_MAX_SIZE MiB
-#define RK3588_USB2_HOST0_EHCI_BASE 0xfc800000ULL
-#define RK3588_USB2_HOST0_OHCI_BASE 0xfc840000ULL
-#define RK3588_USB2_HOST1_EHCI_BASE 0xfc880000ULL
-#define RK3588_USB2_HOST1_OHCI_BASE 0xfc8c0000ULL
 
 #define FDT_GIC_SPI 0
 #define FDT_GIC_PPI 1
@@ -320,23 +295,7 @@ struct RK3588MachineState {
     RK3588SoCState soc;
     ARMCPU *cpu[RK3588_MAX_CPUS];
     DeviceState *gic;
-    DeviceState *its[2];
-    DeviceState *sdhci;
-    DeviceState *sdmmc;     /* dw_mmc - SD card controller */
-    DeviceState *sfc;       /* rockchip-sfc - SPI NOR flash controller */
-    DeviceState *scmi;      /* SCMI clock agent (shmem + SMC responder) */
-    DeviceState *pcie3x4;
-    DeviceState *pcie3x2;
-    DeviceState *pcie2x1l0;
-    DeviceState *pcie2x1l2;
-    DeviceState *cru;
-    DeviceState *rknn[3];
-    DeviceState *rknn_mmu[3];
-    DeviceState *rknn_irq_or[3];
     DeviceState *atf_ddr;
-    RK3588DDRState *ddr;
-    RK3588DWC3UDCState *dwc3_udc;
-    RK3588USB2HostState *usb2_host;
 
     MemoryRegion sram;
     MemoryRegion iram;
@@ -394,13 +353,6 @@ enum {
     RK3588_RAM,
     RK3588_FIRMWARE_SCRATCH,
     RK3588_SCMI_SHMEM,
-    RK3588_USB3OTG0,
-    RK3588_PMU0_GRF,
-    RK3588_PMU1_GRF,
-    RK3588_USB_GRF,
-    RK3588_PMU1_IOC,
-    RK3588_PMU2_IOC,
-    RK3588_BUS_IOC,
     RK3588_PCIE3X4_APB,
     RK3588_PCIE3X4_CFG,
     RK3588_PCIE3X4_DBI,
@@ -440,16 +392,10 @@ enum {
     RK3588_GPIO2,
     RK3588_GPIO3,
     RK3588_GPIO4,
-    RK3588_PWM0_3,
-    RK3588_PWM4_7,
-    RK3588_PWM8_11,
-    RK3588_PWM12_15,
     RK3588_SYS_GRF,
     RK3588_PHP_GRF,
     RK3588_CRU_MEM,
     RK3588_STIMER,
-    RK3588_FIREWALL_DDR,
-    RK3588_FIREWALL_SYSMEM,
     RK3588_CRYPTO,
     RK3588_IRAM,
     RK3588_BROM,
@@ -465,13 +411,6 @@ enum {
     RK3588_UART9,
     RK3588_TSADC_MMIO,
     RK3588_SARADC,
-    RK3588_COMBPHY0,
-    RK3588_COMBPHY1,
-    RK3588_COMBPHY2,
-    RK3588_PCIE30PHY,
-    RK3588_PIPE_PHY_GRF0,
-    RK3588_PIPE_PHY_GRF1,
-    RK3588_PIPE_PHY_GRF2,
     RK3588_SPI2,
     RK3588_I2C6,
     RK3588_DMAC1,
@@ -493,15 +432,7 @@ static const MemMapEntry rk3588_memmap[] = {
      * the kernel image so the loader does not stomp it. Backed by the
      * rk3588-scmi SysBusDevice (RAM-backed MMIO + the SCMI responder).
      */
-    [RK3588_SCMI_SHMEM] =   { 0x0010f000, 0x00000100 },
-    [RK3588_USB3OTG0] =     { 0xfc000000,
-                              RK3588_DWC3_UDC_MMIO_SIZE },
-    [RK3588_PMU0_GRF] =     { 0xfd588000, 0x00001000 },
-    [RK3588_PMU1_GRF] =     { 0xfd58a000, 0x00001000 },
-    [RK3588_USB_GRF] =      { 0xfd5ac000, 0x00001000 },
-    [RK3588_PMU1_IOC] =     { 0xfd5f0000, 0x00001000 },
-    [RK3588_PMU2_IOC] =     { 0xfd5f4000, 0x00001000 },
-    [RK3588_BUS_IOC] =      { 0xfd5f8000, 0x00001000 },
+    [RK3588_SCMI_SHMEM] =   { RK3588_SCMI_SHMEM_BASE, RK3588_SCMI_SHMEM_SIZE },
     [RK3588_PCIE3X4_APB] =  { 0xfe150000, 0x00010000 },
     [RK3588_PCIE3X4_CFG] =  { 0xf0000000, 0x00100000 },
     [RK3588_PCIE3X4_DBI] =  { 0xa40000000ULL, 0x00400000 },
@@ -541,10 +472,6 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_GPIO2] =        { 0xfec30000, 0x00000100 },
     [RK3588_GPIO3] =        { 0xfec40000, 0x00000100 },
     [RK3588_GPIO4] =        { 0xfec50000, 0x00000100 },
-    [RK3588_PWM0_3] =       { 0xfd8b0000, 0x00001000 },
-    [RK3588_PWM4_7] =       { 0xfebd0000, 0x00001000 },
-    [RK3588_PWM8_11] =      { 0xfebe0000, 0x00001000 },
-    [RK3588_PWM12_15] =     { 0xfebf0000, 0x00001000 },
     /*
      * General Register File (GRF) syscons - write-only RGMII-delay / PHY-
      * interface-select registers consumed by dwmac-rk. Dedicated RK3588 GRF
@@ -562,8 +489,6 @@ static const MemMapEntry rk3588_memmap[] = {
      */
     [RK3588_CRU_MEM] =      { 0xfd7c0000, 0x0005c000 },
     [RK3588_STIMER] =       { 0xfd8c8000, ROCKCHIP_STIMER_SIZE },
-    [RK3588_FIREWALL_DDR] = { 0xfe030000, 0x00001000 },
-    [RK3588_FIREWALL_SYSMEM] = { 0xfe038000, 0x00001000 },
     [RK3588_CRYPTO] =       { 0xfe370000,
                               ROCKCHIP_CRYPTO_V2_MMIO_SIZE },
     [RK3588_IRAM] =         { 0xff000000, RK3588_IRAM_SIZE },
@@ -580,18 +505,6 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_UART9] =        { 0xfebc0000, 0x00000100 },
     [RK3588_TSADC_MMIO] =   { 0xfec00000, RK3588_TSADC_MMIO_SIZE },
     [RK3588_SARADC] =       { 0xfec10000, 0x00010000 },
-    /*
-     * Serial PHYs: naneng-combphy0/1/2 (PCIe2/USB3/SATA), the
-     * snps-pcie3 PHY, and the pipe-phy GRF syscons the drivers regmap.
-     * RAM-backed so the vendor phy drivers probe and power on cleanly.
-     */
-    [RK3588_COMBPHY0] =     { 0xfee00000, 0x00000100 },
-    [RK3588_COMBPHY1] =     { 0xfee10000, 0x00000100 },
-    [RK3588_COMBPHY2] =     { 0xfee20000, 0x00000100 },
-    [RK3588_PCIE30PHY] =    { 0xfee80000, 0x00020000 },
-    [RK3588_PIPE_PHY_GRF0] = { 0xfd5bc000, 0x00001000 },
-    [RK3588_PIPE_PHY_GRF1] = { 0xfd5c0000, 0x00001000 },
-    [RK3588_PIPE_PHY_GRF2] = { 0xfd5c4000, 0x00001000 },
     [RK3588_SPI2] =         { 0xfeb20000, ROCKCHIP_SPI_MMIO_SIZE },
     [RK3588_I2C6] =         { 0xfec80000, 0x00001000 },
     [RK3588_DMAC1] =        { 0xfea10000, RK3588_PL330_MMIO_SIZE },
@@ -614,7 +527,6 @@ static hwaddr rk3588_ram_base(const RK3588MachineState *s)
 
 enum {
     RK3588_GIC_MAINT_PPI = 9,
-    RK3588_USB3OTG0_SPI = 220,
     RK3588_SDMMC_SPI = 203,
     RK3588_SDHCI_SPI = 205,
     RK3588_SFC_SPI = 206,
@@ -1125,13 +1037,10 @@ static void rk3588_fdt_add_gmac_node(void *fdt, unsigned int id,
     qemu_fdt_setprop_string_array(fdt, gmac, "clock-names",
                                   (char **)&clock_names,
                                   ARRAY_SIZE(clock_names));
-    /*
-     * dwmac-rk.c REQUIRES rockchip,grf (probe returns -ENODEV without it)
-     * and rk3588_ops also wants rockchip,php-grf for CON0/CLK_CON1. Both
-     * are modelled as RAZ/WI syscons - see rk3588_create_grf_devices().
-     */
     qemu_fdt_setprop_cell(fdt, gmac, "rockchip,grf", sys_grf_ph);
     qemu_fdt_setprop_cell(fdt, gmac, "rockchip,php-grf", php_grf_ph);
+    /* Rockchip vendor kernels use an underscore in the PHP GRF binding. */
+    qemu_fdt_setprop_cell(fdt, gmac, "rockchip,php_grf", php_grf_ph);
     qemu_fdt_setprop_string(fdt, gmac, "phy-mode",
                             id ? "rgmii-id" : "rgmii-rxid");
     qemu_fdt_setprop_string(fdt, gmac, "status", "okay");
@@ -1794,20 +1703,6 @@ static void rk3588_enable_psci_conduit(RK3588MachineState *s)
     }
 }
 
-static void rk3588_create_syscon(RK3588MachineState *s, const char *name,
-                                 int memidx)
-{
-    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SYSCON);
-    SysBusDevice *sbd;
-
-    qdev_prop_set_uint32(dev, "size", rk3588_memmap[memidx].size);
-    object_property_add_child(OBJECT(s), name, OBJECT(dev));
-    sbd = SYS_BUS_DEVICE(dev);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[memidx].base);
-    object_unref(OBJECT(dev));
-}
-
 static void rk3588_write_atags(RK3588MachineState *s)
 {
     const RK3588FirmwareProfile *profile = s->board->firmware_profile;
@@ -1982,23 +1877,12 @@ static void rk3588_patch_spl_atf_handoff(void)
 
 static void rk3588_prepare_nonsecure_linux_interrupts(RK3588MachineState *s)
 {
-    ARMLinuxBootIf *albif = ARM_LINUX_BOOT_IF(s->gic);
-    ARMLinuxBootIfClass *albifc = ARM_LINUX_BOOT_IF_GET_CLASS(albif);
-
-    /*
-     * The firmware shim bypasses arm_load_kernel(), so run the same GIC
-     * Linux-init hook that direct kernel boot uses.  This models secure
-     * firmware handing IRQ ownership to the NonSecure kernel before U-Boot
-     * eventually jumps to Linux.
-     */
-    if (albifc->arm_linux_init) {
-        albifc->arm_linux_init(albif, false);
-    }
+    rk3588_soc_prepare_nonsecure_interrupts(&s->soc);
     device_cold_reset(s->gic);
 
-    for (unsigned int i = 0; i < ARRAY_SIZE(s->its); i++) {
-        if (s->its[i]) {
-            device_cold_reset(s->its[i]);
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->soc.its); i++) {
+        if (s->soc.its[i]) {
+            device_cold_reset(s->soc.its[i]);
         }
     }
 }
@@ -2046,7 +1930,7 @@ static void rk3588_firmware_handoff_to_uboot(RK3588MachineState *s,
     rk3588_prepare_nonsecure_linux_interrupts(s);
     rk3588_set_uboot_cpu_state(s, cpu);
     s->firmware_handoff_done = true;
-    rk3588_usb2_host_set_active(s->usb2_host, true);
+    rk3588_usb2_host_set_active(s->soc.usb2_host, true);
     rk3588_arm_bootargs_patch(s);
 }
 
@@ -2063,7 +1947,7 @@ static void rk3588_schedule_firmware_handoff(RK3588MachineState *s,
 {
     rk3588_prepare_nonsecure_linux_interrupts(s);
     s->firmware_handoff_done = true;
-    rk3588_usb2_host_set_active(s->usb2_host, true);
+    rk3588_usb2_host_set_active(s->soc.usb2_host, true);
     rk3588_arm_bootargs_patch(s);
     async_run_on_cpu(CPU(cpu), rk3588_firmware_handoff_work,
                      RUN_ON_CPU_HOST_PTR(s));
@@ -2345,21 +2229,14 @@ static void rk3588_boot_state_reset(void *opaque)
          * -kernel boots and qtests keep the links up.
          */
         s->pcie_links_up = false;
-        if (s->pcie3x4) {
-            rockchip_pcie_host_set_link_up(s->pcie3x4, false);
-        }
-        if (s->pcie3x2) {
-            rockchip_pcie_host_set_link_up(s->pcie3x2, false);
-        }
-        if (s->pcie2x1l0) {
-            rockchip_pcie_host_set_link_up(s->pcie2x1l0, false);
-        }
-        if (s->pcie2x1l2) {
-            rockchip_pcie_host_set_link_up(s->pcie2x1l2, false);
+        for (unsigned int i = 0; i < ARRAY_SIZE(s->soc.pcie); i++) {
+            if (s->soc.pcie[i]) {
+                rockchip_pcie_host_set_link_up(s->soc.pcie[i], false);
+            }
         }
     }
 
-    rk3588_usb2_host_set_active(s->usb2_host, !s->firmware_boot);
+    rk3588_usb2_host_set_active(s->soc.usb2_host, !s->firmware_boot);
     rk3588_write_atags(s);
     rk3588_seed_iram_firmware_shims(s);
     s->firmware_patch_done = false;
@@ -2434,6 +2311,8 @@ static void rk3588_create_atf_ddr(RK3588MachineState *s)
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     object_property_add_child(OBJECT(s), "atf-ddr", OBJECT(dev));
+    object_property_set_link(OBJECT(dev), "ddr", OBJECT(s->soc.ddr),
+                             &error_abort);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map_overlap(sbd, 0, RK3588_ATF_DDR_RUNTIME_BASE, 10);
     s->atf_ddr = dev;
@@ -2476,17 +2355,6 @@ static void rk3588_create_reserved_ram(RK3588MachineState *s)
                            RK3588_RESERVED_HIGH_RAM_SIZE, &error_fatal);
     memory_region_add_subregion(sysmem, RK3588_RESERVED_HIGH_RAM_BASE,
                                 &s->reserved_high_ram);
-}
-
-static void rk3588_create_firmware_mmio(RK3588MachineState *s)
-{
-    DeviceState *dev = qdev_new(TYPE_RK3588_FIRMWARE_MMIO);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-    object_property_add_child(OBJECT(s), "firmware-mmio", OBJECT(dev));
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map_overlap(sbd, 0, RK3588_FIRMWARE_MMIO_BASE, -1000);
-    object_unref(OBJECT(dev));
 }
 
 static bool rk3588_blk_read(BlockBackend *blk, int64_t offset,
@@ -3094,28 +2962,7 @@ static void rk3588_register_firmware_reset(RK3588MachineState *s)
 }
 
 
-static void rk3588_create_its(RK3588MachineState *s)
-{
-    static const int its_memmap[] = {
-        RK3588_GIC_ITS0,
-        RK3588_GIC_ITS1,
-    };
-
-    for (unsigned int i = 0; i < ARRAY_SIZE(its_memmap); i++) {
-        g_autofree char *name = g_strdup_printf("its%u", i);
-        DeviceState *dev = qdev_new(its_class_name());
-        SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-        object_property_add_child(OBJECT(s), name, OBJECT(dev));
-        object_property_set_link(OBJECT(dev), "parent-gicv3",
-                                 OBJECT(s->gic), &error_abort);
-        sysbus_realize(sbd, &error_fatal);
-        sysbus_mmio_map(sbd, 0, rk3588_memmap[its_memmap[i]].base);
-        s->its[i] = dev;
-    }
-}
-
-static void rk3588_create_uarts(RK3588MachineState *s)
+static void rk3588_connect_serial(RK3588MachineState *s)
 {
     /*
      * Direct-boot layout: slot 0 is the UDC CDC bridge, slot 1 the UART2
@@ -3124,11 +2971,13 @@ static void rk3588_create_uarts(RK3588MachineState *s)
      */
     int next_chr = 3;
 
+    if (s->direct_ram_layout && !MACHINE(s)->kernel_filename &&
+        serial_hd(1)) {
+        qdev_prop_set_chr(DEVICE(&s->soc), "usb3otg0-chardev", serial_hd(0));
+    }
+
     for (unsigned int i = 0; i < ARRAY_SIZE(rk3588_uarts); i++) {
         const RK3588UARTInfo *u = &rk3588_uarts[i];
-        DeviceState *vendor;
-        SysBusDevice *vendor_sbd;
-        g_autofree char *name = g_strdup_printf("%s-vendor", u->name);
         int chr_index = u->chr_index;
 
         if (s->direct_ram_layout) {
@@ -3151,27 +3000,11 @@ static void rk3588_create_uarts(RK3588MachineState *s)
             chr_index = 0;
         }
 
-        /*
-         * Each UART is a Synopsys dw-apb-uart (16550-compatible).
-         * serial_mm models the standard 16550 range (8 registers,
-         * regshift 2 -> a 0x20-byte window).  The DesignWare extension
-         * registers (USR @0x7c, ...) sit above that window; cover only
-         * that range so it does not overlap serial_mm.  Ports without
-         * routed I/O pass no chardev, so they stay usable in the guest
-         * but have no external backend.
-         */
-        serial_mm_init(get_system_memory(), rk3588_memmap[u->memidx].base, 2,
-                       qdev_get_gpio_in(s->gic, u->spi),
-                       RK3588_UART_BAUDBASE,
-                       chr_index >= 0 ? serial_hd(chr_index) : NULL,
-                       DEVICE_LITTLE_ENDIAN);
+        if (chr_index >= 0) {
+            g_autofree char *prop = g_strdup_printf("%s-chardev", u->name);
 
-        vendor = qdev_new(TYPE_DW_APB_UART_VENDOR);
-        vendor_sbd = SYS_BUS_DEVICE(vendor);
-        object_property_add_child(OBJECT(s), name, OBJECT(vendor));
-        sysbus_realize(vendor_sbd, &error_fatal);
-        sysbus_mmio_map(vendor_sbd, 0, rk3588_memmap[u->memidx].base +
-                        DW_APB_UART_VENDOR_BASE);
+            qdev_prop_set_chr(DEVICE(&s->soc), prop, serial_hd(chr_index));
+        }
     }
 }
 
@@ -3179,7 +3012,7 @@ static void rk3588_attach_emmc_card(RK3588MachineState *s)
 {
     DriveInfo *di = drive_get(IF_SD, 0, 0);
     BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
-    DeviceState *sdhci = s->sdhci;
+    DeviceState *sdhci = s->soc.sdhci;
     BusState *bus = qdev_get_child_bus(sdhci, "sd-bus");
     DeviceState *card;
 
@@ -3226,229 +3059,38 @@ static void rk3588_attach_sd_card(RK3588MachineState *s, DeviceState *sdmmc)
     qdev_realize_and_unref(card, bus, &error_fatal);
 }
 
-static void rk3588_create_sdhci(RK3588MachineState *s)
+static void rk3588_configure_pcie(RK3588MachineState *s)
 {
-    SysBusDevice *sbd;
-
-    s->sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
-    object_property_add_child(OBJECT(s), "sdhci", OBJECT(s->sdhci));
-    object_property_set_uint(OBJECT(s->sdhci), "sd-spec-version", 3,
-                             &error_abort);
-    object_property_set_uint(OBJECT(s->sdhci), "capareg", 0x280737ec6481,
-                             &error_abort);
-    object_property_set_uint(OBJECT(s->sdhci), "uhs", UHS_I, &error_abort);
-    object_property_set_uint(OBJECT(s->sdhci), "vendor-area1", 0x500,
-                             &error_abort);
-    object_property_set_uint(OBJECT(s->sdhci), "vendor-area2", 0x800,
-                             &error_abort);
-    sbd = SYS_BUS_DEVICE(s->sdhci);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SDHCI].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SDHCI_SPI));
-
-    DeviceState *vendor = qdev_new(TYPE_ROCKCHIP_DWCMSHC_VENDOR);
-    SysBusDevice *vendor_sbd = SYS_BUS_DEVICE(vendor);
-
-    object_property_add_child(OBJECT(s), "sdhci-vendor", OBJECT(vendor));
-    sysbus_realize(vendor_sbd, &error_fatal);
-    sysbus_mmio_map(vendor_sbd, 0,
-                    rk3588_memmap[RK3588_SDHCI].base +
-                    ROCKCHIP_DWCMSHC_VENDOR_BASE);
-
-    rk3588_attach_emmc_card(s);
-}
-
-
-
-enum {
-    RK3588_PCIE_IRQ_ERR,
-    RK3588_PCIE_IRQ_LEGACY,
-    RK3588_PCIE_IRQ_MSG,
-    RK3588_PCIE_IRQ_PMC,
-    RK3588_PCIE_IRQ_SYS,
-};
-
-static DeviceState *rk3588_create_pcie_host(RK3588MachineState *s,
-                                             const char *name,
-                                             const char *vmstate_id,
-                                             hwaddr dbi_base,
-                                             hwaddr apb_base,
-                                             uint32_t domain,
-                                             uint8_t bus_nr,
-                                             bool link_down,
-                                             const int *spis)
-{
-    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_PCIE_HOST);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-    if (vmstate_id) {
-        dev->id = g_strdup(vmstate_id);
-    }
-    qdev_prop_set_bit(dev, "link-up", !link_down);
-    qdev_prop_set_uint32(dev, "domain", domain);
-    qdev_prop_set_uint8(dev, "bus-nr", bus_nr);
-    object_property_add_child(OBJECT(s), name, OBJECT(dev));
-    sysbus_realize(sbd, &error_fatal);
-
-    sysbus_mmio_map(sbd, 0, dbi_base);
-    sysbus_mmio_map(sbd, 1, apb_base);
-    sysbus_mmio_map(sbd, 2, dbi_base + ROCKCHIP_PCIE_DBI_CORE_SIZE);
-
-    for (unsigned int i = 0; i < 4; i++) {
-        sysbus_connect_irq(sbd, i,
-                           qdev_get_gpio_in(s->gic,
-                                           spis[RK3588_PCIE_IRQ_LEGACY]));
-    }
-    sysbus_connect_irq(sbd, ROCKCHIP_PCIE_MSG_IRQ,
-                       qdev_get_gpio_in(s->gic,
-                                       spis[RK3588_PCIE_IRQ_MSG]));
-    sysbus_connect_irq(sbd, ROCKCHIP_PCIE_ERR_IRQ,
-                       qdev_get_gpio_in(s->gic,
-                                       spis[RK3588_PCIE_IRQ_ERR]));
-    sysbus_connect_irq(sbd, ROCKCHIP_PCIE_PMC_IRQ,
-                       qdev_get_gpio_in(s->gic,
-                                       spis[RK3588_PCIE_IRQ_PMC]));
-    sysbus_connect_irq(sbd, ROCKCHIP_PCIE_SYS_IRQ,
-                       qdev_get_gpio_in(s->gic,
-                                       spis[RK3588_PCIE_IRQ_SYS]));
-
-    return dev;
-}
-
-static void rk3588_create_rknpu(RK3588MachineState *s)
-{
-    static const int pc_memmap[] = {
-        RK3588_RKNN0_PC,
-        RK3588_RKNN1_PC,
-        RK3588_RKNN2_PC,
-    };
-    static const int cna_memmap[] = {
-        RK3588_RKNN0_CNA,
-        RK3588_RKNN1_CNA,
-        RK3588_RKNN2_CNA,
-    };
-    static const int core_memmap[] = {
-        RK3588_RKNN0_CORE,
-        RK3588_RKNN1_CORE,
-        RK3588_RKNN2_CORE,
-    };
-    static const int iommu_memmap0[] = {
-        RK3588_RKNN0_MMU0,
-        RK3588_RKNN1_MMU,
-        RK3588_RKNN2_MMU,
-    };
-    static const int iommu_memmap1[] = {
-        RK3588_RKNN0_MMU1,
-        -1,
-        -1,
-    };
-    static const int irq[] = {
-        RK3588_RKNN0_SPI,
-        RK3588_RKNN1_SPI,
-        RK3588_RKNN2_SPI,
-    };
-
-    if (!s->rknpu) {
-        return;
-    }
-
-    for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn_mmu); i++) {
-        g_autofree char *name = g_strdup_printf("rknn-mmu%u", i);
-        g_autofree char *irq_name = g_strdup_printf("rknn-irq-or%u", i);
-        SysBusDevice *sbd;
-
-        s->rknn_mmu[i] = qdev_new(TYPE_ROCKCHIP_IOMMU);
-        qdev_prop_set_uint32(s->rknn_mmu[i], "num-mmu",
-                             iommu_memmap1[i] >= 0 ? 2 : 1);
-        qdev_prop_set_uint32(s->rknn_mmu[i], "core-index", i);
-        object_property_add_child(OBJECT(s), name, OBJECT(s->rknn_mmu[i]));
-        sbd = SYS_BUS_DEVICE(s->rknn_mmu[i]);
-        sysbus_realize(sbd, &error_fatal);
-        sysbus_mmio_map(sbd, 0, rk3588_memmap[iommu_memmap0[i]].base);
-        if (iommu_memmap1[i] >= 0) {
-            sysbus_mmio_map(sbd, 1, rk3588_memmap[iommu_memmap1[i]].base);
-        }
-
-        s->rknn_irq_or[i] = qdev_new(TYPE_OR_IRQ);
-        qdev_prop_set_uint16(s->rknn_irq_or[i], "num-lines", 2);
-        object_property_add_child(OBJECT(s), irq_name,
-                                  OBJECT(s->rknn_irq_or[i]));
-        qdev_realize(s->rknn_irq_or[i], NULL, &error_fatal);
-        qdev_connect_gpio_out(s->rknn_irq_or[i], 0,
-                              qdev_get_gpio_in(s->gic, irq[i]));
-        sysbus_connect_irq(sbd, 0,
-                           qdev_get_gpio_in(s->rknn_irq_or[i], 0));
-    }
-
-    for (unsigned int i = 0; i < ARRAY_SIZE(s->rknn); i++) {
-        g_autofree char *name = g_strdup_printf("rknn%u", i);
-        MemoryRegion *dma_mr = rockchip_iommu_get_memory_region(
-            ROCKCHIP_IOMMU(s->rknn_mmu[i]));
-        SysBusDevice *sbd;
-
-        s->rknn[i] = qdev_new(TYPE_RK3588_RKNPU);
-        qdev_prop_set_uint32(s->rknn[i], "core-index", i);
-        object_property_set_link(OBJECT(s->rknn[i]), "dma",
-                                 OBJECT(dma_mr), &error_fatal);
-        object_property_add_child(OBJECT(s), name, OBJECT(s->rknn[i]));
-        sbd = SYS_BUS_DEVICE(s->rknn[i]);
-        sysbus_realize(sbd, &error_fatal);
-        sysbus_mmio_map(sbd, 0, rk3588_memmap[pc_memmap[i]].base);
-        sysbus_mmio_map(sbd, 1, rk3588_memmap[cna_memmap[i]].base);
-        sysbus_mmio_map(sbd, 2, rk3588_memmap[core_memmap[i]].base);
-        sysbus_mmio_map(sbd, 3,
-                        rk3588_memmap[pc_memmap[i]].base +
-                        ROCKCHIP_RKNN_DPU_OFFSET);
-        sysbus_mmio_map(sbd, 4,
-                        rk3588_memmap[pc_memmap[i]].base +
-                        ROCKCHIP_RKNN_GLOBAL_OFFSET);
-        sysbus_mmio_map(sbd, 5,
-                        rk3588_memmap[pc_memmap[i]].base +
-                        ROCKCHIP_RKNN_PPU_OFFSET);
-        sysbus_mmio_map(sbd, 6,
-                        rk3588_memmap[pc_memmap[i]].base +
-                        ROCKCHIP_RKNN_PPU_RDMA_OFFSET);
-        sysbus_connect_irq(sbd, 0,
-                           qdev_get_gpio_in(s->rknn_irq_or[i], 1));
-        qdev_connect_gpio_out_named(
-            s->cru, "rknpu-reset", i,
-            qdev_get_gpio_in_named(s->rknn[i], "reset", 0));
-    }
-}
-
-static void rk3588_create_pcie2x1(RK3588MachineState *s)
-{
-    static const int pcie2x1l0_spis[] = {
-        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE2X1L0_ERR_SPI,
-        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE2X1L0_LEGACY_SPI,
-        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE2X1L0_MSG_SPI,
-        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE2X1L0_PMC_SPI,
-        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE2X1L0_SYS_SPI,
-    };
-    static const int pcie2x1l2_spis[] = {
-        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE2X1L2_ERR_SPI,
-        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE2X1L2_LEGACY_SPI,
-        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE2X1L2_MSG_SPI,
-        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE2X1L2_PMC_SPI,
-        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE2X1L2_SYS_SPI,
-    };
-
     bool firmware_path = !MACHINE(s)->kernel_filename && !qtest_enabled();
 
-    if (s->board->pcie2x1_mask & BIT(0)) {
-        s->pcie2x1l0 = rk3588_create_pcie_host(
-            s, "pcie2x1l0", "pcie2x1l0",
-            rk3588_memmap[RK3588_PCIE2X1L0_DBI].base,
-            rk3588_memmap[RK3588_PCIE2X1L0_APB].base,
-            2, 0x20, firmware_path, pcie2x1l0_spis);
-    }
-    if (s->board->pcie2x1_mask & BIT(2)) {
-        s->pcie2x1l2 = rk3588_create_pcie_host(
-            s, "pcie2x1l2", "pcie2x1l2",
-            rk3588_memmap[RK3588_PCIE2X1L2_DBI].base,
-            rk3588_memmap[RK3588_PCIE2X1L2_APB].base,
-            4, 0x40, firmware_path, pcie2x1l2_spis);
-    }
+    s->soc.pcie_config[RK3588_PCIE3X4] = (RK3588PCIEConfig) {
+        .enabled = true,
+        .link_up = !s->board->pcie3x4_link_down && !firmware_path,
+        .domain = 0,
+        .bus_nr = 0,
+        .id = "pcie3x4",
+    };
+    s->soc.pcie_config[RK3588_PCIE3X2] = (RK3588PCIEConfig) {
+        .enabled = s->board->pcie3x2_num_lanes != 0,
+        .link_up = !s->board->pcie3x2_link_down && !firmware_path,
+        .domain = 1,
+        .bus_nr = 0x10,
+        .id = "pcie3x2",
+    };
+    s->soc.pcie_config[RK3588_PCIE2X1L0] = (RK3588PCIEConfig) {
+        .enabled = !!(s->board->pcie2x1_mask & BIT(0)),
+        .link_up = !firmware_path,
+        .domain = 2,
+        .bus_nr = 0x20,
+        .id = "pcie2x1l0",
+    };
+    s->soc.pcie_config[RK3588_PCIE2X1L2] = (RK3588PCIEConfig) {
+        .enabled = !!(s->board->pcie2x1_mask & BIT(2)),
+        .link_up = !firmware_path,
+        .domain = 4,
+        .bus_nr = 0x40,
+        .id = "pcie2x1l2",
+    };
 }
 
 /*
@@ -3463,164 +3105,15 @@ static void rk3588_pcie_set_links_up(RK3588MachineState *s)
     if (s->pcie_links_up) {
         return;
     }
-    if (s->pcie3x4) {
-        rockchip_pcie_host_set_link_up(s->pcie3x4, true);
-    }
-    if (s->pcie3x2) {
-        rockchip_pcie_host_set_link_up(s->pcie3x2, true);
-    }
-    if (s->pcie2x1l0) {
-        rockchip_pcie_host_set_link_up(s->pcie2x1l0, true);
-    }
-    if (s->pcie2x1l2) {
-        rockchip_pcie_host_set_link_up(s->pcie2x1l2, true);
+    for (unsigned int i = 0; i < ARRAY_SIZE(s->soc.pcie); i++) {
+        if (s->soc.pcie[i]) {
+            rockchip_pcie_host_set_link_up(s->soc.pcie[i], true);
+        }
     }
     s->pcie_links_up = true;
 }
 
-static void rk3588_create_pcie(RK3588MachineState *s)
-{
-    static const int pcie3x4_spis[] = {
-        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE3X4_ERR_SPI,
-        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE3X4_LEGACY_SPI,
-        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE3X4_MSG_SPI,
-        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE3X4_PMC_SPI,
-        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE3X4_SYS_SPI,
-    };
-    static const int pcie3x2_spis[] = {
-        [RK3588_PCIE_IRQ_ERR] = RK3588_PCIE3X2_ERR_SPI,
-        [RK3588_PCIE_IRQ_LEGACY] = RK3588_PCIE3X2_LEGACY_SPI,
-        [RK3588_PCIE_IRQ_MSG] = RK3588_PCIE3X2_MSG_SPI,
-        [RK3588_PCIE_IRQ_PMC] = RK3588_PCIE3X2_PMC_SPI,
-        [RK3588_PCIE_IRQ_SYS] = RK3588_PCIE3X2_SYS_SPI,
-    };
-
-    /*
-     * During firmware boot the links start down so U-Boot skips the
-     * hosts without touching the unprogrammed config windows; the kernel
-     * sees the links up (see rk3588_pcie_set_links_up).  qtests never
-     * run the firmware path, so they keep the default link-up state.
-     */
-    bool firmware_path = !MACHINE(s)->kernel_filename && !qtest_enabled();
-
-    s->pcie3x4 = rk3588_create_pcie_host(
-        s, "pcie3x4", "pcie3x4",
-        rk3588_memmap[RK3588_PCIE3X4_DBI].base,
-        rk3588_memmap[RK3588_PCIE3X4_APB].base,
-        0, 0, s->board->pcie3x4_link_down || firmware_path, pcie3x4_spis);
-
-    if (s->board->pcie3x2_num_lanes) {
-        s->pcie3x2 = rk3588_create_pcie_host(
-            s, "pcie3x2", "pcie3x2",
-            rk3588_memmap[RK3588_PCIE3X2_DBI].base,
-            rk3588_memmap[RK3588_PCIE3X2_APB].base,
-            1, 0x10, s->board->pcie3x2_link_down || firmware_path,
-            pcie3x2_spis);
-    }
-}
-
-static void rk3588_create_cru(RK3588MachineState *s)
-{
-    SysBusDevice *sbd;
-
-    s->cru = qdev_new(TYPE_RK3588_CRU);
-    object_property_add_child(OBJECT(s), "cru", OBJECT(s->cru));
-    sbd = SYS_BUS_DEVICE(s->cru);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_CRU_MEM].base);
-}
-
-
-static void rk3588_create_ddr(RK3588MachineState *s)
-{
-    DeviceState *dev = qdev_new(TYPE_RK3588_DDR);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-    object_property_add_child(OBJECT(s), "ddr", OBJECT(dev));
-    sysbus_realize(sbd, &error_fatal);
-    for (unsigned int i = 0; i < RK3588_DDR_LEGACY_CHANNEL_COUNT; i++) {
-        hwaddr base = RK3588_DDR_LEGACY_BASE +
-                      i * RK3588_DDR_LEGACY_CHANNEL_STRIDE;
-
-        for (unsigned int j = 0;
-             j < RK3588_DDR_LEGACY_CTRL_WINDOWS_PER_CHANNEL; j++) {
-            sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY(i, j),
-                            base + j * RK3588_DDR_LEGACY_WINDOW_STRIDE);
-        }
-        sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_GATE(i),
-                        RK3588_DDR_PHY_GATE_BASE +
-                        i * RK3588_DDR_LEGACY_WINDOW_STRIDE);
-    }
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY,
-                    RK3588_DDR_LEGACY_PHY_BASE);
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_LEGACY_PHY_AUX,
-                    RK3588_DDR_LEGACY_PHY_AUX_BASE);
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_GLOBAL,
-                    RK3588_DDR_GLOBAL_BASE);
-    for (unsigned int i = 0; i < RK3588_DDR_CHANNEL_COUNT; i++) {
-        sysbus_mmio_map(sbd, RK3588_DDR_MMIO_CHANNEL(i),
-                        RK3588_DDR_CHANNEL_BASE +
-                        i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
-    }
-    sysbus_mmio_map(sbd, RK3588_DDR_MMIO_DDRPHY, RK3588_DDRPHY_BASE);
-    s->ddr = RK3588_DDR(dev);
-    object_unref(OBJECT(dev));
-}
-
-static void rk3588_create_usb2_host(RK3588MachineState *s)
-{
-    static const hwaddr bases[RK3588_USB2_HOST_MMIO_COUNT] = {
-        [RK3588_USB2_HOST_EHCI0] = RK3588_USB2_HOST0_EHCI_BASE,
-        [RK3588_USB2_HOST_OHCI0] = RK3588_USB2_HOST0_OHCI_BASE,
-        [RK3588_USB2_HOST_EHCI1] = RK3588_USB2_HOST1_EHCI_BASE,
-        [RK3588_USB2_HOST_OHCI1] = RK3588_USB2_HOST1_OHCI_BASE,
-    };
-    MachineState *machine = MACHINE(s);
-    DeviceState *dev = qdev_new(TYPE_RK3588_USB2_HOST);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-    object_property_add_child(OBJECT(s), "usb2-host", OBJECT(dev));
-    sysbus_realize(sbd, &error_fatal);
-    for (unsigned int i = 0; i < ARRAY_SIZE(bases); i++) {
-        sysbus_mmio_map(sbd, i, bases[i]);
-    }
-
-    s->usb2_host = RK3588_USB2_HOST(dev);
-    rk3588_usb2_host_set_active(s->usb2_host,
-                                qtest_enabled() || machine->kernel_filename);
-    object_unref(OBJECT(dev));
-}
-
-static void rk3588_create_usb3_device(RK3588MachineState *s)
-{
-    DeviceState *dev = qdev_new(TYPE_RK3588_DWC3_UDC);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-
-    if (s->direct_ram_layout && !MACHINE(s)->kernel_filename &&
-        serial_hd(1)) {
-        qdev_prop_set_chr(dev, "chardev", serial_hd(0));
-    }
-    object_property_add_child(OBJECT(s), "usb3otg0", OBJECT(dev));
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_USB3OTG0].base);
-    sysbus_connect_irq(sbd, 0,
-                       qdev_get_gpio_in(s->gic, RK3588_USB3OTG0_SPI));
-
-    s->dwc3_udc = RK3588_DWC3_UDC(dev);
-    object_unref(OBJECT(dev));
-}
-
-/*
- * Per-machine SMC handler entry. Registered with
- * arm_register_psci_smc_handler() so accelerator SMC exception paths can run it
- * before the generic PSCI switch or architectural SMC exception entry.
- * Consumes only the SCMI SMC (function-id 0x82000010); all other SMCs fall
- * through to standard PSCI handling (CPU_ON/OFF/SYSTEM_RESET/...).
- *
- * The shmem-backed responder lives in the rk3588-scmi device realized by
- * rk3588_create_scmi().  Resolve the active machine through QOM so multiple
- * machine instances do not share file-scope device state.
- */
+/* Board firmware services and SoC SCMI dispatch. */
 static bool rk3588_smc_handler(ARMCPU *cpu)
 {
     RK3588MachineState *s = evb_machine(qdev_get_machine());
@@ -3729,134 +3222,27 @@ static bool rk3588_smc_handler(ARMCPU *cpu)
         return false;
     }
 
-    if ((uint32_t)fn != RK3588_SCMI_SMC_ID) {
-        return false;
-    }
-    if (!s->scmi) {
-        /* Responder not yet realized - return NOT_SUPPORTED. */
-        if (is_a64(env)) {
-            env->xregs[0] = (uint64_t)(int64_t)-1;
-        } else {
-            env->regs[0] = (uint32_t)(int64_t)-1;
-        }
-        return true;
-    }
-
-    rk3588_scmi_handle_smc(RK3588_SCMI(s->scmi));
-    /* a0 = 0 means "response is in shmem, fetch it". */
-    if (is_a64(env)) {
-        env->xregs[0] = 0;
-    } else {
-        env->regs[0] = 0;
-    }
-    return true;
-}
-
-static void rk3588_create_scmi(RK3588MachineState *s)
-{
-    DeviceState *dev = qdev_new(TYPE_RK3588_SCMI);
-    SysBusDevice *sbd;
-
-    object_property_add_child(OBJECT(s), "scmi", OBJECT(dev));
-    sbd = SYS_BUS_DEVICE(dev);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SCMI_SHMEM].base);
-
-    s->scmi = dev;
-    arm_register_psci_smc_handler(rk3588_smc_handler);
-}
-
-static void rk3588_create_sdmmc(RK3588MachineState *s)
-{
-    DeviceState *dev = qdev_new(TYPE_DW_MMC);
-    SysBusDevice *sbd;
-
-    object_property_add_child(OBJECT(s), "sdmmc", OBJECT(dev));
-    sbd = SYS_BUS_DEVICE(dev);
-    sysbus_realize(sbd, &error_fatal);
-    /*
-     * sysbus mmio[0] is the core bank through the legacy FIFO data port at
-     * +0x200; mmio[1] is the remaining RAZ/WI tail (RK vendor + the rest of
-     * the window). Both are placed at the same base - they're contiguous
-     * sub-windows of the 0x4000 controller MMIO.
-     */
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SDMMC].base);
-    sysbus_mmio_map(sbd, 1, rk3588_memmap[RK3588_SDMMC].base + 0x204);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SDMMC_SPI));
-
-    rk3588_attach_sd_card(s, dev);
+    return rk3588_soc_handle_scmi_smc(&s->soc, cpu);
 }
 
 /*
- * Rockchip SFC with the board SPI NOR flash.  The flash is the 16 MiB
+ * Attach the board SPI NOR flash.  The flash is the 16 MiB
  * XTX XT25F128 part used by the Radxa ROCK 5B+ (jedec,spi-nor class); a
  * backing store can be supplied with -drive if=mtd,index=0,file=...,format=raw.
  */
-static void rk3588_create_sfc(RK3588MachineState *s)
+static void rk3588_attach_sfc_flash(RK3588MachineState *s)
 {
-    DeviceState *dev = qdev_new(TYPE_ROCKCHIP_SFC);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-    DeviceState *flash;
     DriveInfo *di = drive_get(IF_MTD, 0, 0);
-    qemu_irq flash_cs;
+    DeviceState *flash = qdev_new("xt25f128");
 
-    object_property_add_child(OBJECT(s), "sfc", OBJECT(dev));
-    object_property_set_link(OBJECT(dev), "dma-memory",
-                             OBJECT(get_system_memory()), &error_abort);
-    sysbus_realize(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, rk3588_memmap[RK3588_SFC].base);
-    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(s->gic, RK3588_SFC_SPI));
-
-    flash = qdev_new("xt25f128");
     if (di) {
         qdev_prop_set_drive(flash, "drive", blk_by_legacy_dinfo(di));
     }
-    qdev_realize_and_unref(flash, qdev_get_child_bus(dev, "spi"), &error_fatal);
-    flash_cs = qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0);
-    qdev_connect_gpio_out_named(dev, "cs", 0, flash_cs);
-
-    s->sfc = dev;
-    object_unref(OBJECT(dev));
+    qdev_realize_and_unref(flash, qdev_get_child_bus(s->soc.sfc, "spi"),
+                           &error_fatal);
+    qdev_connect_gpio_out_named(s->soc.sfc, "cs", 0,
+                                qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0));
 }
-
-static void rk3588_create_syscon_devices(RK3588MachineState *s)
-{
-    DeviceState *grf = qdev_new(TYPE_RK3588_GRF);
-    SysBusDevice *grf_sbd = SYS_BUS_DEVICE(grf);
-
-    qdev_prop_set_uint64(grf, "ram-size", MACHINE(s)->ram_size);
-    qdev_prop_set_uint32(grf, "dram-type", s->board->dram_type);
-    object_property_add_child(OBJECT(s), "pmu-grf", OBJECT(grf));
-    sysbus_realize(grf_sbd, &error_fatal);
-    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_PMU0,
-                    rk3588_memmap[RK3588_PMU0_GRF].base);
-    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_PMU1,
-                    rk3588_memmap[RK3588_PMU1_GRF].base);
-    sysbus_mmio_map(grf_sbd, RK3588_GRF_MMIO_SYS,
-                    rk3588_memmap[RK3588_SYS_GRF].base);
-    object_unref(OBJECT(grf));
-
-    rk3588_create_syscon(s, "php-grf", RK3588_PHP_GRF);
-    rk3588_create_syscon(s, "usb-grf", RK3588_USB_GRF);
-    rk3588_create_syscon(s, "pmu1-ioc", RK3588_PMU1_IOC);
-    rk3588_create_syscon(s, "pmu2-ioc", RK3588_PMU2_IOC);
-    rk3588_create_syscon(s, "bus-ioc", RK3588_BUS_IOC);
-    rk3588_create_syscon(s, "pwm0-3", RK3588_PWM0_3);
-    rk3588_create_syscon(s, "pwm4-7", RK3588_PWM4_7);
-    rk3588_create_syscon(s, "pwm8-11", RK3588_PWM8_11);
-    rk3588_create_syscon(s, "pwm12-15", RK3588_PWM12_15);
-    rk3588_create_syscon(s, "firewall-ddr", RK3588_FIREWALL_DDR);
-    rk3588_create_syscon(s, "firewall-sysmem", RK3588_FIREWALL_SYSMEM);
-
-    rk3588_create_syscon(s, "combphy0", RK3588_COMBPHY0);
-    rk3588_create_syscon(s, "combphy1", RK3588_COMBPHY1);
-    rk3588_create_syscon(s, "combphy2", RK3588_COMBPHY2);
-    rk3588_create_syscon(s, "pcie30phy", RK3588_PCIE30PHY);
-    rk3588_create_syscon(s, "pipe-phy-grf0", RK3588_PIPE_PHY_GRF0);
-    rk3588_create_syscon(s, "pipe-phy-grf1", RK3588_PIPE_PHY_GRF1);
-    rk3588_create_syscon(s, "pipe-phy-grf2", RK3588_PIPE_PHY_GRF2);
-}
-
 
 /*
  * TSADC thermal sensor: fixed room-temperature ADC codes so the Linux
@@ -3865,12 +3251,42 @@ static void rk3588_create_syscon_devices(RK3588MachineState *s)
  */
 
 /*
- * SPI2 with the RK806 PMIC on chip-select 0.  The PMIC supplies the
+ * RK806 PMIC on SPI2 chip-select 0.  The PMIC supplies the
  * board regulators (vcc_3v3_s3 for the SD controller, etc.); the model
  * exposes them enabled at their nominal voltages so the MMC and PCIe
  * driver probe chains do not defer forever.
  */
+static void rk3588_attach_pmic(RK3588MachineState *s)
+{
+    BusState *bus = qdev_get_child_bus(s->soc.spi[2], "spi");
+    DeviceState *pmic;
 
+    if (!bus) {
+        error_report("%s: SPI2 controller has no spi bus",
+                     s->board->machine_name);
+        exit(EXIT_FAILURE);
+    }
+
+    pmic = qdev_new(TYPE_RK806);
+    qdev_realize_and_unref(pmic, bus, &error_fatal);
+}
+
+static void rk3588_attach_rtc(RK3588MachineState *s)
+{
+    BusState *bus = qdev_get_child_bus(s->soc.i2c6, "i2c-bus");
+    DeviceState *rtc;
+
+    if (!bus) {
+        error_report("%s: I2C6 controller has no i2c-bus",
+                     s->board->machine_name);
+        exit(EXIT_FAILURE);
+    }
+
+    rtc = DEVICE(i2c_slave_create_simple(I2C_BUS(bus), TYPE_HYM8563, 0x51));
+    /* The RTC's active-low interrupt is wired to GPIO0 pin 8. */
+    qdev_connect_gpio_out_named(rtc, "irq", 0,
+                                qdev_get_gpio_in(s->soc.gpio[0], 8));
+}
 
 /* TRNGv1: seeds the kernel CRNG so getrandom() does not block. */
 
@@ -3918,8 +3334,11 @@ static void rk3588_init(MachineState *machine)
     }
 
     object_initialize_child(OBJECT(s), "soc", &s->soc, TYPE_RK3588_SOC);
-    qdev_prop_set_bit(DEVICE(&s->soc), "legacy-firmware", true);
     qdev_prop_set_uint32(DEVICE(&s->soc), "num-cpus", machine->smp.cpus);
+    qdev_prop_set_uint64(DEVICE(&s->soc), "ram-size", machine->ram_size);
+    qdev_prop_set_bit(DEVICE(&s->soc), "rknpu", s->rknpu);
+    qdev_prop_set_bit(DEVICE(&s->soc), "secure-otp-unfused", true);
+    qdev_prop_set_uint32(DEVICE(&s->soc), "dram-type", board->dram_type);
     qdev_prop_set_uint32(DEVICE(&s->soc), "gmac-mask",
                          board->gmac_mask);
     if (board->firmware_profile) {
@@ -3930,7 +3349,11 @@ static void rk3588_init(MachineState *machine)
     }
     object_property_set_link(OBJECT(&s->soc), "memory",
                              OBJECT(get_system_memory()), &error_abort);
+    rk3588_connect_serial(s);
+    rk3588_configure_pcie(s);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
+    rk3588_attach_rtc(s);
+    rk3588_attach_pmic(s);
     for (unsigned int i = 0; i < RK3588_MAX_CPUS; i++) {
         s->cpu[i] = &s->soc.cpu[i];
     }
@@ -3938,7 +3361,6 @@ static void rk3588_init(MachineState *machine)
 
     rk3588_create_low_memory(s);
     rk3588_create_atf_ddr(s);
-    rk3588_create_firmware_mmio(s);
     memory_region_init_alias(&s->ram_low, OBJECT(s), "rk3588.ram-low",
                              machine->ram, 0, low_ram_size);
     memory_region_add_subregion(sysmem, ram_base, &s->ram_low);
@@ -3951,20 +3373,12 @@ static void rk3588_init(MachineState *machine)
     }
     rk3588_create_reserved_ram(s);
 
-    rk3588_create_its(s);
-    rk3588_create_syscon_devices(s);
-    rk3588_create_cru(s);
-    rk3588_create_ddr(s);
-    rk3588_create_usb3_device(s);
-    rk3588_create_usb2_host(s);
-    rk3588_create_scmi(s);
-    rk3588_create_uarts(s);
-    rk3588_create_sdhci(s);
-    rk3588_create_sdmmc(s);
-    rk3588_create_sfc(s);
-    rk3588_create_rknpu(s);
-    rk3588_create_pcie(s);
-    rk3588_create_pcie2x1(s);
+    rk3588_usb2_host_set_active(s->soc.usb2_host,
+                                qtest_enabled() || machine->kernel_filename);
+    arm_register_psci_smc_handler(rk3588_smc_handler);
+    rk3588_attach_emmc_card(s);
+    rk3588_attach_sd_card(s, s->soc.sdmmc);
+    rk3588_attach_sfc_flash(s);
 
     s->bootinfo = (struct arm_boot_info) {
         .loader_start = ram_base,
@@ -3995,12 +3409,7 @@ static void rk3588_init(MachineState *machine)
          * leave the GIC untouched for them.
          */
         if (s->direct_ram_layout) {
-            ARMLinuxBootIf *albif = ARM_LINUX_BOOT_IF(s->gic);
-            ARMLinuxBootIfClass *albifc = ARM_LINUX_BOOT_IF_GET_CLASS(albif);
-
-            if (albifc->arm_linux_init) {
-                albifc->arm_linux_init(albif, false);
-            }
+            rk3588_soc_prepare_nonsecure_interrupts(&s->soc);
         }
         arm_load_kernel(s->cpu[0], machine, &s->bootinfo);
     } else {

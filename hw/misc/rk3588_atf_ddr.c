@@ -8,8 +8,11 @@
 
 #include "qemu/osdep.h"
 #include "hw/misc/rk3588_atf_ddr.h"
+#include "hw/misc/rk3588_ddr.h"
 
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/module.h"
 
@@ -31,16 +34,16 @@
 #define RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET \
     (RK3588_ATF_DDR_CHANNEL_TABLE_ADDR - RK3588_ATF_DDR_RUNTIME_BASE)
 
+/* Register windows referenced by the emulated BL31 runtime descriptor. */
 #define RK3588_ATF_DDR_GLOBAL_BASE 0xfd000000ULL
 #define RK3588_ATF_DDR_CHANNEL_BASE 0xfd100000ULL
-#define RK3588_ATF_DDR_CHANNEL_STRIDE 0x00020000ULL
-#define RK3588_ATF_DDR_CHANNELS 8
 #define RK3588_ATF_TIMER_US_HZ 1000000
 #define RK3588_ATF_TIMER_HZ 24000000
 
 struct RK3588ATFDDRState {
     SysBusDevice parent_obj;
 
+    DeviceState *ddr;
     MemoryRegion mmio;
     uint8_t runtime[RK3588_ATF_DDR_RUNTIME_SIZE];
 };
@@ -70,11 +73,11 @@ static void rk3588_atf_ddr_seed(RK3588ATFDDRState *s)
     stq_le_p(&s->runtime[RK3588_ATF_DDR_DESCRIPTOR_OFFSET + 0x20],
              RK3588_ATF_DDR_CHANNEL_TABLE_ADDR);
 
-    for (unsigned int i = 0; i < RK3588_ATF_DDR_CHANNELS; i++) {
+    for (unsigned int i = 0; i < RK3588_DDR_CHANNEL_COUNT; i++) {
         stq_le_p(&s->runtime[
                  RK3588_ATF_DDR_CHANNEL_TABLE_OFFSET + i * sizeof(uint64_t)],
                  RK3588_ATF_DDR_CHANNEL_BASE +
-                 i * RK3588_ATF_DDR_CHANNEL_STRIDE);
+                 i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
     }
 }
 
@@ -175,12 +178,40 @@ static void rk3588_atf_ddr_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->mmio);
 }
 
+static void rk3588_atf_ddr_realize(DeviceState *dev, Error **errp)
+{
+    RK3588ATFDDRState *s = RK3588_ATF_DDR(dev);
+    SysBusDevice *ddr;
+
+    if (!s->ddr) {
+        error_setg(errp, "rk3588-atf-ddr: DDR device link is required");
+        return;
+    }
+    ddr = SYS_BUS_DEVICE(s->ddr);
+
+    /* These firmware windows share the SoC DDR model's handshake state. */
+    sysbus_mmio_map(ddr, RK3588_DDR_MMIO_GLOBAL,
+                    RK3588_ATF_DDR_GLOBAL_BASE);
+    for (unsigned int i = 0; i < RK3588_DDR_CHANNEL_COUNT; i++) {
+        sysbus_mmio_map(ddr, RK3588_DDR_MMIO_CHANNEL(i),
+                        RK3588_ATF_DDR_CHANNEL_BASE +
+                        i * RK3588_DDR_CHANNEL_MMIO_STRIDE);
+    }
+}
+
+static const Property rk3588_atf_ddr_properties[] = {
+    DEFINE_PROP_LINK("ddr", RK3588ATFDDRState, ddr, TYPE_RK3588_DDR,
+                     DeviceState *),
+};
+
 static void rk3588_atf_ddr_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     ResettableClass *rc = RESETTABLE_CLASS(oc);
 
+    dc->realize = rk3588_atf_ddr_realize;
     dc->vmsd = &vmstate_rk3588_atf_ddr;
+    device_class_set_props(dc, rk3588_atf_ddr_properties);
     rc->phases.hold = rk3588_atf_ddr_reset_hold;
 }
 

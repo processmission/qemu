@@ -296,9 +296,7 @@ config RK3588
     select DW_APB_UART_VENDOR
     select PCI_EXPRESS_DESIGNWARE
     select RK3588_ATF_DDR
-    select RK3588_CRU
     select RK3588_DDR
-    select RK3588_FIRMWARE_MMIO
     select RK3588_GRF
     select RK3588_PWM
     select ROCKCHIP_DWCMSHC
@@ -312,7 +310,6 @@ config RK3588
     select ROCKCHIP_GPIO
     select ROCKCHIP_IOMMU
     select RK3588_RKNPU
-    select RK3588_DWC3_UDC
     select SDHCI
     select SERIAL_MM
     select RK3588_USB2_HOST
