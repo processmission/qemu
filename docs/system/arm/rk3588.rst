@@ -69,6 +69,8 @@ The ``rock-5b`` machine supports the following devices:
 * GPIO0 through GPIO4 using the Rockchip GPIO v2 bank model
 * SAR ADC (v2 block), eight channels of 12-bit results with a per-channel
   input voltage property
+* I2C0 through I2C8 using the reusable ``rk3x-i2c`` controller, with
+  stable child buses named ``i2c0-bus`` through ``i2c8-bus``
 * Clock and reset unit (CRU); clock, soft-reset and vendor reset-status
   registers are modeled as storage registers with the Rockchip high-word
   write mask, including the reset read-back used by real firmware
@@ -239,50 +241,50 @@ so a guest cannot yet switch a pin between GPIO and a peripheral function.
      - 317
      - ``RK8602`` @0x42 and ``RK8603`` @0x43, the CPU supply regulators
        (``I2C0_M2``); 27 (``I2C0_SDA_M1``), 28 (``I2C0_SCL_M1``)
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c0-bus``)
    * - I2C1
      - ``0xfea90000``
      - 318
      - ``RK8602`` @0x42, the NPU supply regulator (``I2C1_M2``); 8
        (``I2C1_SCL_M0``), 10 (``I2C1_SDA_M0``)
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c1-bus``)
    * - I2C2
      - ``0xfeaa0000``
      - 319
      - not routed on the board
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c2-bus``)
    * - I2C3
      - ``0xfeab0000``
      - 320
      - 13 (``I2C3_SCL_M1``), 15 (``I2C3_SDA_M1``)
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c3-bus``)
    * - I2C4
      - ``0xfeac0000``
      - 321
      - ``FUSB302`` @0x22, the USB-C PD controller (``I2C4_M1``); also on the
        M.2 E-key
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c4-bus``)
    * - I2C5
      - ``0xfead0000``
      - 322
      - not routed on the board
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c5-bus``)
    * - I2C6
      - ``0xfec80000``
      - 323
      - ``HYM8563`` RTC @0x51 (IRQ on ``GPIO0_B0``); also the MIPI DSI touch
        bus
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c6-bus``)
    * - I2C7
      - ``0xfec90000``
      - 324
      - ``ES8316`` audio codec @0x11; 3 (``I2C7_SDA_M3``), 5 (``I2C7_SCL_M3``)
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c7-bus``)
    * - I2C8
      - ``0xfeca0000``
      - 325
      - 7 (``I2C8_SDA_M4``), 32 (``I2C8_SCL_M4``)
-     - unimplemented
+     - ``rk3x-i2c`` (``i2c8-bus``)
 
 I2C0 and I2C1 put the same bus on two different pin groups: the regulators
 use ``_M2`` on the board while the header carries ``_M1`` and ``_M0``, so a
@@ -290,6 +292,38 @@ device plugged into the header shares the bus, and therefore the address
 space, with a supply regulator.  That is a bus-level conflict, not a mux one:
 the two pin groups cannot be active at the same time either, because a
 controller drives one group at a time.
+
+Each I2C controller is a separate ``rk3x-i2c`` DeviceState with one child
+``I2CBus``.  The child bus names are stable, so a device model can be attached
+by name, for example::
+
+  -device tmp105,bus=i2c0-bus,address=0x48
+  -device at24c-eeprom,bus=i2c1-bus,address=0x50,rom-size=256,address-size=1
+
+The reusable model implements 7-bit master transfers, START and STOP
+interrupts, register-address reads that continue across the write-to-read
+direction change, repeated START, 32-byte TX and RX FIFO segments, NACK
+reporting and recovery, and write-one-to-clear pending interrupts.  It follows
+the TRM reset values and access attributes for the implemented registers.
+``CON.ACTACK`` selects whether a NAK terminates a transfer, while the
+``CON1`` NAK and TX-end auto-stop conditions are gated by ``CON1.AUTO_STOP``.
+
+The controller model is independent of the physical I2C pins.  The IOMUX
+registers remain in the PMU and bus IOC blocks, which are not modeled; the
+logical ``I2CBus`` remains available to device models even though a guest
+cannot inspect the selected SCL/SDA pads.  The model does not yet implement
+10-bit addresses, per-byte BTF/BRF interrupts, the ``ST`` and ``DBGCTRL``
+registers, or cycle-accurate SCL timing.
+
+Linux 6.6's unmodified ``i2c-rk3x`` driver has been booted against all nine
+controllers.  It probes ``/dev/i2c-0`` through ``/dev/i2c-8`` and completed
+TMP105 register accesses, controller-isolation checks, unconnected-address
+NAKs followed by recovery, and 33-byte AT24C transfers across both 32-byte
+FIFO boundaries.
+
+The table describes the physical board wiring.  The default ``rock-5b``
+machine creates the controller buses but does not automatically instantiate
+the regulators or other devices connected to them.
 
 .. list-table:: SPI
    :header-rows: 1
@@ -512,25 +546,43 @@ under its own name, while an unimplemented window appears as
    00000000feb40000-00000000feb4001f (prio 1, i/o): serial
    ...
    00000000fd890000-00000000fd89ffff (prio -1000, i/o): rk3588.uart0
-   00000000fec80000-00000000fec8ffff (prio -1000, i/o): rk3588.i2c6
+   00000000fd880000-00000000fd880fff (prio 0, i/o): rockchip-rk3x-i2c
 
 A guest access to one of those windows is reported with ``-d unimp`` and the
 stub name, which is the quickest way to tell "not implemented yet" from "wrong
 address"::
 
-   rk3588.i2c6: unimplemented device write (size 4, offset 0x0000, value 0xdeadbeef)
+   rk3588.uart0: unimplemented device write (size 4, offset 0x0000, value 0xdeadbeef)
 
 The machine test covers the modeled side of the map::
 
+   $ ninja tests/qtest/rock-5b-test
    $ QTEST_QEMU_BINARY=./qemu-system-aarch64 ./tests/qtest/rock-5b-test
    ok 1 /aarch64/rock-5b/machine-topology
-   ok 2 /aarch64/rock-5b/pcie-rtl8125
-   ok 3 /aarch64/rock-5b/sdmmc
-   ok 4 /aarch64/rock-5b/cru
-   ok 5 /aarch64/rock-5b/sdmmc-idmac
-   ok 6 /aarch64/rock-5b/uart2-chardev
-   ok 7 /aarch64/rock-5b/uart2-rx-fifo-irq
-   ok 8 /aarch64/rock-5b/uart3-isolation
+   ok 2 /aarch64/rock-5b/i2c-controllers
+   ok 3 /aarch64/rock-5b/i2c-register-semantics
+   ok 4 /aarch64/rock-5b/i2c-real-devices
+   ok 5 /aarch64/rock-5b/i2c-nack-recovery
+   ok 6 /aarch64/rock-5b/i2c-actack-con1
+   ok 7 /aarch64/rock-5b/i2c-irq-mask-clear
+   ok 8 /aarch64/rock-5b/i2c-reset
+   ok 9 /aarch64/rock-5b/i2c-reset-isolation
+   ok 10 /aarch64/rock-5b/i2c-fifo-tx
+   ok 11 /aarch64/rock-5b/i2c-fifo-rx
+   ok 12 /aarch64/rock-5b/i2c-repeated-start
+   ok 13 /aarch64/rock-5b/pcie-rtl8125
+   ok 14 /aarch64/rock-5b/sdmmc
+   ok 15 /aarch64/rock-5b/cru
+   ok 16 /aarch64/rock-5b/sdmmc-idmac
+   ok 17 /aarch64/rock-5b/uart2-chardev
+   ok 18 /aarch64/rock-5b/uart2-rx-fifo-irq
+   ok 19 /aarch64/rock-5b/uart3-isolation
+
+The I2C tests cover all nine controllers, including their QOM children and
+stable bus names, TRM reset and read-only register behavior, six-bit transfer
+counts, real TMP105 and AT24C devices, controller isolation, NACK recovery,
+``CON.ACTACK`` and ``CON1`` gating, all nine GIC SPI inputs, reset defaults and
+system-reset isolation, both FIFO boundaries, and repeated START.
 
 The UART tests attach socket character backends to the documented
 ``-serial`` slots: slot 1 for UART2 and slot 3 for UART3.  They check UART2
