@@ -80,6 +80,9 @@
 #define DWC3_DCTL_CSFTRST               BIT(30)
 #define DWC3_DCTL_RUNSTOP               BIT(31)
 
+#define DWC3_DGCMD_SELECTED_FIFO_FLUSH   0x09
+#define DWC3_DGCMD_ALL_FIFO_FLUSH        0x0a
+
 #define DWC3_DEPCMD_CMDACT              BIT(10)
 /* Resource index 1, echoed back by the driver in DEPENDXFER flags. */
 #define DWC3_DEPCMD_RSCIDX              BIT(16)
@@ -136,6 +139,8 @@
 #define DWC3_SETUP_RETRY_NS             5000000
 /* CDC bulk-IN data buffered while the chardev backend is closed/short. */
 #define DWC3_TX_FIFO_SIZE               4096
+/* Combined DMA-read and backend-write bytes allowed per TX callback. */
+#define DWC3_TX_BUDGET                  (64 * 1024)
 #define DWC3_TX_RETRY_NS                2000000
 
 typedef struct DWC3TRB {
@@ -199,18 +204,18 @@ struct DWC3UDCState {
     bool unimp_no_backend_logged;
     uint16_t unimp_cmd_logged;
 
-    /*
-     * CDC bulk-IN bytes that the chardev backend has not accepted yet.  A
-     * socket backend reports an error while it has no client connected, so
-     * console output must be retained instead of silently dropped; it is
-     * flushed on CHR_EVENT_OPENED and retried on a short timer.
-     */
+    /* Bytes already accepted by the backend for each active bulk-IN TRB. */
+    uint32_t tx_offset[DWC3_MAX_ENDPOINTS];
+    /* Bulk-IN transfers awaiting data delivery or TRB completion writeback. */
+    bool tx_pending[DWC3_MAX_ENDPOINTS];
+    /* Physical IN endpoint owning the shared FIFO; zero means unassigned. */
+    uint8_t tx_fifo_ep;
     uint8_t tx_buf[DWC3_TX_FIFO_SIZE];
     uint32_t tx_head;
     uint32_t tx_tail;
     uint32_t tx_count;
+
     QEMUTimer *tx_timer;
-    bool tx_error_logged;
     bool runstop_retry;
 
     /* Opt-in diagnostic tracing, see the "debug" property. */
@@ -220,6 +225,7 @@ struct DWC3UDCState {
 };
 
 static void dwc3_udc_reset_state(DWC3UDCState *s);
+static void dwc3_udc_tx_process(DWC3UDCState *s);
 
 static uint32_t dwc3_udc_reg(DWC3UDCState *s, hwaddr addr)
 {
@@ -293,70 +299,49 @@ static void dwc3_udc_update_irq(DWC3UDCState *s)
     qemu_set_irq(s->irq, s->event_count != 0 && !masked);
 }
 
-/*
- * CDC bulk-IN transmit path.
- *
- * The device must not depend on the chardev being open when console output is
- * produced: a unix-socket backend with server=on,wait=off is disconnected
- * until a client connects and reports EIO/EAGAIN for writes in the meantime,
- * and a short write may also happen under load.  Bytes are therefore queued in
- * a bounded FIFO and drained with non-blocking writes; the queue is flushed
- * when the chardev reports CHR_EVENT_OPENED and retried on a 2 ms timer.  The
- * fast path (backend connected and writable) drains in the same call, so the
- * normal case has no added latency.
- */
-static void dwc3_udc_tx_flush(DWC3UDCState *s)
+static uint32_t dwc3_udc_tx_drain(DWC3UDCState *s, uint32_t budget)
 {
-    while (s->tx_count && qemu_chr_fe_backend_connected(&s->chr)) {
-        uint32_t chunk = MIN(s->tx_count, DWC3_TX_FIFO_SIZE - s->tx_head);
-        int ret;
+    uint32_t remaining = budget;
 
-        ret = qemu_chr_fe_write(&s->chr, &s->tx_buf[s->tx_head], chunk);
-        if (ret <= 0) {
-            if (!s->tx_error_logged) {
-                s->tx_error_logged = true;
-                DWC3_UDC_DBG(s, "tx: backend not writable (%d), %u bytes "
-                             "retained\n", ret, s->tx_count);
+    while (s->tx_count && remaining) {
+        uint32_t chunk = MIN(remaining,
+                             MIN(s->tx_count, DWC3_TX_FIFO_SIZE - s->tx_head));
+        int written;
+
+        if (qemu_chr_fe_backend_connected(&s->chr)) {
+            written = qemu_chr_fe_write(&s->chr, &s->tx_buf[s->tx_head], chunk);
+            if (written <= 0) {
+                break;
             }
-            break;
+        } else {
+            /* Without a console backend, discard the output. */
+            dwc3_udc_log_no_backend(s);
+            written = chunk;
         }
-        s->tx_error_logged = false;
-        s->tx_head = (s->tx_head + ret) % DWC3_TX_FIFO_SIZE;
-        s->tx_count -= ret;
+        s->tx_head = (s->tx_head + written) % DWC3_TX_FIFO_SIZE;
+        s->tx_count -= written;
+        remaining -= written;
     }
-
-    if (s->tx_count && qemu_chr_fe_backend_connected(&s->chr)) {
-        timer_mod(s->tx_timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + DWC3_TX_RETRY_NS);
-    }
+    return budget - remaining;
 }
 
-static void dwc3_udc_tx_timer(void *opaque)
+static void dwc3_udc_tx_timer_cb(void *opaque)
 {
-    DWC3UDCState *s = opaque;
-
-    dwc3_udc_tx_flush(s);
+    dwc3_udc_tx_process(opaque);
 }
 
-static void dwc3_udc_tx_enqueue(DWC3UDCState *s, const uint8_t *buf,
-                                uint32_t len)
+static uint32_t dwc3_udc_tx_enqueue(DWC3UDCState *s, const uint8_t *buf,
+                                   uint32_t len)
 {
-    if (len > DWC3_TX_FIFO_SIZE - s->tx_count) {
-        uint32_t dropped = len - (DWC3_TX_FIFO_SIZE - s->tx_count);
+    uint32_t accepted = MIN(len, DWC3_TX_FIFO_SIZE - s->tx_count);
 
-        qemu_log_mask(LOG_UNIMP,
-                      TYPE_DWC3_UDC ": TX FIFO full, dropping %u of %u "
-                      "bytes\n", dropped, len);
-        len = DWC3_TX_FIFO_SIZE - s->tx_count;
-    }
-
+    len = accepted;
     while (len--) {
         s->tx_buf[s->tx_tail] = *buf++;
         s->tx_tail = (s->tx_tail + 1) % DWC3_TX_FIFO_SIZE;
         s->tx_count++;
     }
-
-    dwc3_udc_tx_flush(s);
+    return accepted;
 }
 
 static void dwc3_udc_chr_event(void *opaque, QEMUChrEvent event)
@@ -365,17 +350,12 @@ static void dwc3_udc_chr_event(void *opaque, QEMUChrEvent event)
 
     switch (event) {
     case CHR_EVENT_OPENED:
-        DWC3_UDC_DBG(s, "chardev opened, flushing %u TX bytes\n",
-                     s->tx_count);
-        /*
-         * The backend may have become writable after console output was
-         * produced; deliver the retained bytes before accepting new input.
-         */
-        dwc3_udc_tx_flush(s);
+        /* Defer guest DMA until the virtual clock is running. */
+        timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         qemu_chr_fe_accept_input(&s->chr);
         break;
     case CHR_EVENT_CLOSED:
-        DWC3_UDC_DBG(s, "chardev closed\n");
+        timer_del(s->tx_timer);
         break;
     default:
         break;
@@ -466,17 +446,18 @@ static uint64_t dwc3_udc_trb_buffer(const DWC3TRB *trb)
     return ((uint64_t)trb->addr_hi << 32) | trb->addr_lo;
 }
 
-static void dwc3_udc_complete_trb(DWC3UDCState *s, unsigned int ep,
-                                  DWC3TRB *trb, uint32_t remaining)
+static bool dwc3_udc_complete_trb(DWC3UDCState *s, unsigned int ep,
+                                 DWC3TRB *trb, uint32_t remaining)
 {
     trb->status = remaining & DWC3_TRB_STATUS_BUFSIZ_MASK;
     trb->ctrl &= ~DWC3_TRB_CTRL_HWO;
     if (!dwc3_udc_write_trb(s->ep_trb[ep], trb)) {
-        return;
+        return false;
     }
 
     s->ep_pending[ep] = false;
     dwc3_udc_push_event(s, DWC3_DEPEVT_XFERCOMPLETE(ep));
+    return true;
 }
 
 static void dwc3_udc_make_setup(DWC3UDCState *s, DWC3SetupPacket *setup)
@@ -658,39 +639,113 @@ static void dwc3_udc_complete_control_in(DWC3UDCState *s, unsigned int ep,
     s->control_input_request = false;
 }
 
-static void dwc3_udc_complete_bulk_in(DWC3UDCState *s, unsigned int ep,
-                                      DWC3TRB *trb)
+static void dwc3_udc_tx_cancel(DWC3UDCState *s, unsigned int ep)
 {
-    uint32_t length = trb->status & DWC3_TRB_STATUS_BUFSIZ_MASK;
-    uint8_t buffer[512];
-    uint64_t addr = dwc3_udc_trb_buffer(trb);
-    int64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (s->tx_fifo_ep == ep) {
+        s->tx_head = s->tx_tail = s->tx_count = 0;
+        s->tx_fifo_ep = 0;
+    }
+    s->tx_pending[ep] = false;
+    s->tx_offset[ep] = 0;
+}
 
-    if (!qemu_chr_fe_backend_connected(&s->chr)) {
-        dwc3_udc_log_no_backend(s);
+static bool dwc3_udc_tx_ready(DWC3UDCState *s)
+{
+    Chardev *chr = qemu_chr_fe_get_driver(&s->chr);
+
+    /* The null backend accepts output without emitting CHR_EVENT_OPENED. */
+    return !chr || object_dynamic_cast(OBJECT(chr), TYPE_CHARDEV_NULL) ||
+           qemu_chr_fe_backend_open(&s->chr);
+}
+
+/* The shared FIFO holds bytes for one bulk-IN TRB at a time. */
+static void dwc3_udc_tx_process(DWC3UDCState *s)
+{
+    uint32_t budget = DWC3_TX_BUDGET;
+    bool retry = false;
+
+    timer_del(s->tx_timer);
+    if (!s->host_connected ||
+        !(dwc3_udc_reg(s, DWC3_DCTL) & DWC3_DCTL_RUNSTOP)) {
+        return;
     }
 
-    while (length) {
-        uint32_t chunk = MIN(length, (uint32_t)sizeof(buffer));
+    for (unsigned int ep = 3; ep < DWC3_MAX_ENDPOINTS; ep += 2) {
+        DWC3TRB trb;
+        uint32_t length;
 
-        if (dma_memory_read_relaxed(&address_space_memory, addr,
-                                    buffer, chunk) != MEMTX_OK) {
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          TYPE_DWC3_UDC ": bulk IN data read failed at "
-                          "0x%" HWADDR_PRIx "\n", (hwaddr)addr);
-            return;
+        if (!s->tx_pending[ep] || s->ep_stalled[ep] ||
+            (s->tx_fifo_ep && s->tx_fifo_ep != ep)) {
+            continue;
         }
-        dwc3_udc_tx_enqueue(s, buffer, chunk);
-        addr += chunk;
-        length -= chunk;
+        if (!dwc3_udc_read_trb(s->ep_trb[ep], &trb) ||
+            !(trb.ctrl & DWC3_TRB_CTRL_HWO)) {
+            dwc3_udc_tx_cancel(s, ep);
+            continue;
+        }
+        length = trb.status & DWC3_TRB_STATUS_BUFSIZ_MASK;
+        if (s->tx_offset[ep] + s->tx_count > length) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          TYPE_DWC3_UDC ": bulk IN TRB shortened on ep %u\n",
+                          ep);
+            dwc3_udc_tx_cancel(s, ep);
+            continue;
+        }
+        s->tx_fifo_ep = ep;
+
+        while (budget) {
+            uint32_t fetched = s->tx_offset[ep] + s->tx_count;
+            uint32_t written;
+
+            if (s->tx_count < DWC3_TX_FIFO_SIZE && fetched < length) {
+                uint8_t buffer[512];
+                uint32_t chunk = MIN(length - fetched,
+                                     DWC3_TX_FIFO_SIZE - s->tx_count);
+                uint64_t addr = dwc3_udc_trb_buffer(&trb) + fetched;
+
+                chunk = MIN(chunk, MIN(budget, (uint32_t)sizeof(buffer)));
+                if (dma_memory_read_relaxed(&address_space_memory, addr,
+                                            buffer, chunk) != MEMTX_OK) {
+                    qemu_log_mask(LOG_GUEST_ERROR,
+                                  TYPE_DWC3_UDC ": bulk IN DMA failed at "
+                                  "0x%" HWADDR_PRIx "\n", (hwaddr)addr);
+                    s->tx_head = s->tx_tail = s->tx_count = 0;
+                    s->tx_fifo_ep = 0;
+                    s->tx_pending[ep] = false;
+                    break;
+                }
+                budget -= dwc3_udc_tx_enqueue(s, buffer, chunk);
+                continue;
+            }
+            if (!dwc3_udc_tx_ready(s)) {
+                break;
+            }
+            written = dwc3_udc_tx_drain(s, budget);
+            s->tx_offset[ep] += written;
+            budget -= written;
+            if (!written) {
+                break;
+            }
+        }
+
+        if (s->tx_pending[ep] && s->tx_offset[ep] == length &&
+            dwc3_udc_tx_ready(s) &&
+            dwc3_udc_complete_trb(s, ep, &trb, 0)) {
+            dwc3_udc_tx_cancel(s, ep);
+        }
+        retry |= s->tx_pending[ep];
     }
 
-    DWC3_UDC_DBG(s, "bulk-in ep=%u len=%u backend=%d tx_pending=%u "
-                 "handler=%" PRId64 " us\n",
-                 ep, trb->status & DWC3_TRB_STATUS_BUFSIZ_MASK,
-                 qemu_chr_fe_backend_connected(&s->chr), s->tx_count,
-                 (qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - t0) / 1000);
-    dwc3_udc_complete_trb(s, ep, trb, 0);
+    if (!s->tx_fifo_ep) {
+        for (unsigned int ep = 3; ep < DWC3_MAX_ENDPOINTS; ep += 2) {
+            retry |= s->tx_pending[ep] && !s->ep_stalled[ep];
+        }
+    }
+
+    if (retry && dwc3_udc_tx_ready(s)) {
+        timer_mod(s->tx_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DWC3_TX_RETRY_NS);
+    }
 }
 
 static void dwc3_udc_process_ep(DWC3UDCState *s, unsigned int ep)
@@ -725,7 +780,8 @@ static void dwc3_udc_process_ep(DWC3UDCState *s, unsigned int ep)
     if ((ep & 1) && s->ep_type[ep] == DWC3_EP_TYPE_BULK &&
         (trbctl == DWC3_TRBCTL_NORMAL ||
          trbctl == DWC3_TRBCTL_NORMAL_ZLP)) {
-        dwc3_udc_complete_bulk_in(s, ep, &trb);
+        s->tx_pending[ep] = true;
+        dwc3_udc_tx_process(s);
     } else if ((ep & 1) &&
                s->ep_type[ep] == DWC3_EP_TYPE_INTERRUPT &&
                trbctl == DWC3_TRBCTL_NORMAL) {
@@ -743,12 +799,26 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
     DWC3_UDC_DBG(s, "DEPCMD ep=%u cmd=%u command=0x%x\n",
                  ep, command_number, command);
     switch (command_number) {
-    case DWC3_DEPCMD_DEPCFG:
-        s->ep_type[ep] =
+    case DWC3_DEPCMD_DEPCFG: {
+        uint32_t ep_type =
             (dwc3_udc_reg(s, DWC3_DEPCMDPAR0(ep)) >>
              DWC3_DEPCFG_EPTYPE_SHIFT) & DWC3_DEPCFG_EPTYPE_MASK;
+
+        /* Only EPTYPE is modeled; same-type updates preserve the transfer. */
+        if (s->ep_pending[ep] && s->ep_type[ep] == DWC3_EP_TYPE_BULK &&
+            ep_type != s->ep_type[ep]) {
+            result |= BIT(12);
+            break;
+        }
+        s->ep_type[ep] = ep_type;
         break;
+    }
     case DWC3_DEPCMD_DEPSTRTXFER:
+        if (s->ep_pending[ep] && s->ep_type[ep] == DWC3_EP_TYPE_BULK) {
+            result |= BIT(12);
+            break;
+        }
+        s->tx_offset[ep] = 0;
         s->ep_trb[ep] =
             ((uint64_t)dwc3_udc_reg(s, DWC3_DEPCMDPAR0(ep)) << 32) |
             dwc3_udc_reg(s, DWC3_DEPCMDPAR1(ep));
@@ -757,6 +827,7 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
         break;
     case DWC3_DEPCMD_DEPENDXFER:
         s->ep_pending[ep] = false;
+        dwc3_udc_tx_cancel(s, ep);
         break;
     case DWC3_DEPCMD_DEPSETSTALL:
         s->ep_stalled[ep] = true;
@@ -773,6 +844,7 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
         for (unsigned i = (command >> 16) & 0x7f; i < DWC3_MAX_ENDPOINTS; i++) {
             s->ep_pending[i] = false;
             s->ep_stalled[i] = false;
+            dwc3_udc_tx_cancel(s, i);
         }
         break;
     default:
@@ -786,8 +858,18 @@ static void dwc3_udc_endpoint_command(DWC3UDCState *s, unsigned int ep,
         dwc3_udc_push_event(s, (ep << 1) | (7 << 6) |
                             (result & (0xf << 12)) | (command_number << 24));
     }
-    if (command_number == DWC3_DEPCMD_DEPSTRTXFER) {
+    if (command_number == DWC3_DEPCMD_DEPSTRTXFER &&
+        !(result & (0xf << 12))) {
         dwc3_udc_process_ep(s, ep);
+    } else if (command_number == DWC3_DEPCMD_DEPCLEARSTALL) {
+        if (s->tx_pending[ep]) {
+            dwc3_udc_tx_process(s);
+        } else {
+            dwc3_udc_process_ep(s, ep);
+        }
+    } else if (command_number == DWC3_DEPCMD_DEPENDXFER ||
+               command_number == DWC3_DEPCMD_DEPSTARTCFG) {
+        dwc3_udc_tx_process(s);
     }
 }
 
@@ -928,19 +1010,23 @@ static void dwc3_udc_write(void *opaque, hwaddr addr, uint64_t value,
             /* Controller stopped before a deferred handshake was delivered. */
             s->runstop_retry = false;
         }
+        dwc3_udc_tx_process(s);
         break;
     case DWC3_DGCMD:
         new_value &= ~(BIT(10) | (0xf << 12));
         switch (new_value & 0xff) {
-        case 0x09:
+        case DWC3_DGCMD_SELECTED_FIFO_FLUSH:
             if (!(dwc3_udc_reg(s, DWC3_DGCMDPAR) & BIT(5))) {
                 break;
             }
             /* fall through */
-        case 0x0a:
-            /* Device FIFO flush discards bytes not consumed by the host. */
+        case DWC3_DGCMD_ALL_FIFO_FLUSH:
+            /* Active TX FIFO flushing is not supported. */
+            if (s->tx_fifo_ep) {
+                new_value |= BIT(12);
+                break;
+            }
             s->tx_head = s->tx_tail = s->tx_count = 0;
-            timer_del(s->tx_timer);
             break;
         default:
             new_value |= BIT(12);
@@ -1048,11 +1134,11 @@ static void dwc3_udc_reset_state(DWC3UDCState *s)
     s->control_input_request = false;
 
     timer_del(s->setup_timer);
-    dwc3_udc_tx_flush(s);
     timer_del(s->tx_timer);
-    s->tx_head = 0;
-    s->tx_tail = 0;
-    s->tx_count = 0;
+    memset(s->tx_offset, 0, sizeof(s->tx_offset));
+    memset(s->tx_pending, 0, sizeof(s->tx_pending));
+    s->tx_head = s->tx_tail = s->tx_count = 0;
+    s->tx_fifo_ep = 0;
     s->runstop_retry = false;
 
     qemu_set_irq(s->irq, 0);
@@ -1077,8 +1163,8 @@ static void dwc3_udc_realize(DeviceState *dev, Error **errp)
     /*
      * Install handlers unconditionally: qemu_chr_fe_set_handlers() is a no-op
      * when no backend is associated, and with server=on,wait=off socket
-     * backends the client may connect after realize.  The CHR_EVENT_OPENED
-     * handler then flushes retained console output and resumes input.
+     * backends the client may connect after realize. CHR_EVENT_OPENED then
+     * schedules pending transfers and resumes input.
      */
     qemu_chr_fe_set_handlers(&s->chr, dwc3_udc_can_receive,
                              dwc3_udc_receive, dwc3_udc_chr_event, NULL,
@@ -1099,11 +1185,32 @@ static bool dwc3_udc_migration_valid(DWC3UDCState *s)
     }
 
     for (unsigned int ep = 0; ep < DWC3_MAX_ENDPOINTS; ep++) {
-        if (s->ep_type[ep] > DWC3_DEPCFG_EPTYPE_MASK) {
+        if (s->ep_type[ep] > DWC3_DEPCFG_EPTYPE_MASK ||
+            s->tx_offset[ep] > DWC3_TRB_STATUS_BUFSIZ_MASK ||
+            (s->tx_pending[ep] &&
+             (ep < 3 || !(ep & 1) || !s->ep_pending[ep] ||
+              s->ep_type[ep] != DWC3_EP_TYPE_BULK))) {
             return false;
         }
     }
 
+    if (s->tx_head >= DWC3_TX_FIFO_SIZE || s->tx_tail >= DWC3_TX_FIFO_SIZE ||
+        s->tx_count > DWC3_TX_FIFO_SIZE ||
+        s->tx_tail != (s->tx_head + s->tx_count) % DWC3_TX_FIFO_SIZE ||
+        s->tx_fifo_ep >= DWC3_MAX_ENDPOINTS) {
+        return false;
+    }
+    if (s->tx_fifo_ep) {
+        unsigned int ep = s->tx_fifo_ep;
+
+        if (ep < 3 || !(ep & 1) || !s->tx_pending[ep] ||
+            s->ep_type[ep] != DWC3_EP_TYPE_BULK ||
+            s->tx_count > DWC3_TRB_STATUS_BUFSIZ_MASK - s->tx_offset[ep]) {
+            return false;
+        }
+    } else if (s->tx_count) {
+        return false;
+    }
     return true;
 }
 
@@ -1111,17 +1218,20 @@ static int dwc3_udc_post_load(void *opaque, int version_id)
 {
     DWC3UDCState *s = opaque;
 
+    timer_del(s->tx_timer);
+    if (version_id < 3) {
+        memset(s->tx_offset, 0, sizeof(s->tx_offset));
+        memset(s->tx_pending, 0, sizeof(s->tx_pending));
+        s->tx_head = s->tx_tail = s->tx_count = 0;
+        s->tx_fifo_ep = 0;
+    }
     if (!dwc3_udc_migration_valid(s)) {
         return -EINVAL;
     }
 
-    /* TX bytes are host-side transient data and are not migrated. */
-    timer_del(s->tx_timer);
-    s->tx_head = 0;
-    s->tx_tail = 0;
-    s->tx_count = 0;
-
     dwc3_udc_update_irq(s);
+    /* The destination must finish loading guest memory before TX resumes. */
+    timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     if (qemu_chr_fe_backend_connected(&s->chr)) {
         qemu_chr_fe_accept_input(&s->chr);
     }
@@ -1130,7 +1240,7 @@ static int dwc3_udc_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_dwc3_udc = {
     .name = TYPE_DWC3_UDC,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 1,
     .post_load = dwc3_udc_post_load,
     .fields = (const VMStateField[]) {
@@ -1153,6 +1263,13 @@ static const VMStateDescription vmstate_dwc3_udc = {
         VMSTATE_UINT32(control_stage, DWC3UDCState),
         VMSTATE_BOOL(control_input_request, DWC3UDCState),
         VMSTATE_TIMER_PTR(setup_timer, DWC3UDCState),
+        VMSTATE_UINT32_ARRAY_V(tx_offset, DWC3UDCState, DWC3_MAX_ENDPOINTS, 3),
+        VMSTATE_BOOL_ARRAY_V(tx_pending, DWC3UDCState, DWC3_MAX_ENDPOINTS, 3),
+        VMSTATE_UINT8_ARRAY_V(tx_buf, DWC3UDCState, DWC3_TX_FIFO_SIZE, 3),
+        VMSTATE_UINT32_V(tx_head, DWC3UDCState, 3),
+        VMSTATE_UINT32_V(tx_tail, DWC3UDCState, 3),
+        VMSTATE_UINT32_V(tx_count, DWC3UDCState, 3),
+        VMSTATE_UINT8_V(tx_fifo_ep, DWC3UDCState, 3),
         VMSTATE_END_OF_LIST(),
     },
 };
@@ -1175,7 +1292,7 @@ static void dwc3_udc_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
     s->setup_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                   dwc3_udc_setup_timer, s);
-    s->tx_timer = timer_new_ns(QEMU_CLOCK_REALTIME, dwc3_udc_tx_timer, s);
+    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dwc3_udc_tx_timer_cb, s);
 }
 
 static void dwc3_udc_finalize(Object *obj)

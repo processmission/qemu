@@ -47,6 +47,8 @@
 #define TYPE_RK3588_SCMI "rk3588-scmi"
 OBJECT_DECLARE_SIMPLE_TYPE(RK3588SCMIState, RK3588_SCMI)
 
+/* Shared-memory location used by the RK3588 firmware transport. */
+#define RK3588_SCMI_SHMEM_BASE 0x0010f000ULL
 #define RK3588_SCMI_SHMEM_SIZE 0x100
 #define RK3588_SCMI_NUM_CLOCKS 24
 
@@ -78,9 +80,7 @@ struct RK3588SCMIState {
  * CHANNEL_FREE set), and returns true. Returns false if the buffer
  * does not contain a well-formed request.
  *
- * Exposed so the SMC hook (target/arm/tcg/psci.c) can call it via the
- * board-registered callback without referencing the device instance
- * directly; the board keeps a pointer to the realized device.
+ * Called by platform SMC handlers with the realized responder.
  */
 bool rk3588_scmi_handle_smc(RK3588SCMIState *s);
 

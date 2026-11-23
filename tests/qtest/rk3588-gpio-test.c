@@ -12,7 +12,6 @@
 
 #define ROCK5B_MACHINE_NAME     "rock-5b"
 #define ROCK5BPLUS_MACHINE_NAME "rock-5b-plus"
-#define ROCK5B_GIC_DIST_BASE    0xfe600000ULL
 #define ROCK5B_GPIO0_SPI        277
 
 #define ROCK5B_GPIO_VERSION_V2  0x01000c2b
@@ -56,11 +55,6 @@ static const Rock5BGPIOBank rock5b_gpio_banks[] = {
     { 0xfec50000, ROCK5B_GPIO0_SPI + 4 },
 };
 
-/* GIC SPI N is INTID 32+N on the distributor. */
-#define ROCK5B_GIC_SPI_INTID(spi)   ((spi) + 32)
-#define ROCK5B_GIC_ISPENDR(intid) \
-    (ROCK5B_GIC_DIST_BASE + 0x200 + 4 * ((intid) / 32))
-
 static QTestState *rock5b_gpio_qtest_start(void)
 {
     return qtest_init("-machine " ROCK5B_MACHINE_NAME
@@ -99,21 +93,16 @@ static void assert_gpio_bit(QTestState *qts, unsigned int bank,
     }
 }
 
-static void assert_gic_spi_pending(QTestState *qts, unsigned int spi,
-                                   bool pending)
+static void assert_gic_spi_level(QTestState *qts, unsigned int spi, bool level)
 {
-    unsigned int intid = ROCK5B_GIC_SPI_INTID(spi);
-    uint32_t mask = BIT(intid % 32);
-    uint32_t value = qtest_readl(qts, ROCK5B_GIC_ISPENDR(intid));
-
-    g_assert_cmpuint(!!(value & mask), ==, pending);
+    g_assert_cmpuint(qtest_get_irq(qts, spi), ==, level);
 }
 
 static void assert_gpio_gic_routing(QTestState *qts, int active_bank)
 {
     for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_gpio_banks); i++) {
-        assert_gic_spi_pending(qts, rock5b_gpio_banks[i].spi,
-                               i == active_bank);
+        assert_gic_spi_level(qts, rock5b_gpio_banks[i].spi,
+                             i == active_bank);
     }
 }
 
@@ -294,14 +283,16 @@ static void test_gpio_rising_edge(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
     gpio_configure_irq(qts, 0, 0, true, true, false, false);
     gpio_set_input(qts, 0, 0, 1);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     gpio_eoi(qts, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, false, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     /* A falling edge does not retrigger a rising-edge input. */
     gpio_set_input(qts, 0, 0, 0);
@@ -314,15 +305,17 @@ static void test_gpio_falling_edge(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
     gpio_set_input(qts, 0, 0, 1);
     gpio_configure_irq(qts, 0, 0, true, false, false, false);
     gpio_set_input(qts, 0, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     gpio_eoi(qts, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, false, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     qtest_quit(qts);
 }
@@ -349,19 +342,21 @@ static void test_gpio_high_level(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
     gpio_set_input(qts, 0, 0, 1);
     gpio_configure_irq(qts, 0, 0, false, true, false, false);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     /* EOI cannot release a level-triggered interrupt while it is active. */
     gpio_eoi(qts, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     gpio_set_input(qts, 0, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, false, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     qtest_quit(qts);
 }
@@ -370,13 +365,15 @@ static void test_gpio_low_level(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
     gpio_configure_irq(qts, 0, 0, false, false, false, false);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     gpio_set_input(qts, 0, 0, 1);
     assert_gpio_irq_state(qts, 0, 0, false, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     gpio_set_input(qts, 0, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, true, true);
@@ -390,19 +387,21 @@ static void test_gpio_mask_and_unmask(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
     gpio_configure_irq(qts, 0, 0, true, true, false, true);
     gpio_set_input(qts, 0, 0, 1);
     assert_gpio_irq_state(qts, 0, 0, true, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     gpio_write16(qts, rock5b_gpio_banks[0].base, GPIO_INT_MASK_L,
                  BIT(0), 0);
     assert_gpio_irq_state(qts, 0, 0, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, true);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, true);
 
     gpio_eoi(qts, 0, 0);
     assert_gpio_irq_state(qts, 0, 0, false, false);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[0].spi, false);
+    assert_gic_spi_level(qts, rock5b_gpio_banks[0].spi, false);
 
     qtest_quit(qts);
 }
@@ -410,6 +409,8 @@ static void test_gpio_mask_and_unmask(void)
 static void test_gpio_gic_routing(void)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
+
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
 
     assert_gpio_gic_routing(qts, -1);
     for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_gpio_banks); i++) {
@@ -424,11 +425,16 @@ static void test_gpio_gic_routing(void)
     qtest_quit(qts);
 }
 
-static void test_gpio_reset(void)
+static void test_gpio_reset_one(bool check_gic)
 {
     QTestState *qts = rock5b_gpio_qtest_start();
 
-    qtest_irq_intercept_out_named(qts, "/machine/soc/gpio4", "gpio-out");
+    /* Qtest can intercept only one device per process. */
+    if (check_gic) {
+        qtest_irq_intercept_in(qts, "/machine/soc/gic");
+    } else {
+        qtest_irq_intercept_out_named(qts, "/machine/soc/gpio4", "gpio-out");
+    }
     gpio_write16(qts, rock5b_gpio_banks[4].base, GPIO_SWPORT_DDR_L,
                  BIT(0), BIT(0));
     gpio_write16(qts, rock5b_gpio_banks[4].base, GPIO_SWPORT_DR_L,
@@ -436,13 +442,19 @@ static void test_gpio_reset(void)
     gpio_configure_irq(qts, 4, 1, true, true, false, false);
     gpio_set_input(qts, 4, 1, 1);
     assert_gpio_irq_state(qts, 4, 1, true, true);
-    assert_gic_spi_pending(qts, rock5b_gpio_banks[4].spi, true);
-    g_assert_true(qtest_get_irq(qts, 0));
+    if (check_gic) {
+        assert_gic_spi_level(qts, rock5b_gpio_banks[4].spi, true);
+    } else {
+        g_assert_true(qtest_get_irq(qts, 0));
+    }
 
     qtest_system_reset(qts);
 
-    g_assert_false(qtest_get_irq(qts, 0));
-    assert_gpio_gic_routing(qts, -1);
+    if (check_gic) {
+        assert_gpio_gic_routing(qts, -1);
+    } else {
+        g_assert_false(qtest_get_irq(qts, 0));
+    }
     for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_gpio_banks); i++) {
         static const uint32_t reset_regs[] = {
             GPIO_SWPORT_DR_L, GPIO_SWPORT_DR_H,
@@ -467,6 +479,12 @@ static void test_gpio_reset(void)
     }
 
     qtest_quit(qts);
+}
+
+static void test_gpio_reset(void)
+{
+    test_gpio_reset_one(true);
+    test_gpio_reset_one(false);
 }
 
 static void test_gpio_not_unimplemented(void)

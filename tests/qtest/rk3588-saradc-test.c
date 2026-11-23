@@ -11,16 +11,10 @@
 #include "libqtest.h"
 
 #define ROCK5B_MACHINE_NAME     "rock-5b"
-#define ROCK5B_GIC_DIST_BASE    0xfe600000ULL
 #define ROCK5B_SARADC_BASE      0xfec10000ULL
 
 /* SARADC interrupt, as wired in the RK3588 device tree. */
 #define ROCK5B_SARADC_SPI       398
-
-/* GIC SPI N is INTID 32+N on the distributor; GICD_ISPENDR shows the level. */
-#define ROCK5B_GIC_SPI_INTID(spi)   ((spi) + 32)
-#define ROCK5B_GIC_ISPENDR(intid) \
-    (ROCK5B_GIC_DIST_BASE + 0x200 + 4 * ((intid) / 32))
 
 /* Rockchip SARADC v2 register bank, see hw/adc/rk3588_saradc.c. */
 enum {
@@ -59,8 +53,10 @@ static QTestState *rock5b_saradc_start(const char *extra)
     g_autofree char *cmdline = g_strdup_printf(
         "-machine " ROCK5B_MACHINE_NAME
         " -m 256M -serial null -display none %s", extra ? extra : "");
+    QTestState *qts = qtest_init(cmdline);
 
-    return qtest_init(cmdline);
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+    return qts;
 }
 
 static void saradc_start_conversion(QTestState *qts, unsigned int ch)
@@ -76,18 +72,6 @@ static void saradc_start_conversion(QTestState *qts, unsigned int ch)
     uint32_t val = mask & (SARADC_START | SARADC_SINGLE_MODE | ch);
 
     SARADC_WRITE(SARADC_CONV_CON, val | (mask << 16));
-}
-
-static uint32_t saradc_gic_mask(void)
-{
-    return BIT(ROCK5B_GIC_SPI_INTID(ROCK5B_SARADC_SPI) % 32);
-}
-
-static uint32_t saradc_gic_level(QTestState *qts)
-{
-    unsigned int intid = ROCK5B_GIC_SPI_INTID(ROCK5B_SARADC_SPI);
-
-    return qtest_readl(qts, ROCK5B_GIC_ISPENDR(intid)) & saradc_gic_mask();
 }
 
 static void test_saradc_reset_values(void)
@@ -231,27 +215,27 @@ static void test_saradc_irq(void)
     QTestState *qts = rock5b_saradc_start(
         "-global rk3588-saradc.vin4-uv=1800000");
 
-    g_assert_cmphex(saradc_gic_level(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     /* A conversion with the interrupt masked stays quiet. */
     saradc_start_conversion(qts, 4);
     qtest_clock_step(qts, SARADC_STEP_NS);
     g_assert_cmphex(SARADC_READ(SARADC_END_INT_ST), ==, SARADC_EN_END_INT);
-    g_assert_cmphex(saradc_gic_level(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     /* Enabling the interrupt raises the line, since the flag is pending. */
     SARADC_WRITE_MASKED(SARADC_END_INT_EN, SARADC_EN_END_INT);
-    g_assert_cmphex(saradc_gic_level(qts), ==, saradc_gic_mask());
+    g_assert_true(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     /* END_INT_ST is write-one-to-clear, and clearing it drops the line. */
     SARADC_WRITE(SARADC_END_INT_ST, SARADC_EN_END_INT);
     g_assert_cmphex(SARADC_READ(SARADC_END_INT_ST), ==, 0);
-    g_assert_cmphex(saradc_gic_level(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     /* The next conversion latches it again. */
     saradc_start_conversion(qts, 4);
     qtest_clock_step(qts, SARADC_STEP_NS);
-    g_assert_cmphex(saradc_gic_level(qts), ==, saradc_gic_mask());
+    g_assert_true(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     qtest_quit(qts);
 }
@@ -270,7 +254,7 @@ static void test_saradc_invalid_channel(void)
 
     qtest_clock_step(qts, SARADC_STEP_NS);
     g_assert_cmphex(SARADC_READ(SARADC_END_INT_ST), ==, 0);
-    g_assert_cmphex(saradc_gic_level(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
     for (unsigned i = 0; i < 8; i++) {
         g_assert_cmphex(SARADC_READ(SARADC_DATA(i)), ==, 0);
     }
@@ -367,7 +351,7 @@ static void test_saradc_reset(void)
     qtest_clock_step(qts, SARADC_STEP_NS);
 
     g_assert_cmphex(SARADC_READ(SARADC_DATA(4)), ==, SARADC_FULL_SCALE);
-    g_assert_cmphex(saradc_gic_level(qts), ==, saradc_gic_mask());
+    g_assert_true(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     qtest_system_reset(qts);
 
@@ -377,7 +361,7 @@ static void test_saradc_reset(void)
     g_assert_cmphex(SARADC_READ(SARADC_END_INT_ST), ==, 0);
     g_assert_cmphex(SARADC_READ(SARADC_STATUS), ==, 0);
     g_assert_cmphex(SARADC_READ(SARADC_DATA(4)), ==, 0);
-    g_assert_cmphex(saradc_gic_level(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, ROCK5B_SARADC_SPI));
 
     /* A fresh conversion starts from the reset state. */
     saradc_start_conversion(qts, 4);

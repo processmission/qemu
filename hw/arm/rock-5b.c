@@ -24,7 +24,11 @@
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/net/rtl8125.h"
+#include "hw/pci-host/rockchip_pcie.h"
+#include "hw/sd/sd.h"
 #include "hw/ssi/ssi.h"
+#include "net/net.h"
 #include "system/address-spaces.h"
 #include "system/block-backend.h"
 #include "system/blockdev.h"
@@ -51,6 +55,7 @@ static const MemMapEntry rock5b_memmap[] = {
 
 #define ROCK5B_ATAGS_ADDR 0x001fe000
 #define ROCK5B_FLASH_SIZE (16 * MiB)
+#define ROCK5B_DRAM_TYPE_LPDDR4X 8
 /* UART2 drives the board's debug header. */
 #define ROCK5B_CONSOLE_UART 2
 
@@ -58,6 +63,7 @@ struct Rock5BMachineState {
     MachineState parent_obj;
 
     RK3588SoCState soc;
+    bool rknpu;
     MemoryRegion low_ram;
     MemoryRegion high_ram;
     uint64_t low_ram_size;
@@ -136,13 +142,83 @@ static void rock5b_connect_serial(Rock5BMachineState *s)
 
     qdev_prop_set_chr(DEVICE(&s->soc), "usb3otg0-chardev", serial_hd(0));
 
-    /* UART0 in the PMU power domain is not modeled. */
+    /* UART0 has no external serial connection. */
     for (unsigned int i = 1; i < RK3588_NUM_UARTS; i++) {
         g_autofree char *prop = g_strdup_printf("uart%u-chardev", i);
 
         qdev_prop_set_chr(DEVICE(&s->soc), prop,
                           serial_hd(i == ROCK5B_CONSOLE_UART ? 1 : hd++));
     }
+}
+
+static void rock5b_attach_emmc_card(Rock5BMachineState *s)
+{
+    DriveInfo *di = drive_get(IF_SD, 0, 0);
+    BusState *bus;
+    DeviceState *card;
+
+    if (!di) {
+        return;
+    }
+
+    bus = qdev_get_child_bus(s->soc.sdhci, "sd-bus");
+    if (!bus) {
+        error_report("rock-5b: sdhci has no sd-bus");
+        exit(EXIT_FAILURE);
+    }
+
+    card = qdev_new(TYPE_EMMC);
+    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(di),
+                            &error_fatal);
+    qdev_realize_and_unref(card, bus, &error_fatal);
+}
+
+static void rock5b_attach_sd_card(Rock5BMachineState *s)
+{
+    DriveInfo *di = drive_get(IF_SD, 0, 2);
+    BusState *bus;
+    DeviceState *card;
+
+    /*
+     * The legacy -drive if=sd,index=2 interface is the board's microSD slot;
+     * index 0 is eMMC and index 1 is reserved for SDIO, which is not modeled.
+     * With no drive the slot stays empty (no card).
+     */
+    if (!di) {
+        return;
+    }
+
+    bus = qdev_get_child_bus(s->soc.sdmmc, "sd-bus");
+    if (!bus) {
+        error_report("rock-5b: sdmmc has no sd-bus");
+        exit(EXIT_FAILURE);
+    }
+
+    card = qdev_new(TYPE_SD_CARD);
+    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(di),
+                            &error_fatal);
+    qdev_realize_and_unref(card, bus, &error_fatal);
+}
+
+static void rock5b_attach_nic(Rock5BMachineState *s)
+{
+    PCIBus *secbus = rockchip_pcie_host_secondary_bus(
+        s->soc.pcie[RK3588_PCIE2X1L2]);
+    DeviceState *endpoint;
+
+    if (!secbus) {
+        error_report("rock-5b: pcie2x1l2 root port has no secondary bus");
+        exit(EXIT_FAILURE);
+    }
+
+    /*
+     * The onboard RTL8125 is always present on the root port's secondary
+     * bus (bus 1, device 0, function 0 after guest enumeration).  Bind an
+     * explicit model=rtl8125 / rtl8125-pci NIC configuration if supplied.
+     */
+    endpoint = qdev_new(TYPE_RTL8125_PCI);
+    qemu_configure_nic_device(endpoint, false, "rtl8125");
+    qdev_realize_and_unref(endpoint, BUS(secbus), &error_fatal);
 }
 
 static void rock5b_create_flash(Rock5BMachineState *s)
@@ -212,6 +288,9 @@ static void rock5b_firmware_boot(Rock5BMachineState *s)
         g_autofree char *filename = qemu_find_file(QEMU_FILE_TYPE_BIOS,
                                                   ms->firmware);
         ssize_t size;
+
+        /* U-Boot starts at NonSecure EL2 after emulated secure firmware. */
+        rk3588_soc_prepare_nonsecure_interrupts(&s->soc);
 
         if (!filename) {
             error_report("rock-5b: cannot find firmware '%s'",
@@ -283,11 +362,24 @@ static void rock5b_init(MachineState *ms)
 
     /* Initialize the SoC object. */
     object_initialize_child(OBJECT(s), "soc", &s->soc, TYPE_RK3588_SOC);
+    s->soc.pcie_config[RK3588_PCIE2X1L2] = (RK3588PCIEConfig) {
+        .enabled = true,
+        .link_up = true,
+        .domain = 0,
+        .bus_nr = 0,
+    };
     qdev_prop_set_uint32(DEVICE(&s->soc), "num-cpus", ms->smp.cpus);
+    qdev_prop_set_uint64(DEVICE(&s->soc), "ram-size", ms->ram_size);
+    qdev_prop_set_bit(DEVICE(&s->soc), "rknpu", s->rknpu);
+    qdev_prop_set_uint32(DEVICE(&s->soc), "dram-type",
+                         ROCK5B_DRAM_TYPE_LPDDR4X);
     object_property_set_link(OBJECT(&s->soc), "memory",
                              OBJECT(get_system_memory()), &error_abort);
     rock5b_connect_serial(s);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
+    rock5b_attach_nic(s);
+    rock5b_attach_emmc_card(s);
+    rock5b_attach_sd_card(s);
 
     if (s->high_ram_base == 0) {
         s->high_ram_base = 0x100000000ULL;
@@ -346,6 +438,16 @@ static void rock5b_set_high_ram_base(Object *obj, Visitor *v,
     s->high_ram_base = value;
 }
 
+static bool rock5b_get_rknpu(Object *obj, Error **errp)
+{
+    return ROCK5B_MACHINE(obj)->rknpu;
+}
+
+static void rock5b_set_rknpu(Object *obj, bool value, Error **errp)
+{
+    ROCK5B_MACHINE(obj)->rknpu = value;
+}
+
 static void rock5b_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -361,6 +463,11 @@ static void rock5b_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "high-ram-base",
         "Physical base of the RAM above the 4 GiB peripheral hole "
         "(default 0x100000000)");
+    object_class_property_add_bool(oc, "rknpu", rock5b_get_rknpu,
+                                   rock5b_set_rknpu);
+    object_class_property_set_description(oc, "rknpu",
+                                          "Enable RK3588 RKNN/RKNPU "
+                                          "accelerator cores");
     mc->desc = "Radxa ROCK 5B";
     mc->init = rock5b_init;
     mc->default_ram_size = 2 * GiB;
