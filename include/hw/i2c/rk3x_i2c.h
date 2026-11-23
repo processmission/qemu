@@ -18,4 +18,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(Rk3xI2CState, RK3X_I2C)
 
 #define RK3X_I2C_MMIO_SIZE 0x1000
 
+void rk3x_i2c_init_bus(DeviceState *dev, const char *name);
+
 #endif /* HW_I2C_RK3X_I2C_H */

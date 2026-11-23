@@ -3274,11 +3274,11 @@ static void rk3588_attach_pmic(RK3588MachineState *s)
 
 static void rk3588_attach_rtc(RK3588MachineState *s)
 {
-    BusState *bus = qdev_get_child_bus(s->soc.i2c6, "i2c-bus");
+    BusState *bus = qdev_get_child_bus(s->soc.i2c[6], "i2c6-bus");
     DeviceState *rtc;
 
     if (!bus) {
-        error_report("%s: I2C6 controller has no i2c-bus",
+        error_report("%s: I2C6 controller has no i2c6-bus",
                      s->board->machine_name);
         exit(EXIT_FAILURE);
     }

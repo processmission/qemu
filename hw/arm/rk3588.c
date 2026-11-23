@@ -84,12 +84,33 @@
 #define RK3588_DMAC1_SPI             86
 #define RK3588_STIMER_BASE           0xfd8c8000
 #define RK3588_GPIO0_SPI             277
-#define RK3588_I2C6_BASE             0xfec80000
+#define RK3588_I2C0_SPI              317
+#define RK3588_I2C1_SPI              318
+#define RK3588_I2C2_SPI              319
+#define RK3588_I2C3_SPI              320
+#define RK3588_I2C4_SPI              321
+#define RK3588_I2C5_SPI              322
 #define RK3588_I2C6_SPI              323
+#define RK3588_I2C7_SPI              324
+#define RK3588_I2C8_SPI              325
+
 #define RK3588_DDR_LEGACY_BASE       0xf7000000ULL
 #define RK3588_DDR_LEGACY_PHY_AUX_BASE 0xfe000000ULL
 #define RK3588_DDRPHY_BASE           0xfd8d8000ULL
 #define RK3588_DDR_PHY_GATE_BASE     0xfe0c0000ULL
+
+
+static const int rk3588_i2c_spi[] = {
+    RK3588_I2C0_SPI,
+    RK3588_I2C1_SPI,
+    RK3588_I2C2_SPI,
+    RK3588_I2C3_SPI,
+    RK3588_I2C4_SPI,
+    RK3588_I2C5_SPI,
+    RK3588_I2C6_SPI,
+    RK3588_I2C7_SPI,
+    RK3588_I2C8_SPI,
+};
 
 #define RK3588_UART0_SPI             331
 #define RK3588_UART_CLOCK            24000000
@@ -128,6 +149,15 @@ static const MemMapEntry rk3588_memmap[] = {
     [RK3588_DEV_SPI1]       = { 0xfeb10000, 0x00010000 },
     [RK3588_DEV_SPI2]       = { 0xfeb20000, 0x00010000 },
     [RK3588_DEV_SPI3]       = { 0xfeb30000, 0x00010000 },
+    [RK3588_DEV_I2C0]       = { 0xfd880000, 0x00001000 },
+    [RK3588_DEV_I2C1]       = { 0xfea90000, 0x00001000 },
+    [RK3588_DEV_I2C2]       = { 0xfeaa0000, 0x00001000 },
+    [RK3588_DEV_I2C3]       = { 0xfeab0000, 0x00001000 },
+    [RK3588_DEV_I2C4]       = { 0xfeac0000, 0x00001000 },
+    [RK3588_DEV_I2C5]       = { 0xfead0000, 0x00001000 },
+    [RK3588_DEV_I2C6]       = { 0xfec80000, 0x00001000 },
+    [RK3588_DEV_I2C7]       = { 0xfec90000, 0x00001000 },
+    [RK3588_DEV_I2C8]       = { 0xfeca0000, 0x00001000 },
 };
 
 /* Object names of the SPI controllers, indexed like the state array. */
@@ -209,7 +239,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("vccio2-ioc", 0xfd5fb000, 4 * KiB),
     RK3588_UNIMPLEMENTED("vccio6-ioc", 0xfd5fc000, 4 * KiB),
     RK3588_UNIMPLEMENTED("emmc-ioc", 0xfd5fd000, 4 * KiB),
-    RK3588_UNIMPLEMENTED("i2c0", 0xfd880000, 64 * KiB),
     RK3588_UNIMPLEMENTED("uart0", 0xfd890000, 64 * KiB),
     RK3588_UNIMPLEMENTED("pvtm-pmu", 0xfd8c0000, 32 * KiB),
     RK3588_UNIMPLEMENTED("hptimer", 0xfd8c8000, 16 * KiB),
@@ -317,11 +346,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("can1", 0xfea60000, 64 * KiB),
     RK3588_UNIMPLEMENTED("can2", 0xfea70000, 64 * KiB),
     RK3588_UNIMPLEMENTED("decompress", 0xfea80000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c1", 0xfea90000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c2", 0xfeaa0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c3", 0xfeab0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c4", 0xfeac0000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c5", 0xfead0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("timer-ns0", 0xfeae0000, 32 * KiB),
     RK3588_UNIMPLEMENTED("timer-ns1", 0xfeae8000, 32 * KiB),
     RK3588_UNIMPLEMENTED("wdt-ns", 0xfeaf0000, 64 * KiB),
@@ -329,9 +353,6 @@ static const UnimplementedDeviceConfig rk3588_unimpl_devices[] = {
     RK3588_UNIMPLEMENTED("tsadc", 0xfec00000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox0", 0xfec60000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox1", 0xfec70000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c6", 0xfec80000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c7", 0xfec90000, 64 * KiB),
-    RK3588_UNIMPLEMENTED("i2c8", 0xfeca0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("spi4", 0xfecb0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("mailbox2", 0xfece0000, 64 * KiB),
     RK3588_UNIMPLEMENTED("intmux-pmu", 0xfecf0000, 32 * KiB),
@@ -1173,20 +1194,41 @@ static bool rk3588_soc_create_pwm(RK3588SoCState *s, Error **errp)
     return true;
 }
 
-static bool rk3588_soc_create_i2c6(RK3588SoCState *s, Error **errp)
+static bool rk3588_soc_create_i2c(RK3588SoCState *s, unsigned int index,
+                                  Error **errp)
 {
     SysBusDevice *sbd;
+    g_autofree char *bus_name = NULL;
+    g_autofree char *name = NULL;
 
-    s->i2c6 = qdev_new(TYPE_RK3X_I2C);
-    object_property_add_child(OBJECT(s), "i2c6", OBJECT(s->i2c6));
-    object_unref(OBJECT(s->i2c6));
-    sbd = SYS_BUS_DEVICE(s->i2c6);
+    assert(index < RK3588_NUM_I2CS);
+
+    name = g_strdup_printf("i2c%u", index);
+    s->i2c[index] = qdev_new(TYPE_RK3X_I2C);
+    bus_name = g_strdup_printf("i2c%u-bus", index);
+    rk3x_i2c_init_bus(s->i2c[index], bus_name);
+    object_property_add_child(OBJECT(s), name, OBJECT(s->i2c[index]));
+    object_unref(OBJECT(s->i2c[index]));
+    sbd = SYS_BUS_DEVICE(s->i2c[index]);
     if (!sysbus_realize(sbd, errp)) {
         return false;
     }
-    sysbus_mmio_map(sbd, 0, RK3588_I2C6_BASE);
+    sysbus_mmio_map(sbd, 0,
+                    rk3588_memmap[RK3588_DEV_I2C0 + index].base);
     sysbus_connect_irq(sbd, 0,
-                       qdev_get_gpio_in(DEVICE(&s->gic), RK3588_I2C6_SPI));
+                       qdev_get_gpio_in(DEVICE(&s->gic),
+                                        rk3588_i2c_spi[index]));
+
+    return true;
+}
+
+static bool rk3588_soc_create_i2cs(RK3588SoCState *s, Error **errp)
+{
+    for (unsigned int i = 0; i < RK3588_NUM_I2CS; i++) {
+        if (!rk3588_soc_create_i2c(s, i, errp)) {
+            return false;
+        }
+    }
 
     return true;
 }
@@ -1305,7 +1347,7 @@ static void rk3588_soc_realize(DeviceState *dev, Error **errp)
         !rk3588_soc_create_stimer(s, errp) ||
         !rk3588_soc_create_gpio(s, errp) ||
         !rk3588_soc_create_pwm(s, errp) ||
-        !rk3588_soc_create_i2c6(s, errp) ||
+        !rk3588_soc_create_i2cs(s, errp) ||
         !rk3588_soc_create_gmac(s, errp) ||
         !rk3588_soc_create_otp(s, errp)) {
         return;

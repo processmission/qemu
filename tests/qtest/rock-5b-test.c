@@ -12,6 +12,8 @@
 #include "qemu/cutils.h"
 #include "qemu/units.h"
 #include "qemu/sockets.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "libqtest.h"
 
 #define ROCK5B_LOW_RAM_BASE     0x00000000ULL
@@ -27,6 +29,43 @@
 #define ROCK5B_PCIE2X1L2_DBI    0xa41000000ULL
 #define ROCK5B_PCIE2X1L2_CFG    0xf4000000ULL
 #define ROCK5B_CRU_BASE         0xfd7c0000ULL
+
+#define RK3X_I2C_CON            0x000
+#define RK3X_I2C_CLKDIV         0x004
+#define RK3X_I2C_MRXADDR        0x008
+#define RK3X_I2C_MRXRADDR       0x00c
+#define RK3X_I2C_MTXCNT         0x010
+#define RK3X_I2C_MRXCNT         0x014
+#define RK3X_I2C_IEN            0x018
+#define RK3X_I2C_IPD            0x01c
+#define RK3X_I2C_FCNT           0x020
+#define RK3X_I2C_SCL_OE_DB      0x024
+#define RK3X_I2C_TXBUFFER       0x100
+#define RK3X_I2C_RXBUFFER       0x200
+#define RK3X_I2C_CON1           0x228
+
+#define RK3X_I2C_CON_EN         (1u << 0)
+#define RK3X_I2C_CON_MOD_REGISTER_TX (1u << 1)
+#define RK3X_I2C_CON_MOD_RX     (2u << 1)
+#define RK3X_I2C_CON_START      (1u << 3)
+#define RK3X_I2C_CON_STOP       (1u << 4)
+#define RK3X_I2C_CON_LASTACK    (1u << 5)
+#define RK3X_I2C_CON_ACTACK     (1u << 6)
+#define RK3X_I2C_VERSION_MASK   (0x1ffu << 16)
+#define RK3X_I2C_VERSION        (5u << 16)
+
+#define RK3X_I2C_INT_MBTF       (1u << 2)
+#define RK3X_I2C_INT_MBRF       (1u << 3)
+#define RK3X_I2C_INT_START      (1u << 4)
+#define RK3X_I2C_INT_STOP       (1u << 5)
+#define RK3X_I2C_INT_NAKRCV     (1u << 6)
+
+#define RK3X_I2C_CON1_AUTO_STOP          (1u << 0)
+#define RK3X_I2C_CON1_TX_END_AUTO_STOP   (1u << 1)
+#define RK3X_I2C_CON1_NACK_AUTO_STOP     (1u << 2)
+
+#define RK3X_I2C_FIFO_SIZE      32
+#define TMP105_REG_CONFIG       0x01
 
 /* RK3588 pcie2x1l2 APB vendor registers (PCIE_CLIENT_*). */
 #define RK_PCIE_CLIENT_GENERAL_CON      0x000
@@ -137,6 +176,25 @@
 #define DW_MMC_IMAGE_SIZE       (8 * MiB)
 #define DW_MMC_IMAGE_BLOCKS     (DW_MMC_IMAGE_SIZE / DW_MMC_BLOCK_SIZE)
 #define ROCK5B_SDMMC_SPI        203
+
+static const uint32_t rock5b_i2c_bases[] = {
+    0xfd880000, 0xfea90000, 0xfeaa0000, 0xfeab0000, 0xfeac0000,
+    0xfead0000, 0xfec80000, 0xfec90000, 0xfeca0000,
+};
+
+static const unsigned int rock5b_i2c_spis[] = {
+    317, 318, 319, 320, 321, 322, 323, 324, 325,
+};
+
+static bool rock5b_qtest_require_device(const char *device)
+{
+    if (qtest_has_device(device)) {
+        return true;
+    }
+
+    g_test_skip("required I2C device model is not available");
+    return false;
+}
 
 static uint32_t mmio_read32(QTestState *qts, uint64_t addr)
 {
@@ -424,6 +482,772 @@ static void test_machine_topology(void)
     qtest_writel(qts, ROCK5B_USB3OTG0_BASE + DWC3_DCFG, 0x00000004);
     g_assert_cmphex(mmio_read32(qts, ROCK5B_USB3OTG0_BASE + DWC3_DCFG),
                     ==, 0x00000004);
+
+    qtest_quit(qts);
+}
+
+static bool rock5b_qom_has_child(QTestState *qts, const char *path,
+                                 const char *child_name)
+{
+    g_autofree char *request = g_strdup_printf(
+        "{'execute': 'qom-list', 'arguments': {'path': '%s'}}", path);
+    QDict *resp;
+    QList *children;
+    const QListEntry *entry;
+    bool found = false;
+
+    qtest_qmp_send_raw(qts, "%s", request);
+    resp = qtest_qmp_receive(qts);
+    g_assert_true(resp);
+    children = qdict_get_qlist(resp, "return");
+    g_assert_true(children);
+    QLIST_FOREACH_ENTRY(children, entry) {
+        QDict *child = qobject_to(QDict, qlist_entry_obj(entry));
+        const char *name = qdict_get_str(child, "name");
+
+        if (g_str_equal(name, child_name)) {
+            found = true;
+            break;
+        }
+    }
+    qobject_unref(resp);
+
+    return found;
+}
+
+static void test_i2c_controllers(void)
+{
+    QTestState *qts = qtest_init("-machine rock-5b -m 128M -smp 8 "
+                                 "-serial null -display none");
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        uint32_t con = qtest_readl(qts, rock5b_i2c_bases[i] + RK3X_I2C_CON);
+        g_autofree char *bus_name = g_strdup_printf("i2c%u-bus", i);
+        g_autofree char *controller_name = g_strdup_printf("i2c%u", i);
+        g_autofree char *controller_path =
+            g_strdup_printf("/machine/soc/%s", controller_name);
+
+        g_assert_cmphex(con & RK3X_I2C_VERSION_MASK, ==, RK3X_I2C_VERSION);
+        g_assert_true(rock5b_qom_has_child(qts, "/machine/soc",
+                                           controller_name));
+        g_assert_true(rock5b_qom_has_child(qts, controller_path, bus_name));
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_register_semantics(void)
+{
+    QTestState *qts = qtest_init("-machine rock-5b -m 128M -smp 8 "
+                                 "-serial null -display none");
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        const uint32_t base = rock5b_i2c_bases[i];
+
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_CLKDIV), ==, 1);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_SCL_OE_DB),
+                        ==, 0x20);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_FCNT), ==, 0);
+
+        qtest_writel(qts, base + RK3X_I2C_FCNT, 0x12345678);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_FCNT), ==, 0);
+
+        qtest_writel(qts, base + RK3X_I2C_RXBUFFER, 0xdeadbeef);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_RXBUFFER), ==, 0);
+
+        qtest_writel(qts, base + RK3X_I2C_MTXCNT, 0xffffffff);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_MTXCNT), ==, 0x3f);
+        qtest_writel(qts, base + RK3X_I2C_MRXCNT, 0xffffffff);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_MRXCNT), ==, 0x3f);
+    }
+
+    qtest_quit(qts);
+}
+
+static void rock5b_i2c_write_config(QTestState *qts, uint32_t base,
+                                    uint8_t address, uint8_t value)
+{
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER,
+                 address | (TMP105_REG_CONFIG << 8) | (value << 16));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 3);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+}
+
+static uint8_t rock5b_i2c_read_config(QTestState *qts, uint32_t base,
+                                      uint8_t address)
+{
+    uint8_t value;
+
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, address);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR,
+                 TMP105_REG_CONFIG | (1u << 24));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    value = qtest_readl(qts, base + RK3X_I2C_RXBUFFER) & 0xff;
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+
+    return value;
+}
+
+static void test_i2c_real_devices(void)
+{
+    const uint32_t base0 = 0xfd880000;
+    const uint32_t base1 = 0xfea90000;
+    uint32_t fcnt0;
+
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48 "
+        "-device tmp105,bus=i2c1-bus,address=0x49");
+
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+
+    rock5b_i2c_write_config(qts, base0, 0x90, 0x60);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base0, 0x90), ==, 0x60);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base1 + RK3X_I2C_FCNT), ==, 0);
+
+    fcnt0 = qtest_readl(qts, base0 + RK3X_I2C_FCNT);
+    rock5b_i2c_write_config(qts, base1, 0x92, 0x20);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base1, 0x92), ==, 0x20);
+    g_assert_cmphex(qtest_readl(qts, base0 + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base0 + RK3X_I2C_FCNT), ==, fcnt0);
+
+    qtest_quit(qts);
+}
+
+static void rock5b_i2c_trigger_nack(QTestState *qts, uint32_t base,
+                                    uint32_t con1)
+{
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0xfe);
+    qtest_writel(qts, base + RK3X_I2C_CON1, con1);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+}
+
+static void test_i2c_nack_recovery(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48");
+
+    rock5b_i2c_trigger_nack(qts, base,
+                            RK3X_I2C_CON1_AUTO_STOP |
+                            RK3X_I2C_CON1_TX_END_AUTO_STOP |
+                            RK3X_I2C_CON1_NACK_AUTO_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD), ==, 0);
+    qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+
+    /*
+     * Match the Linux rk3x-i2c state machine: CON.START is a separate
+     * interrupt, and a NACK without CON1 auto-stop is completed by a
+     * software STOP even though the data state has already returned idle.
+     */
+    qtest_writel(qts, base + RK3X_I2C_IEN, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_START, ==, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_START);
+    qtest_writel(qts, base + RK3X_I2C_CON, RK3X_I2C_CON_EN);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0xfe);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_NAKRCV);
+    qtest_writel(qts, base + RK3X_I2C_IEN, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    qtest_writel(qts, base + RK3X_I2C_IEN, 0);
+
+    rock5b_i2c_write_config(qts, base, 0x90, 0x40);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base, 0x90), ==, 0x40);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_con1_auto_stop(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 -serial null -display none");
+
+    /* NACK_AUTO_STOP is ignored while CON1.AUTO_STOP is clear. */
+    rock5b_i2c_trigger_nack(qts, base,
+                            RK3X_I2C_CON1_TX_END_AUTO_STOP |
+                            RK3X_I2C_CON1_NACK_AUTO_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    /* AUTO_STOP enables NACK_AUTO_STOP. */
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    rock5b_i2c_trigger_nack(qts, base,
+                            RK3X_I2C_CON1_AUTO_STOP |
+                            RK3X_I2C_CON1_NACK_AUTO_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+
+    /*
+     * NACK_AUTO_STOP remains required for STOP.  ACTACK alone ends the bus
+     * transfer after reporting NAKRCV.
+     */
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    rock5b_i2c_trigger_nack(qts, base,
+                            RK3X_I2C_CON1_AUTO_STOP |
+                            RK3X_I2C_CON1_TX_END_AUTO_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_con1_tx_end_auto_stop(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48");
+
+    /* TX_END_AUTO_STOP is ignored while CON1.AUTO_STOP is clear. */
+    qtest_writel(qts, base + RK3X_I2C_CON1,
+                 RK3X_I2C_CON1_TX_END_AUTO_STOP);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0x90);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    /* AUTO_STOP also enables TX_END_AUTO_STOP without a NAK. */
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_MBTF);
+    qtest_writel(qts, base + RK3X_I2C_CON1,
+                 RK3X_I2C_CON1_AUTO_STOP |
+                 RK3X_I2C_CON1_TX_END_AUTO_STOP);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0x90);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_actack_tx_nack(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 -serial null -display none");
+
+    /*
+     * ACTACK clear ignores the NAK and completes the byte count.  NAKRCV and
+     * MBTF are both observable, matching the Linux I2C_M_IGNORE_NAK path.
+     */
+    qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER, 0xfe);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_actack_rx_nack(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 -serial null -display none");
+
+    /* ACTACK clear also ignores a read-address NAK and completes RXCNT. */
+    qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, 0xfe);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR, 0);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_RX |
+                 RK3X_I2C_CON_START);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_actack_address_phase(void)
+{
+    const uint32_t base = 0xfd880000;
+    uint8_t value;
+
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48");
+
+    /*
+     * Address NACK must consume the address phase even while ACTACK is
+     * clear.  The payload beginning with 0x90, 0x01, 0x60 must not be
+     * reinterpreted as a new transfer to the TMP105 at 0x48.
+     */
+    rock5b_i2c_write_config(qts, base, 0x90, 0x20);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base, 0x90), ==, 0x20);
+
+    qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+    for (unsigned int i = 0; i < RK3X_I2C_FIFO_SIZE / 4; i++) {
+        qtest_writel(qts, base + RK3X_I2C_TXBUFFER + i * 4,
+                     i ? 0 : 0xfe);
+    }
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, RK3X_I2C_FIFO_SIZE);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+
+    /* Clear MBTF so the next segment has to complete independently. */
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_MBTF);
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER,
+                 0x90 | (0x01 << 8) | (0x60 << 16));
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 3);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+
+    value = rock5b_i2c_read_config(qts, base, 0x90);
+    g_assert_cmphex(value, ==, 0x20);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_irq_mask_clear(void)
+{
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 -serial null -display none");
+
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        const uint32_t base = rock5b_i2c_bases[i];
+        const unsigned int spi = rock5b_i2c_spis[i];
+
+        qtest_writel(qts, base + RK3X_I2C_IEN, 0);
+        qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+        rock5b_i2c_trigger_nack(qts, base,
+                                RK3X_I2C_CON1_AUTO_STOP |
+                                RK3X_I2C_CON1_TX_END_AUTO_STOP |
+                                RK3X_I2C_CON1_NACK_AUTO_STOP);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                        RK3X_I2C_INT_NAKRCV, ==, RK3X_I2C_INT_NAKRCV);
+        g_assert_false(qtest_get_irq(qts, spi));
+
+        qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+        qtest_writel(qts, base + RK3X_I2C_IEN, RK3X_I2C_INT_NAKRCV);
+        rock5b_i2c_trigger_nack(qts, base,
+                                RK3X_I2C_CON1_AUTO_STOP |
+                                RK3X_I2C_CON1_TX_END_AUTO_STOP |
+                                RK3X_I2C_CON1_NACK_AUTO_STOP);
+        g_assert_true(qtest_get_irq(qts, spi));
+
+        for (unsigned int j = 0; j < ARRAY_SIZE(rock5b_i2c_spis); j++) {
+            if (j != i) {
+                g_assert_false(qtest_get_irq(qts, rock5b_i2c_spis[j]));
+            }
+        }
+
+        qtest_writel(qts, base + RK3X_I2C_IPD,
+                     RK3X_I2C_INT_NAKRCV | RK3X_I2C_INT_STOP);
+        g_assert_false(qtest_get_irq(qts, spi));
+        qtest_writel(qts, base + RK3X_I2C_IEN, 0);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_reset_recovery(void)
+{
+    const uint32_t base = 0xfd880000;
+
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48");
+
+    qtest_writel(qts, base + RK3X_I2C_TXBUFFER,
+                 0x90 | (TMP105_REG_CONFIG << 8) | (0x60 << 16));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, 3);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_CON) &
+                    RK3X_I2C_VERSION_MASK, ==, RK3X_I2C_VERSION);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_FCNT), ==, 0);
+
+    rock5b_i2c_write_config(qts, base, 0x90, 0x20);
+    g_assert_cmphex(rock5b_i2c_read_config(qts, base, 0x90), ==, 0x20);
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_reset_isolation(void)
+{
+    if (!rock5b_qtest_require_device("tmp105")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device tmp105,bus=i2c0-bus,address=0x48 "
+        "-device tmp105,bus=i2c1-bus,address=0x48 "
+        "-device tmp105,bus=i2c2-bus,address=0x48 "
+        "-device tmp105,bus=i2c3-bus,address=0x48 "
+        "-device tmp105,bus=i2c4-bus,address=0x48 "
+        "-device tmp105,bus=i2c5-bus,address=0x48 "
+        "-device tmp105,bus=i2c6-bus,address=0x48 "
+        "-device tmp105,bus=i2c7-bus,address=0x48 "
+        "-device tmp105,bus=i2c8-bus,address=0x48");
+
+    qtest_irq_intercept_in(qts, "/machine/soc/gic");
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        qtest_writel(qts, rock5b_i2c_bases[i] + RK3X_I2C_TXBUFFER,
+                     0x90 | (TMP105_REG_CONFIG << 8) |
+                     ((0x20 + i * 3) << 16));
+        qtest_writel(qts, rock5b_i2c_bases[i] + RK3X_I2C_CON,
+                     RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                     RK3X_I2C_CON_ACTACK);
+        qtest_writel(qts, rock5b_i2c_bases[i] + RK3X_I2C_MTXCNT, 3);
+        g_assert_cmphex(qtest_readl(qts,
+                                    rock5b_i2c_bases[i] + RK3X_I2C_IPD) &
+                        RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+    }
+
+    qtest_writel(qts, rock5b_i2c_bases[0] + RK3X_I2C_IPD,
+                 RK3X_I2C_INT_MBTF);
+    g_assert_cmphex(qtest_readl(qts,
+                                rock5b_i2c_bases[0] + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                rock5b_i2c_bases[1] + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+
+    qtest_system_reset(qts);
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        const uint32_t base = rock5b_i2c_bases[i];
+        const unsigned int spi = rock5b_i2c_spis[i];
+
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_CON) &
+                        ~RK3X_I2C_VERSION_MASK, ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_CLKDIV), ==, 1);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_SCL_OE_DB),
+                        ==, 0x20);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_MTXCNT), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_MRXCNT), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IEN), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_FCNT), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_CON1), ==, 0);
+        g_assert_false(qtest_get_irq(qts, spi));
+    }
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(rock5b_i2c_bases); i++) {
+        const uint8_t value = 0x20 + i * 3;
+
+        rock5b_i2c_write_config(qts, rock5b_i2c_bases[i], 0x90, value);
+        g_assert_cmphex(rock5b_i2c_read_config(qts, rock5b_i2c_bases[i],
+                                              0x90), ==, value);
+    }
+
+    qtest_quit(qts);
+}
+
+static void rock5b_i2c_fill_buffer(QTestState *qts, uint32_t reg,
+                                   const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i += 4) {
+        uint32_t value = 0;
+
+        for (size_t j = 0; j < 4 && i + j < len; j++) {
+            value |= (uint32_t)data[i + j] << (j * 8);
+        }
+        qtest_writel(qts, reg + i, value);
+    }
+}
+
+static void rock5b_i2c_read_buffer(QTestState *qts, uint32_t reg,
+                                   uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i += 4) {
+        uint32_t value = qtest_readl(qts, reg + i);
+
+        for (size_t j = 0; j < 4 && i + j < len; j++) {
+            data[i + j] = value >> (j * 8);
+        }
+    }
+}
+
+static void rock5b_i2c_eeprom_write(QTestState *qts, uint32_t base,
+                                    const uint8_t *data, size_t len)
+{
+    uint8_t tx[RK3X_I2C_FIFO_SIZE] = { 0xa0, 0 };
+    size_t first = MIN(len, sizeof(tx) - 2);
+    size_t remain = len - first;
+
+    memcpy(tx + 2, data, first);
+    rock5b_i2c_fill_buffer(qts, base + RK3X_I2C_TXBUFFER,
+                           tx, first + 2);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_START |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MTXCNT, first + 2);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBTF, ==, RK3X_I2C_INT_MBTF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_MBTF);
+
+    if (remain) {
+        rock5b_i2c_fill_buffer(qts, base + RK3X_I2C_TXBUFFER,
+                               data + first, remain);
+        qtest_writel(qts, base + RK3X_I2C_MTXCNT, remain);
+    }
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+}
+
+static void test_i2c_fifo_tx(void)
+{
+    const uint32_t base = 0xfd880000;
+    uint8_t data[33];
+    uint8_t actual[31];
+    uint8_t tail[2];
+
+    if (!rock5b_qtest_require_device("at24c-eeprom")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device at24c-eeprom,bus=i2c0-bus,address=0x50,"
+        "rom-size=256,address-size=1");
+
+    for (size_t i = 0; i < ARRAY_SIZE(data); i++) {
+        data[i] = 0x5a + i * 7;
+    }
+
+    rock5b_i2c_eeprom_write(qts, base, data, ARRAY_SIZE(data));
+
+    qtest_writel(qts, base + RK3X_I2C_CON1, 0);
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, 0xa0);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR, 1u << 24);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, ARRAY_SIZE(actual));
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    rock5b_i2c_read_buffer(qts, base + RK3X_I2C_RXBUFFER,
+                           actual, ARRAY_SIZE(actual));
+    g_assert_cmpmem(actual, sizeof(actual), data, sizeof(actual));
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    qtest_writel(qts, base + RK3X_I2C_IPD, 0xff);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR,
+                 ARRAY_SIZE(actual) | (1u << 24));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, ARRAY_SIZE(tail));
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    rock5b_i2c_read_buffer(qts, base + RK3X_I2C_RXBUFFER,
+                           tail, ARRAY_SIZE(tail));
+    g_assert_cmpmem(tail, sizeof(tail), data + ARRAY_SIZE(actual),
+                    sizeof(tail));
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_fifo_rx(void)
+{
+    const uint32_t base = 0xfd880000;
+    uint8_t expected[33];
+    uint8_t actual[33];
+
+    if (!rock5b_qtest_require_device("at24c-eeprom")) {
+        return;
+    }
+
+    QTestState *qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device at24c-eeprom,bus=i2c0-bus,address=0x50,"
+        "rom-size=256,address-size=1");
+
+    for (size_t i = 0; i < ARRAY_SIZE(expected); i++) {
+        expected[i] = 0x33 + i * 5;
+    }
+    rock5b_i2c_eeprom_write(qts, base, expected, ARRAY_SIZE(expected));
+
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, 0xa0);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR, 1u << 24);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 32);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, 0);
+    rock5b_i2c_read_buffer(qts, base + RK3X_I2C_RXBUFFER, actual, 32);
+    qtest_writel(qts, base + RK3X_I2C_IPD, RK3X_I2C_INT_MBRF);
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_RX |
+                 RK3X_I2C_CON_LASTACK | RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    actual[32] = qtest_readl(qts, base + RK3X_I2C_RXBUFFER) & 0xff;
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+
+    qtest_quit(qts);
+}
+
+static void test_i2c_repeated_start(void)
+{
+    const uint32_t base = 0xfd880000;
+    QTestState *qts;
+
+    if (!rock5b_qtest_require_device("at24c-eeprom")) {
+        return;
+    }
+
+    qts = qtest_init(
+        "-machine rock-5b -m 128M -smp 8 "
+        "-device at24c-eeprom,bus=i2c0-bus,address=0x50,"
+        "rom-size=256,address-size=2");
+
+    /*
+     * EEPROM address-size is two bytes, but only one register-address byte
+     * is supplied.  A repeated START preserves haveaddr=1, so the EEPROM
+     * reports 0xff.  If the controller ends the transfer between phases,
+     * I2C_FINISH clears haveaddr and the read returns EEPROM memory instead.
+     */
+    qtest_writel(qts, base + RK3X_I2C_MRXADDR, 0xa0);
+    qtest_writel(qts, base + RK3X_I2C_MRXRADDR,
+                 5 | (1u << 24));
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_MOD_REGISTER_TX |
+                 RK3X_I2C_CON_START | RK3X_I2C_CON_LASTACK |
+                 RK3X_I2C_CON_ACTACK);
+    qtest_writel(qts, base + RK3X_I2C_MRXCNT, 1);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_MBRF, ==, RK3X_I2C_INT_MBRF);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_RXBUFFER) & 0xff,
+                    ==, 0xff);
+
+    qtest_writel(qts, base + RK3X_I2C_CON,
+                 RK3X_I2C_CON_EN | RK3X_I2C_CON_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + RK3X_I2C_IPD) &
+                    RK3X_I2C_INT_STOP, ==, RK3X_I2C_INT_STOP);
 
     qtest_quit(qts);
 }
@@ -831,6 +1655,28 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     qtest_add_func("/rock-5b/machine-topology", test_machine_topology);
+    qtest_add_func("/rock-5b/i2c-controllers", test_i2c_controllers);
+    qtest_add_func("/rock-5b/i2c-register-semantics",
+                   test_i2c_register_semantics);
+    qtest_add_func("/rock-5b/i2c-real-devices", test_i2c_real_devices);
+    qtest_add_func("/rock-5b/i2c-nack-recovery", test_i2c_nack_recovery);
+    qtest_add_func("/rock-5b/i2c-con1-auto-stop",
+                   test_i2c_con1_auto_stop);
+    qtest_add_func("/rock-5b/i2c-con1-tx-end-auto-stop",
+                   test_i2c_con1_tx_end_auto_stop);
+    qtest_add_func("/rock-5b/i2c-actack-tx-nack",
+                   test_i2c_actack_tx_nack);
+    qtest_add_func("/rock-5b/i2c-actack-rx-nack",
+                   test_i2c_actack_rx_nack);
+    qtest_add_func("/rock-5b/i2c-actack-address-phase",
+                   test_i2c_actack_address_phase);
+    qtest_add_func("/rock-5b/i2c-irq-mask-clear", test_i2c_irq_mask_clear);
+    qtest_add_func("/rock-5b/i2c-reset", test_i2c_reset_recovery);
+    qtest_add_func("/rock-5b/i2c-reset-isolation",
+                   test_i2c_reset_isolation);
+    qtest_add_func("/rock-5b/i2c-fifo-tx", test_i2c_fifo_tx);
+    qtest_add_func("/rock-5b/i2c-fifo-rx", test_i2c_fifo_rx);
+    qtest_add_func("/rock-5b/i2c-repeated-start", test_i2c_repeated_start);
     qtest_add_func("/rock-5b/pcie-rtl8125", test_pcie_rtl8125);
     qtest_add_func("/rock-5b/sdmmc", test_sdmmc);
     qtest_add_func("/rock-5b/cru", test_cru_reset_bank);
