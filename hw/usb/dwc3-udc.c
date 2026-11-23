@@ -649,12 +649,20 @@ static void dwc3_udc_tx_cancel(DWC3UDCState *s, unsigned int ep)
     s->tx_offset[ep] = 0;
 }
 
+static bool dwc3_udc_tx_ready(DWC3UDCState *s)
+{
+    Chardev *chr = qemu_chr_fe_get_driver(&s->chr);
+
+    /* The null backend accepts output without emitting CHR_EVENT_OPENED. */
+    return !chr || object_dynamic_cast(OBJECT(chr), TYPE_CHARDEV_NULL) ||
+           qemu_chr_fe_backend_open(&s->chr);
+}
+
 /* The shared FIFO holds bytes for one bulk-IN TRB at a time. */
 static void dwc3_udc_tx_process(DWC3UDCState *s)
 {
     uint32_t budget = DWC3_TX_BUDGET;
     bool retry = false;
-    bool has_backend = qemu_chr_fe_backend_connected(&s->chr);
 
     timer_del(s->tx_timer);
     if (!s->host_connected ||
@@ -709,7 +717,7 @@ static void dwc3_udc_tx_process(DWC3UDCState *s)
                 budget -= dwc3_udc_tx_enqueue(s, buffer, chunk);
                 continue;
             }
-            if (has_backend && !qemu_chr_fe_backend_open(&s->chr)) {
+            if (!dwc3_udc_tx_ready(s)) {
                 break;
             }
             written = dwc3_udc_tx_drain(s, budget);
@@ -721,7 +729,7 @@ static void dwc3_udc_tx_process(DWC3UDCState *s)
         }
 
         if (s->tx_pending[ep] && s->tx_offset[ep] == length &&
-            (!has_backend || qemu_chr_fe_backend_open(&s->chr)) &&
+            dwc3_udc_tx_ready(s) &&
             dwc3_udc_complete_trb(s, ep, &trb, 0)) {
             dwc3_udc_tx_cancel(s, ep);
         }
@@ -734,7 +742,7 @@ static void dwc3_udc_tx_process(DWC3UDCState *s)
         }
     }
 
-    if (retry && (!has_backend || qemu_chr_fe_backend_open(&s->chr))) {
+    if (retry && dwc3_udc_tx_ready(s)) {
         timer_mod(s->tx_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DWC3_TX_RETRY_NS);
     }
